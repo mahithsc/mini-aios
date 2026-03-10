@@ -4,9 +4,11 @@ import logging
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 DB_PATH = "crons.db"
+CRON_LOG_DIR = "cron_logs"
 log = logging.getLogger(__name__)
 
 
@@ -58,8 +60,31 @@ class CronManager:
         CronTrigger.from_crontab(schedule)
 
     def start(self):
-        """Load active crons from DB, handle catch-up, start scheduler."""
-        pass
+        """Load active crons from DB and start the background scheduler."""
+        import os
+        os.makedirs(CRON_LOG_DIR, exist_ok=True)
+
+        self._scheduler = BackgroundScheduler(daemon=True)
+
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, name, instructions, schedule FROM crons WHERE status = 'active'"
+            ).fetchall()
+
+        for cron_id, name, instructions, schedule in rows:
+            trigger = CronTrigger.from_crontab(schedule)
+            self._scheduler.add_job(
+                self._run_cron,
+                trigger=trigger,
+                args=[cron_id, instructions],
+                id=cron_id,
+                name=name,
+                replace_existing=True,
+            )
+            log.info("Loaded cron %s (%s) schedule=%s", cron_id[:8], name, schedule)
+
+        self._scheduler.start()
+        log.info("Cron scheduler started with %d jobs", len(rows))
 
     def create_cron(self, name: str, description: str, instructions: str, schedule: str) -> str:
         """Insert a new cron into the DB and register it with the scheduler."""
@@ -72,6 +97,18 @@ class CronManager:
                 "VALUES (?, ?, ?, ?, ?, 'active', ?)",
                 (cron_id, name, description, instructions, schedule, now),
             )
+
+        if self._scheduler and self._scheduler.running:
+            trigger = CronTrigger.from_crontab(schedule)
+            self._scheduler.add_job(
+                self._run_cron,
+                trigger=trigger,
+                args=[cron_id, instructions],
+                id=cron_id,
+                name=name,
+                replace_existing=True,
+            )
+
         return cron_id
 
     def delete_cron(self, cron_id: str) -> str:
@@ -83,6 +120,13 @@ class CronManager:
             )
             if cursor.rowcount == 0:
                 return f"error: no active cron with id {cron_id}"
+
+        if self._scheduler and self._scheduler.running:
+            try:
+                self._scheduler.remove_job(cron_id)
+            except Exception:
+                pass
+
         return "ok"
 
     def edit_cron(self, cron_id: str, **fields) -> str:
@@ -127,7 +171,46 @@ class CronManager:
 
     def _run_cron(self, cron_id: str, instructions: str):
         """Spawn an agent and run the cron instructions. Called by the scheduler."""
-        pass
+        import os
+
+        started = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            conn.execute(
+                "INSERT INTO cron_runs (cron_id, started_at, status) VALUES (?, ?, 'running')",
+                (cron_id, started),
+            )
+            run_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        output = ""
+        status = "completed"
+        try:
+            from agent import create_agent
+            agent = create_agent()
+            messages = [{"role": "user", "content": instructions}]
+            response = agent.run(messages)
+            output = response.content or ""
+        except Exception as e:
+            status = "error"
+            output = str(e)
+            log.error("Cron %s failed: %s", cron_id[:8], e)
+
+        finished = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE cron_runs SET finished_at = ?, output = ?, status = ? WHERE id = ?",
+                (finished, output[:5000], status, run_id),
+            )
+            conn.execute(
+                "UPDATE crons SET last_run_at = ? WHERE id = ?",
+                (finished, cron_id),
+            )
+
+        log_path = os.path.join(CRON_LOG_DIR, f"{cron_id[:8]}_{finished.replace(':', '-')}.log")
+        with open(log_path, "w") as f:
+            f.write(f"cron_id: {cron_id}\nstarted: {started}\nfinished: {finished}\nstatus: {status}\n\n")
+            f.write(output)
+
+        log.info("Cron %s finished (%s)", cron_id[:8], status)
 
     def shutdown(self):
         """Stop scheduler and worker pool."""

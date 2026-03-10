@@ -1,9 +1,11 @@
+import atexit
 import json
 import os
 import uuid
 from datetime import datetime
 from agent import create_agent
 from agno.agent import RunEvent
+from crons import cron_manager
 from dream import dream
 
 RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
@@ -62,6 +64,8 @@ def new_chat():
 
 messages = []
 init()
+cron_manager.start()
+atexit.register(cron_manager.shutdown)
 
 while True:
     content = ""

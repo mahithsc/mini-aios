@@ -52,6 +52,14 @@ Keep timeout for bash commands in 20 seconds.
     {"cmd": "string", "timeout": "number?"},
     bash,
 ),
+
+"cron": (
+    "Manage scheduled cron jobs (actions: create, list, edit, delete)",
+    {"action": "string", "name": "string?", "description": "string?",
+     "instructions": "string?", "schedule": "string? (cron expression, e.g. '*/5 * * * *')",
+     "cron_id": "string? (first 8 chars suffice)"},
+    cron,
+),
 </tools>
 """
 
@@ -78,6 +86,6 @@ def _build_prompt():
 def create_agent():
     return Agent(
         system_message=_build_prompt(),
-        tools=[read, write, edit, glob, grep, bash],
+        tools=[read, write, edit, glob, grep, bash, cron],
         model=OpenAIResponses("gpt-5.4", reasoning_effort="medium"),
     )
