@@ -3,7 +3,12 @@ import os
 import uuid
 from datetime import datetime
 from agent import create_agent
+from agno.agent import RunEvent
 from dream import dream
+
+RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
+    "\033[0m", "\033[1m", "\033[2m", "\033[36m", "\033[32m", "\033[33m"
+)
 
 SKILLS_DIR = "skills"
 SESSION_DIR = "session"
@@ -74,8 +79,17 @@ while True:
     agent = create_agent()
     response = agent.run(messages, stream=True, stream_events=True)
     for event in response:
-        if event.event == "RunContent":
-            if event.content != None:
+        if event.event == RunEvent.tool_call_started:
+            tool = event.tool
+            print(f"\n  {DIM}{CYAN}▶ {tool.tool_name}{RESET}{DIM}({tool.tool_args}){RESET}", flush=True)
+
+        elif event.event == RunEvent.tool_call_completed:
+            tool = event.tool
+            result_preview = str(tool.result)[:120]
+            print(f"  {DIM}{GREEN}✓ {tool.tool_name}{RESET}{DIM} → {result_preview}{RESET}", flush=True)
+
+        elif event.event == RunEvent.run_content:
+            if event.content is not None:
                 content += event.content
                 print(event.content, end="", flush=True)
 
