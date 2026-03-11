@@ -3,10 +3,10 @@ import json
 import os
 import uuid
 from datetime import datetime
-from agent import create_agent
+from aios_core.agent import create_agent
 from agno.agent import RunEvent
-from crons import cron_manager
-from dream import dream
+from aios_core.crons import cron_manager
+from aios_core.dream import dream
 
 RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
     "\033[0m", "\033[1m", "\033[2m", "\033[36m", "\033[32m", "\033[33m"

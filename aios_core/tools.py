@@ -3,13 +3,16 @@ import re
 import subprocess
 import glob as globlib
 
-from crons import cron_manager
-
 RESET, BOLD, DIM = "\033[0m", "\033[1m", "\033[2m"
 
 
 def read(path: str, offset: int = 0, limit: int = None):
-    lines = open(path).readlines()
+    try:
+        lines = open(path).readlines()
+    except FileNotFoundError:
+        return f"error: file not found: {path}"
+    except IsADirectoryError:
+        return f"error: path is a directory: {path}"
     if limit is None:
         limit = len(lines)
     selected = lines[offset : offset + limit]
@@ -75,8 +78,15 @@ def bash(cmd: str, timeout: float = 30):
     return out or "(empty)"
 
 
+def _get_cron_manager():
+    # Imported lazily to avoid package import cycles.
+    from .crons import cron_manager
+    return cron_manager
+
+
 def cron(action: str, name: str = None, description: str = None,
          instructions: str = None, schedule: str = None, cron_id: str = None):
+    cron_manager = _get_cron_manager()
     if action == "create":
         if not all([name, description, instructions, schedule]):
             return "error: create requires name, description, instructions, and schedule"

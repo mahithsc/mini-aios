@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from .agent import create_agent
 
 DB_PATH = "crons.db"
 CRON_LOG_DIR = "cron_logs"
@@ -184,7 +185,6 @@ class CronManager:
         output = ""
         status = "completed"
         try:
-            from agent import create_agent
             agent = create_agent()
             messages = [{"role": "user", "content": instructions}]
             response = agent.run(messages)
