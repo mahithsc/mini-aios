@@ -1,22 +1,30 @@
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from .tools import *
+from .workspace import resolve_workspace_path
 from agno.agent import Agent
-from agno.models.openai.responses import OpenAIResponses
+from agno.models.anthropic import Claude
 from dotenv import load_dotenv
 
 load_dotenv()
 
-SKILLS_INDEX_PATH = "skills/skills_index.json"
+SKILLS_INDEX_PATH = str(resolve_workspace_path("skills/skills_index.json"))
 
-BASE_PROMPT = """\
+BASE_PROMPT_PREFIX = """\
 You are a helpful coding agent
 When using back commands, use the non interactive mode
 Have bias for action, use your tools to get things done
+For any delayed, recurring, or scheduled task, always use the cron tool.
+Do not use bash backgrounding/scheduling patterns such as nohup, at, crontab, disown, sleep+&, or trailing &.
+
+You should focus on executing tasks, not giving instructions on what to do.
 
 Keep timeout for bash commands in 20 seconds.
+"""
 
-<tools>
+TOOLS_COMMON_DOC = """\
 "read": (
     "Read file with line numbers (file path, not directory)",
     {"path": "string", "offset": "number?", "limit": "number?"},
@@ -60,12 +68,41 @@ Keep timeout for bash commands in 20 seconds.
      "cron_id": "string? (first 8 chars suffice)"},
     cron,
 ),
-</tools>
+
+"tavily_search": (
+    "Search the web with Tavily using TAVILY_API_KEY",
+    {"query": "string", "search_depth": "string?", "max_results": "number?",
+     "topic": "string?", "include_answer": "boolean?", "include_raw_content": "boolean?",
+     "include_domains": "array?", "exclude_domains": "array?", "time_range": "string?",
+     "timeout": "number?"},
+    tavily_search,
+),
+"""
+
+TOOLS_SUBAGENT_DOC = """\
+"subagent": (
+    "Delegate one focused task to a synchronous subagent. "
+    "For parallel work, call this tool multiple times.",
+    {"task": "string", "timeout": "number?"},
+    subagent,
+),
 """
 
 
-def _build_prompt():
-    prompt = BASE_PROMPT
+BASE_TOOLS = [read, write, edit, glob, grep, bash, cron, tavily_search]
+MAIN_TOOLS = [*BASE_TOOLS, subagent]
+
+
+def _build_prompt(include_subagent_tool: bool = True):
+    prompt = BASE_PROMPT_PREFIX
+    prompt += "\n<tools>\n"
+    prompt += TOOLS_COMMON_DOC
+    if include_subagent_tool:
+        prompt += "\n" + TOOLS_SUBAGENT_DOC
+    prompt += "</tools>\n"
+
+    est_now = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M:%S %Z")
+    prompt += f"\nCurrent EST time: {est_now}\n"
     try:
         with open(SKILLS_INDEX_PATH) as f:
             skills = json.load(f)
@@ -83,9 +120,23 @@ def _build_prompt():
     return prompt
 
 
-def create_agent():
+def _create_agent_with_tools(tools, include_subagent_tool: bool):
     return Agent(
-        system_message=_build_prompt(),
-        tools=[read, write, edit, glob, grep, bash, cron],
-        model=OpenAIResponses("gpt-5.4", reasoning_effort="medium"),
+        system_message=_build_prompt(include_subagent_tool=include_subagent_tool),
+        tools=tools,
+        model=Claude(id="claude-opus-4-6"),
     )
+
+def create_main_agent():
+    return _create_agent_with_tools(MAIN_TOOLS, include_subagent_tool=True)
+
+
+def create_subagent_worker():
+    return _create_agent_with_tools(BASE_TOOLS, include_subagent_tool=False)
+
+
+def create_agent(include_subagent: bool = True):
+    # Backward-compatible alias used across the codebase.
+    if include_subagent:
+        return create_main_agent()
+    return create_subagent_worker()

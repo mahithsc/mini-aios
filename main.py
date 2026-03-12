@@ -7,6 +7,7 @@ from aios_core.agent import create_agent
 from agno.agent import RunEvent
 from aios_core.crons import cron_manager
 from aios_core.dream import dream
+from aios_core.workspace import ensure_workspace_dir
 
 RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
     "\033[0m", "\033[1m", "\033[2m", "\033[36m", "\033[32m", "\033[33m"
@@ -16,6 +17,9 @@ SKILLS_DIR = "skills"
 SESSION_DIR = "session"
 SESSION_MANIFEST_PATH = f"{SESSION_DIR}/session_manifest.json"
 SKILLS_INDEX_PATH = f"{SKILLS_DIR}/skills_index.json"
+
+WORKSPACE_DIR = ensure_workspace_dir()
+os.chdir(WORKSPACE_DIR)
 
 
 def init():

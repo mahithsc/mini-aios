@@ -1,15 +1,18 @@
 import sqlite3
 import uuid
 import logging
+import os
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from .agent import create_agent
+from .workspace import ensure_workspace_dir
 
-DB_PATH = "crons.db"
-CRON_LOG_DIR = "cron_logs"
+_WORKSPACE_DIR = ensure_workspace_dir()
+DB_PATH = str(_WORKSPACE_DIR / "crons.db")
+CRON_LOG_DIR = str(_WORKSPACE_DIR / "cron_logs")
 log = logging.getLogger(__name__)
 
 
@@ -62,7 +65,6 @@ class CronManager:
 
     def start(self):
         """Load active crons from DB and start the background scheduler."""
-        import os
         os.makedirs(CRON_LOG_DIR, exist_ok=True)
 
         self._scheduler = BackgroundScheduler(daemon=True)
@@ -172,8 +174,6 @@ class CronManager:
 
     def _run_cron(self, cron_id: str, instructions: str):
         """Spawn an agent and run the cron instructions. Called by the scheduler."""
-        import os
-
         started = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute(
@@ -184,9 +184,16 @@ class CronManager:
 
         output = ""
         status = "completed"
+        
+        prompt = f"""\
+        You are currently excuting a cron job. Here are the instructions:
+        {instructions}
+
+        You should not ask follow up questions. The user cannot answer.
+        """
         try:
             agent = create_agent()
-            messages = [{"role": "user", "content": instructions}]
+            messages = [{"role": "user", "content": prompt}]
             response = agent.run(messages)
             output = response.content or ""
         except Exception as e:
