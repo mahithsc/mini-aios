@@ -61,6 +61,15 @@ TOOLS_COMMON_DOC = """\
     bash,
 ),
 
+"codex": (
+    "Delegate one coding task to Codex CLI (codex exec). "
+    "Use for complex edits where a separate coding agent may perform better.",
+    {"task": "string", "timeout": "number?", "model": "string?",
+     "sandbox": "string? (read-only|workspace-write|danger-full-access)",
+     "path": "string? (working directory; default '.')"},
+    codex,
+),
+
 "cron": (
     "Manage scheduled cron jobs (actions: create, list, edit, delete)",
     {"action": "string", "name": "string?", "description": "string?",
@@ -89,7 +98,7 @@ TOOLS_SUBAGENT_DOC = """\
 """
 
 
-BASE_TOOLS = [read, write, edit, glob, grep, bash, cron, tavily_search]
+BASE_TOOLS = [read, write, edit, glob, grep, bash, codex, cron, tavily_search]
 MAIN_TOOLS = [*BASE_TOOLS, subagent]
 
 
