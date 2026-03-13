@@ -11,7 +11,8 @@ const App = () => {
   return (
     <>
       <Window title="Window 1" />
-      <Window title="Window 2" />
+      
+      <Window title="Window 3" />
     </>
   )
 }

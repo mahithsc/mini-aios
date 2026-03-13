@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, screen } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -24,6 +24,13 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 
 
 let mainWindow: BrowserWindow | null = null
 const childWindows = new Map<string, BrowserWindow>()
+const CHILD_WINDOW_BASE_X = 120
+const CHILD_WINDOW_BASE_Y = 120
+const CHILD_WINDOW_OFFSET_X = 28
+const CHILD_WINDOW_OFFSET_Y = 28
+const CHILD_WINDOW_WIDTH = 800
+const CHILD_WINDOW_HEIGHT = 600
+let nextChildWindowSlot = 0
 
 function loadRenderer(window: BrowserWindow, windowType: 'main' | 'child', title?: string) {
   if (VITE_DEV_SERVER_URL) {
@@ -69,8 +76,30 @@ function createChildWindow(title: string) {
     return
   }
 
+  const workArea = screen.getPrimaryDisplay().workArea
+  const maxColumns = Math.max(
+    1,
+    Math.floor((workArea.width - CHILD_WINDOW_BASE_X - CHILD_WINDOW_WIDTH) / CHILD_WINDOW_OFFSET_X) + 1,
+  )
+  const maxRows = Math.max(
+    1,
+    Math.floor((workArea.height - CHILD_WINDOW_BASE_Y - CHILD_WINDOW_HEIGHT) / CHILD_WINDOW_OFFSET_Y) + 1,
+  )
+  const totalSlots = maxColumns * maxRows
+  const slot = nextChildWindowSlot % totalSlots
+  nextChildWindowSlot += 1
+  const column = slot % maxColumns
+  const row = Math.floor(slot / maxColumns)
+  const position = {
+    x: workArea.x + CHILD_WINDOW_BASE_X + column * CHILD_WINDOW_OFFSET_X,
+    y: workArea.y + CHILD_WINDOW_BASE_Y + row * CHILD_WINDOW_OFFSET_Y,
+  }
+
   const childWindow = new BrowserWindow({
     title,
+    width: CHILD_WINDOW_WIDTH,
+    height: CHILD_WINDOW_HEIGHT,
+    ...position,
     icon: path.join(process.env.VITE_PUBLIC, 'electron-vite.svg'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
@@ -126,6 +155,16 @@ ipcMain.on('window:close', (_event, title: string) => {
     return
   }
   closeChildWindow(title)
+})
+
+ipcMain.on('window:sync', (_event, activeTitles: string[]) => {
+  const titleSet = new Set(activeTitles.filter(Boolean))
+
+  for (const title of Array.from(childWindows.keys())) {
+    if (!titleSet.has(title)) {
+      closeChildWindow(title)
+    }
+  }
 })
 
 app.whenReady().then(() => createMainWindow())
