@@ -6,6 +6,7 @@ from .tools import *
 from .workspace import resolve_workspace_path
 from agno.agent import Agent
 from agno.models.anthropic import Claude
+from agno.models.openai import OpenAIChat
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -133,7 +134,7 @@ def _create_agent_with_tools(tools, include_subagent_tool: bool):
     return Agent(
         system_message=_build_prompt(include_subagent_tool=include_subagent_tool),
         tools=tools,
-        model=Claude(id="claude-opus-4-6"),
+        model=OpenAIChat(id="gpt-5.2", reasoning_effort="medium"),
     )
 
 def create_main_agent():
