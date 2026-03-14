@@ -1,50 +1,22 @@
-import atexit
 import json
 import os
 import uuid
 from datetime import datetime
+
 from aios_core.agent import create_agent
-from agno.agent import RunEvent
-from aios_core.crons import cron_manager
 from aios_core.dream import dream
-from aios_core.workspace import ensure_workspace_dir
-
-RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
-    "\033[0m", "\033[1m", "\033[2m", "\033[36m", "\033[32m", "\033[33m"
+from aios_core.initialize import (
+    CYAN,
+    DIM,
+    GREEN,
+    RESET,
+    SESSION_DIR,
+    load_manifest,
+    register_runtime_shutdown,
+    save_manifest,
+    start_runtime,
 )
-
-SKILLS_DIR = "skills"
-SESSION_DIR = "session"
-SESSION_MANIFEST_PATH = f"{SESSION_DIR}/session_manifest.json"
-SKILLS_INDEX_PATH = f"{SKILLS_DIR}/skills_index.json"
-
-WORKSPACE_DIR = ensure_workspace_dir()
-os.chdir(WORKSPACE_DIR)
-
-
-def init():
-    os.makedirs(SKILLS_DIR, exist_ok=True)
-    os.makedirs(SESSION_DIR, exist_ok=True)
-
-    files_to_create = {
-        SESSION_MANIFEST_PATH: [],
-        SKILLS_INDEX_PATH: [],
-    }
-
-    for path, default_content in files_to_create.items():
-        if not os.path.exists(path):
-            with open(path, "w") as f:
-                json.dump(default_content, f, indent=2)
-
-
-def load_manifest():
-    with open(SESSION_MANIFEST_PATH) as f:
-        return json.load(f)
-
-
-def save_manifest(manifest):
-    with open(SESSION_MANIFEST_PATH, "w") as f:
-        json.dump(manifest, f, indent=2)
+from agno.agent import RunEvent
 
 
 def new_chat():
@@ -67,9 +39,8 @@ def new_chat():
     print(f"Chat saved: {filename}")
 
 messages = []
-init()
-cron_manager.start()
-atexit.register(cron_manager.shutdown)
+start_runtime()
+register_runtime_shutdown()
 
 while True:
     content = ""
