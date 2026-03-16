@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from .agent import create_agent
+from .prompt_loader import render_prompt
 from .workspace import ensure_workspace_dir
 
 _WORKSPACE_DIR = ensure_workspace_dir()
@@ -185,12 +186,7 @@ class CronManager:
         output = ""
         status = "completed"
         
-        prompt = f"""\
-        You are currently excuting a cron job. Here are the instructions:
-        {instructions}
-
-        You should not ask follow up questions. The user cannot answer.
-        """
+        prompt = render_prompt("cron.md", instructions=instructions)
         try:
             agent = create_agent()
             messages = [{"role": "user", "content": prompt}]

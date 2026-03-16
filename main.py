@@ -39,7 +39,7 @@ def new_chat():
     print(f"Chat saved: {filename}")
 
 messages = []
-start_runtime()
+start_runtime(start_heartbeat=False)
 register_runtime_shutdown()
 
 while True:

@@ -1,6 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 import os
 
+from ..prompt_loader import render_prompt
+
 
 _POOL = ThreadPoolExecutor(max_workers=max(4, (os.cpu_count() or 1) * 2))
 
@@ -8,17 +10,7 @@ _POOL = ThreadPoolExecutor(max_workers=max(4, (os.cpu_count() or 1) * 2))
 def _run_single_task(task: str) -> str:
     from aios_core.agent import create_subagent_worker
 
-    prompt = f"""\
-You are a delegated subagent. Execute the task below completely.
-
-Task:
-{task}
-
-Rules:
-- You should focus on execution, not instructions for someone else.
-- Do not ask follow up questions. The caller cannot answer.
-- Return concise, directly useful output.
-"""
+    prompt = render_prompt("subagent.md", task=task)
     agent = create_subagent_worker()
     response = agent.run([{"role": "user", "content": prompt}])
     return (response.content or "").strip() or "(empty)"

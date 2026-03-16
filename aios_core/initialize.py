@@ -3,6 +3,7 @@ import json
 import os
 
 from .crons import cron_manager
+from .heartbeat import heartbeat_service
 from .workspace import ensure_workspace_dir
 
 RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
@@ -43,7 +44,7 @@ def save_manifest(manifest):
         json.dump(manifest, f, indent=2)
 
 
-def start_runtime(start_crons: bool = True):
+def start_runtime(start_crons: bool = True, start_heartbeat: bool = True):
     global _RUNTIME_STARTED
     if _RUNTIME_STARTED:
         return
@@ -52,18 +53,27 @@ def start_runtime(start_crons: bool = True):
     initialize_files()
     if start_crons:
         cron_manager.start()
+    if start_heartbeat:
+        heartbeat_service.start()
     _RUNTIME_STARTED = True
 
 
-def shutdown_runtime(stop_crons: bool = True):
+def shutdown_runtime(stop_crons: bool = True, stop_heartbeat: bool = True):
     global _RUNTIME_STARTED
     if not _RUNTIME_STARTED:
         return
 
     if stop_crons:
         cron_manager.shutdown()
+    if stop_heartbeat:
+        heartbeat_service.shutdown()
     _RUNTIME_STARTED = False
 
 
-def register_runtime_shutdown(stop_crons: bool = True):
-    atexit.register(lambda: shutdown_runtime(stop_crons=stop_crons))
+def register_runtime_shutdown(stop_crons: bool = True, stop_heartbeat: bool = True):
+    atexit.register(
+        lambda: shutdown_runtime(
+            stop_crons=stop_crons,
+            stop_heartbeat=stop_heartbeat,
+        )
+    )
