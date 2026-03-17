@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -13,6 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SKILLS_INDEX_PATH = str(resolve_workspace_path("skills/skills_index.json"))
+DEFAULT_CRON_TIMEZONE = os.getenv("AIOS_DEFAULT_TIMEZONE", "America/New_York")
 SUBAGENT_TOOLS = """
 "subagent": (
     "Delegate one focused task to a synchronous subagent. "
@@ -33,8 +35,13 @@ def _build_prompt(include_subagent_tool: bool = True):
         SUBAGENT_TOOLS if include_subagent_tool else "",
     )
 
-    est_now = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M:%S %Z")
-    prompt += f"\nCurrent EST time: {est_now}\n"
+    scheduler_now = datetime.now(ZoneInfo(DEFAULT_CRON_TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S %Z")
+    utc_now = datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M:%S %Z")
+    prompt += (
+        f"\nCurrent scheduler time ({DEFAULT_CRON_TIMEZONE}): {scheduler_now}\n"
+        f"Current UTC time: {utc_now}\n"
+        f"Default cron timezone: {DEFAULT_CRON_TIMEZONE}\n"
+    )
     try:
         with open(SKILLS_INDEX_PATH) as f:
             skills = json.load(f)

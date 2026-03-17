@@ -58,6 +58,8 @@ Keep timeout for bash commands in 20 seconds.
     "Manage scheduled cron jobs (actions: create, list, edit, delete)",
     {"action": "string", "name": "string?", "description": "string?",
      "instructions": "string?", "schedule": "string? (cron expression, e.g. '*/5 * * * *')",
+     "timezone_name": "string? (IANA timezone for recurring cron schedules, e.g. 'America/New_York')",
+     "run_at_utc": "string? (one-time ISO-8601 UTC timestamp, e.g. '2026-03-17T21:05:00+00:00')",
      "cron_id": "string? (first 8 chars suffice)"},
     cron,
 ),

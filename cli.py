@@ -1,7 +1,4 @@
-import json
-import os
 import uuid
-from datetime import datetime
 
 from aios_core.agent import create_agent
 from aios_core.dream import dream
@@ -10,12 +7,10 @@ from aios_core.initialize import (
     DIM,
     GREEN,
     RESET,
-    SESSION_DIR,
-    load_manifest,
     register_runtime_shutdown,
-    save_manifest,
     start_runtime,
 )
+from aios_core.sessions import save_chat_session
 from agno.agent import RunEvent
 
 
@@ -24,19 +19,10 @@ def new_chat():
         return
 
     chat_id = str(uuid.uuid4())
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"chat_{timestamp}.json"
-    filepath = os.path.join(SESSION_DIR, filename)
-
-    with open(filepath, "w") as f:
-        json.dump(messages, f, indent=2)
-
-    manifest = load_manifest()
-    manifest.append({"id": chat_id, "file": filename, "status": "new"})
-    save_manifest(manifest)
+    save_chat_session(chat_id, messages)
 
     messages.clear()
-    print(f"Chat saved: {filename}")
+    print(f"Chat saved: {chat_id}")
 
 messages = []
 start_runtime(start_heartbeat=False)

@@ -13,7 +13,7 @@ register_runtime_shutdown()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    start_runtime()
+    start_runtime(start_heartbeat=False)
     try:
         yield
     finally:

@@ -30,7 +30,6 @@ class ChatMetadata(BaseModel):
 
 class BaseMessage(BaseModel):
     id: str
-    chatId: str
     createdAt: UnixMs
     updatedAt: UnixMs
     status: MessageStatus
@@ -108,3 +107,17 @@ ChatMessage = Annotated[UserMessage | AssistantMessage, Field(discriminator="rol
 
 class Chat(ChatMetadata):
     messages: list[ChatMessage] = Field(default_factory=list)
+
+
+
+
+# api message formt
+
+class OpenAIMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+class OpenAIMessages(BaseModel):
+    messages: list[OpenAIMessage]
+
+

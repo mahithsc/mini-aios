@@ -11,17 +11,26 @@ def cron(
     description: str = None,
     instructions: str = None,
     schedule: str = None,
+    timezone_name: str = None,
+    run_at_utc: str = None,
     cron_id: str = None,
 ):
     cron_manager = _get_cron_manager()
     if action == "create":
-        if not all([name, description, instructions, schedule]):
-            return "error: create requires name, description, instructions, and schedule"
+        if not all([name, description, instructions]):
+            return "error: create requires name, description, and instructions"
         try:
-            cid = cron_manager.create_cron(name, description, instructions, schedule)
+            cid = cron_manager.create_cron(
+                name,
+                description,
+                instructions,
+                schedule=schedule,
+                schedule_timezone=timezone_name,
+                run_at_utc=run_at_utc,
+            )
             return f"Cron created: {cid[:8]} ({name})"
         except ValueError as e:
-            return f"error: invalid schedule -- {e}"
+            return f"error: invalid cron configuration -- {e}"
 
     elif action == "list":
         return cron_manager.list_crons()
@@ -30,15 +39,27 @@ def cron(
         if not cron_id:
             return "error: edit requires cron_id"
         try:
-            return cron_manager.edit_cron(
-                cron_id,
-                name=name,
-                description=description,
-                instructions=instructions,
-                schedule=schedule,
-            )
+            updates = {}
+            if name is not None:
+                updates["name"] = name
+            if description is not None:
+                updates["description"] = description
+            if instructions is not None:
+                updates["instructions"] = instructions
+            if schedule is not None:
+                updates["schedule"] = schedule
+                if run_at_utc is None:
+                    updates["run_at_utc"] = ""
+            if timezone_name is not None:
+                updates["schedule_timezone"] = timezone_name
+            if run_at_utc is not None:
+                updates["run_at_utc"] = run_at_utc
+                if schedule is None:
+                    updates["schedule"] = ""
+
+            return cron_manager.edit_cron(cron_id, **updates)
         except ValueError as e:
-            return f"error: invalid schedule -- {e}"
+            return f"error: invalid cron configuration -- {e}"
 
     elif action == "delete":
         if not cron_id:
