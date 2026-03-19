@@ -4,8 +4,24 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .prompt_loader import load_prompt
-from .tools import *
 from .workspace import resolve_workspace_path
+from .tools import (
+    bash,
+    codex,
+    cron,
+    edit,
+    glob,
+    grep,
+    process_kill,
+    process_list,
+    process_poll,
+    process_send,
+    process_spawn,
+    read,
+    subagent,
+    tavily_search,
+    write,
+)
 from agno.agent import Agent
 from agno.models.anthropic import Claude
 from agno.models.openai import OpenAIChat
@@ -25,7 +41,22 @@ SUBAGENT_TOOLS = """
 """
 
 
-BASE_TOOLS = [read, write, edit, glob, grep, bash, codex, cron, tavily_search]
+BASE_TOOLS = [
+    read,
+    write,
+    edit,
+    glob,
+    grep,
+    bash,
+    process_spawn,
+    process_list,
+    process_send,
+    process_poll,
+    process_kill,
+    codex,
+    cron,
+    tavily_search,
+]
 MAIN_TOOLS = [*BASE_TOOLS, subagent]
 
 

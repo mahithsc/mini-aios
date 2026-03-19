@@ -89,13 +89,32 @@ def _save_assistant_state(
     )
 
 
+def _conversation_messages_for_turn(chat: Chat) -> list[ChatMessage]:
+    """History + latest user turn to send to the model.
+
+    The desktop client sends the full in-memory transcript (including assistant
+    tool_call_* events). Older code only re-read disk + appended the latest user
+    message, which dropped everything the client had for assistant turns.
+
+    Prefer the client payload when it is at least as long as the persisted
+    session so tool results and ordering stay aligned with the UI. If the
+    client is shorter (e.g. not yet hydrated), fall back to disk + latest user.
+    """
+    persisted_messages = load_chat_session(chat.id)
+    latest_user_message = _get_latest_user_message(chat)
+    client_messages = list(chat.messages)
+
+    if len(client_messages) >= len(persisted_messages):
+        return client_messages
+
+    return _append_user_message(persisted_messages, latest_user_message)
+
+
 async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
     if envelope.type == "chat":
         chat = envelope.data if isinstance(envelope.data, Chat) else Chat.model_validate(envelope.data)
         chat_id = chat.id
-        persisted_messages = load_chat_session(chat_id)
-        latest_user_message = _get_latest_user_message(chat)
-        next_messages = _append_user_message(persisted_messages, latest_user_message)
+        next_messages = _conversation_messages_for_turn(chat)
         assistant_events: list[LLMEvent] = []
 
         stream_start_event = _event(chat_id, "stream_start")
