@@ -1,6 +1,7 @@
 import atexit
 import json
 import os
+from datetime import datetime
 
 from .crons import cron_manager
 from .heartbeat import heartbeat_service
@@ -34,9 +35,49 @@ def initialize_files():
                 json.dump(default_content, f, indent=2)
 
 
+def _create_manifest_timestamp() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _infer_manifest_added_at(entry: dict) -> str:
+    file_name = entry.get("file")
+    if isinstance(file_name, str):
+        try:
+            return datetime.strptime(file_name, "chat_%Y%m%d_%H%M%S.json").isoformat(
+                timespec="seconds"
+            )
+        except ValueError:
+            pass
+
+    return _create_manifest_timestamp()
+
+
 def load_manifest():
     with open(SESSION_MANIFEST_PATH) as f:
-        return json.load(f)
+        manifest = json.load(f)
+
+    if not isinstance(manifest, list):
+        return []
+
+    normalized_manifest = []
+    manifest_changed = False
+
+    for entry in manifest:
+        if not isinstance(entry, dict):
+            continue
+
+        normalized_entry = dict(entry)
+        added_at = normalized_entry.get("addedAt")
+        if not isinstance(added_at, str) or not added_at:
+            normalized_entry["addedAt"] = _infer_manifest_added_at(normalized_entry)
+            manifest_changed = True
+
+        normalized_manifest.append(normalized_entry)
+
+    if manifest_changed:
+        save_manifest(normalized_manifest)
+
+    return normalized_manifest
 
 
 def save_manifest(manifest):

@@ -8,7 +8,12 @@ from typing import Any
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from .initialize import SESSION_DIR, load_manifest, save_manifest
+from .initialize import (
+    SESSION_DIR,
+    _create_manifest_timestamp,
+    load_manifest,
+    save_manifest,
+)
 from server.types.chat import AssistantMessage, ChatMessage, LLMEvent, UserMessage
 
 CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
@@ -125,10 +130,12 @@ def save_chat_session(chat_id: str, messages: list[BaseModel | dict[str, Any]]) 
             "id": chat_id,
             "file": _create_session_filename(),
             "status": "new",
+            "addedAt": _create_manifest_timestamp(),
         }
         manifest.append(session_entry)
     else:
         session_entry["status"] = "new"
+        session_entry.setdefault("addedAt", _create_manifest_timestamp())
 
     session_path = Path(SESSION_DIR) / session_entry["file"]
     serializable_messages = [

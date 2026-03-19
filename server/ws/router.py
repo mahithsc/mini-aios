@@ -74,34 +74,43 @@ def _append_user_message(messages: list[ChatMessage], user_message: UserMessage)
     return [*messages, user_message]
 
 
+def _save_assistant_state(
+    chat_id: str,
+    next_messages: list[ChatMessage],
+    assistant_events: list[LLMEvent],
+    status: AssistantMessage["status"],
+) -> None:
+    save_chat_session(
+        chat_id,
+        [
+            *next_messages,
+            _build_assistant_message(assistant_events, status=status),
+        ],
+    )
+
+
 async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
     if envelope.type == "chat":
         chat = envelope.data if isinstance(envelope.data, Chat) else Chat.model_validate(envelope.data)
-        agent = create_agent()
         chat_id = chat.id
         persisted_messages = load_chat_session(chat_id)
         latest_user_message = _get_latest_user_message(chat)
         next_messages = _append_user_message(persisted_messages, latest_user_message)
         assistant_events: list[LLMEvent] = []
+
         stream_start_event = _event(chat_id, "stream_start")
-
-        print("Envelope ------->", envelope)
-
-        messages = format_chat_messages_to_openai_messages(next_messages)
-
-
-
-
-        events = agent.arun(messages, stream=True, stream_events=True)
-
         yield WSEnvelope(
             type="chat",
-            data = stream_start_event
+            data=stream_start_event,
         )
         _append_assistant_event(assistant_events, _parse_llm_event(stream_start_event))
 
         try:
-            async for event in events:
+            print("Envelope ------->", envelope)
+            agent = create_agent()
+            messages = format_chat_messages_to_openai_messages(next_messages)
+
+            async for event in agent.arun(messages, stream=True, stream_events=True):
                 if event.event == RunEvent.run_content and event.content is not None:
                     token_event = _event(chat_id, "token", value=event.content)
                     _append_assistant_event(assistant_events, _parse_llm_event(token_event))
@@ -141,28 +150,30 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
         except Exception as exc:
             stream_error_event = _event(chat_id, "stream_error", error=str(exc))
             _append_assistant_event(assistant_events, _parse_llm_event(stream_error_event))
-            save_chat_session(
-                chat_id,
-                [
-                    *next_messages,
-                    _build_assistant_message(assistant_events, status="error"),
-                ],
-            )
+            _save_assistant_state(chat_id, next_messages, assistant_events, status="error")
             yield WSEnvelope(
                 type="chat",
                 data = stream_error_event
             )
             return
 
+        if len(assistant_events) == 1:
+            stream_error_event = _event(
+                chat_id,
+                "stream_error",
+                error="Agent run ended without producing any output.",
+            )
+            _append_assistant_event(assistant_events, _parse_llm_event(stream_error_event))
+            _save_assistant_state(chat_id, next_messages, assistant_events, status="error")
+            yield WSEnvelope(
+                type="chat",
+                data=stream_error_event,
+            )
+            return
+
         stream_end_event = _event(chat_id, "stream_end")
         _append_assistant_event(assistant_events, _parse_llm_event(stream_end_event))
-        save_chat_session(
-            chat_id,
-            [
-                *next_messages,
-                _build_assistant_message(assistant_events, status="complete"),
-            ],
-        )
+        _save_assistant_state(chat_id, next_messages, assistant_events, status="complete")
         yield WSEnvelope(
             type="chat",
             data = stream_end_event
