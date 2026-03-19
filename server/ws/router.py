@@ -118,6 +118,19 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
                         type="chat",
                         data = token_event
                     )
+                elif event.event == RunEvent.run_error:
+                    stream_error_event = _event(
+                        chat_id,
+                        "stream_error",
+                        error=event.content or "Agent run failed.",
+                    )
+                    _append_assistant_event(assistant_events, _parse_llm_event(stream_error_event))
+                    _save_assistant_state(chat_id, next_messages, assistant_events, status="error")
+                    yield WSEnvelope(
+                        type="chat",
+                        data=stream_error_event,
+                    )
+                    return
                 elif event.event == RunEvent.tool_call_started:
                     tool = event.tool
                     tool_call_start_event = _event(
