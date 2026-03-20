@@ -62,7 +62,14 @@ def codex(
     except FileNotFoundError:
         return "error: codex CLI is not installed or not on PATH"
     except subprocess.TimeoutExpired as e:
-        partial = ((e.stdout or "") + (e.stderr or "")).strip()
+        def _to_str(v):
+            if v is None:
+                return ""
+            if isinstance(v, (bytes, bytearray)):
+                return v.decode(errors="replace")
+            return str(v)
+
+        partial = (_to_str(e.stdout) + _to_str(e.stderr)).strip()
         if partial:
             return f"{partial}\n(error: codex timed out after {timeout_value:g}s)"
         return f"error: codex timed out after {timeout_value:g}s"
