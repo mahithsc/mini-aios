@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from agno.agent import RunEvent
 from pydantic import TypeAdapter
 
-from aios_core.sessions import load_chat_session, save_chat_session
+from aios_core.sessions import list_chat_history, load_chat_session, save_chat_session
 from server.types.chat import AssistantMessage, Chat, ChatMessage, LLMEvent, UserMessage
 from server.types.ws import WSEnvelope
 from aios_core.agent import create_agent
@@ -111,6 +111,33 @@ def _conversation_messages_for_turn(chat: Chat) -> list[ChatMessage]:
 
 
 async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
+    if envelope.type == "chat-history":
+        if isinstance(envelope.data, str):
+            chat_id = envelope.data
+            chat_history = next((chat for chat in list_chat_history() if chat.id == chat_id), None)
+
+            if chat_history is None:
+                return
+
+            yield WSEnvelope(
+                type="chat-history",
+                data=Chat(
+                    id=chat_history.id,
+                    title=chat_history.title,
+                    createdAt=chat_history.createdAt,
+                    updatedAt=chat_history.updatedAt,
+                    status=chat_history.status,
+                    messages=load_chat_session(chat_id),
+                ).model_dump(mode="json"),
+            )
+            return
+
+        yield WSEnvelope(
+            type="chat-history",
+            data=[chat.model_dump(mode="json") for chat in list_chat_history()],
+        )
+        return
+
     if envelope.type == "chat":
         chat = envelope.data if isinstance(envelope.data, Chat) else Chat.model_validate(envelope.data)
         chat_id = chat.id

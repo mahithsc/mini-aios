@@ -14,7 +14,7 @@ from .initialize import (
     load_manifest,
     save_manifest,
 )
-from server.types.chat import AssistantMessage, ChatMessage, LLMEvent, UserMessage
+from server.types.chat import AssistantMessage, ChatMessage, ChatMetadata, LLMEvent, UserMessage
 
 CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
 
@@ -104,6 +104,24 @@ def _normalize_chat_message(message: BaseModel | dict[str, Any], index: int = 0)
     return parsed_message
 
 
+def _get_chat_title(messages: list[ChatMessage]) -> str | None:
+    for message in messages:
+        if isinstance(message, UserMessage) and message.content.strip():
+            return message.content.strip().splitlines()[0][:80]
+
+    return None
+
+
+def _get_manifest_timestamp_ms(value: Any) -> int:
+    if not isinstance(value, str) or not value:
+        return int(datetime.now().timestamp() * 1000)
+
+    try:
+        return int(datetime.fromisoformat(value).timestamp() * 1000)
+    except ValueError:
+        return int(datetime.now().timestamp() * 1000)
+
+
 def load_chat_session(chat_id: str) -> list[ChatMessage]:
     session_entry = _get_session_entry(chat_id)
 
@@ -119,6 +137,38 @@ def load_chat_session(chat_id: str) -> list[ChatMessage]:
         return []
 
     return [_normalize_chat_message(message, index=index) for index, message in enumerate(messages)]
+
+
+def list_chat_history() -> list[ChatMetadata]:
+    history: list[ChatMetadata] = []
+
+    for entry in load_manifest():
+        if not isinstance(entry, dict):
+            continue
+
+        chat_id = entry.get("id")
+        if not isinstance(chat_id, str) or not chat_id:
+            continue
+
+        messages = load_chat_session(chat_id)
+        fallback_timestamp = _get_manifest_timestamp_ms(entry.get("addedAt"))
+
+        created_at = messages[0].createdAt if messages else fallback_timestamp
+        updated_at = messages[-1].updatedAt if messages else fallback_timestamp
+        status = entry.get("status")
+
+        history.append(
+            ChatMetadata(
+                id=chat_id,
+                title=_get_chat_title(messages),
+                createdAt=created_at,
+                updatedAt=updated_at,
+                status=status if status in {"idle", "streaming", "error"} else None,
+            )
+        )
+
+    history.sort(key=lambda chat: chat.updatedAt, reverse=True)
+    return history
 
 
 def save_chat_session(chat_id: str, messages: list[BaseModel | dict[str, Any]]) -> str:

@@ -4,9 +4,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from .chat import Chat
+from .chat import Chat, ChatMetadata
 
-WSEnvelopeTypes = Literal["chat"]
+WSEnvelopeTypes = Literal["chat", "chat-history"]
 
 
 class WSEnvelope(BaseModel):
@@ -17,3 +17,8 @@ class WSEnvelope(BaseModel):
 class ChatWSEnvelope(WSEnvelope):
     type: Literal["chat"] = "chat"
     data: Chat
+
+
+class ChatHistoryWSEnvelope(WSEnvelope):
+    type: Literal["chat-history"] = "chat-history"
+    data: list[ChatMetadata] | Chat | str | None = None

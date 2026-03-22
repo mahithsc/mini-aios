@@ -20,7 +20,7 @@ from .chat import (
     UnixMs,
     UserMessage,
 )
-from .ws import ChatWSEnvelope, WSEnvelope, WSEnvelopeTypes
+from .ws import ChatHistoryWSEnvelope, ChatWSEnvelope, WSEnvelope, WSEnvelopeTypes
 
 __all__ = [
     "AssistantMessage",
@@ -28,6 +28,7 @@ __all__ = [
     "BaseLLMEvent",
     "BaseMessage",
     "Chat",
+    "ChatHistoryWSEnvelope",
     "ChatMessage",
     "ChatMetadata",
     "ChatStatus",
