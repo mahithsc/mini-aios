@@ -17,6 +17,7 @@ from .initialize import (
 from server.types.chat import AssistantMessage, ChatMessage, ChatMetadata, LLMEvent, UserMessage
 
 CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
+VALID_CHAT_STATUSES = {"idle", "streaming", "error"}
 
 
 def _create_session_filename() -> str:
@@ -163,12 +164,27 @@ def list_chat_history() -> list[ChatMetadata]:
                 title=_get_chat_title(messages),
                 createdAt=created_at,
                 updatedAt=updated_at,
-                status=status if status in {"idle", "streaming", "error"} else None,
+                status=status if status in VALID_CHAT_STATUSES else None,
             )
         )
 
     history.sort(key=lambda chat: chat.updatedAt, reverse=True)
     return history
+
+
+def update_chat_status(chat_id: str, status: str | None) -> None:
+    manifest = load_manifest()
+    session_entry = next((entry for entry in manifest if entry.get("id") == chat_id), None)
+
+    if session_entry is None:
+        return
+
+    if status in VALID_CHAT_STATUSES:
+        session_entry["status"] = status
+    else:
+        session_entry.pop("status", None)
+
+    save_manifest(manifest)
 
 
 def save_chat_session(chat_id: str, messages: list[BaseModel | dict[str, Any]]) -> str:
@@ -179,12 +195,13 @@ def save_chat_session(chat_id: str, messages: list[BaseModel | dict[str, Any]]) 
         session_entry = {
             "id": chat_id,
             "file": _create_session_filename(),
-            "status": "new",
+            "status": "idle",
             "addedAt": _create_manifest_timestamp(),
         }
         manifest.append(session_entry)
     else:
-        session_entry["status"] = "new"
+        if session_entry.get("status") not in VALID_CHAT_STATUSES:
+            session_entry["status"] = "idle"
         session_entry.setdefault("addedAt", _create_manifest_timestamp())
 
     session_path = Path(SESSION_DIR) / session_entry["file"]

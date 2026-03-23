@@ -6,7 +6,8 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from aios_core.initialize import register_runtime_shutdown, shutdown_runtime, start_runtime
-from server.ws import handle_websocket_connection
+from server.runs.runtime import shutdown_runs_service, start_runs_service
+from server.ws.connection import handle_websocket_connection
 
 register_runtime_shutdown()
 
@@ -14,9 +15,11 @@ register_runtime_shutdown()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     start_runtime(start_heartbeat=False)
+    await start_runs_service()
     try:
         yield
     finally:
+        await shutdown_runs_service()
         shutdown_runtime()
 
 

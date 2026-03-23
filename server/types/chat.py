@@ -99,6 +99,7 @@ class UserMessage(BaseMessage):
 
 class AssistantMessage(BaseMessage):
     role: Literal["assistant"] = "assistant"
+    runId: str | None = None
     events: list[LLMEvent] = Field(default_factory=list)
 
 

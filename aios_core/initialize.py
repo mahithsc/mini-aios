@@ -13,6 +13,10 @@ RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
 
 SKILLS_DIR = "skills"
 SESSION_DIR = "session"
+RUNS_DIR = "runs"
+RUNS_METADATA_DIR = f"{RUNS_DIR}/metadata"
+RUNS_SNAPSHOTS_DIR = f"{RUNS_DIR}/snapshots"
+RUNS_EVENTS_DIR = f"{RUNS_DIR}/events"
 SESSION_MANIFEST_PATH = f"{SESSION_DIR}/session_manifest.json"
 SKILLS_INDEX_PATH = f"{SKILLS_DIR}/skills_index.json"
 
@@ -23,6 +27,9 @@ _RUNTIME_STARTED = False
 def initialize_files():
     os.makedirs(SKILLS_DIR, exist_ok=True)
     os.makedirs(SESSION_DIR, exist_ok=True)
+    os.makedirs(RUNS_METADATA_DIR, exist_ok=True)
+    os.makedirs(RUNS_SNAPSHOTS_DIR, exist_ok=True)
+    os.makedirs(RUNS_EVENTS_DIR, exist_ok=True)
 
     files_to_create = {
         SESSION_MANIFEST_PATH: [],
