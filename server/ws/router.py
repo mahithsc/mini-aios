@@ -95,7 +95,7 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
             if isinstance(envelope.data, NotificationDismissRequest)
             else NotificationDismissRequest.model_validate(envelope.data)
         )
-        await get_notification_service().dismiss_notification(dismiss_request.id)
+        get_notification_service().dismiss_notification(dismiss_request.id)
         return
 
     if envelope.type in {"chat", "chat.submit"}:

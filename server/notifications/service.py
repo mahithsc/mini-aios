@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 
@@ -26,7 +27,7 @@ class NotificationService:
     async def shutdown(self) -> None:
         return
 
-    async def create_notification(
+    def create_notification(
         self,
         *,
         source: NotificationSource,
@@ -75,7 +76,7 @@ class NotificationService:
                 ),
             )
 
-        await self._broadcaster.broadcast_created(notification)
+        self._broadcast(self._broadcaster.broadcast_created(notification))
         return notification
 
     def list_notifications(
@@ -100,7 +101,7 @@ class NotificationService:
             notifications=[self._row_to_notification(row) for row in rows]
         )
 
-    async def dismiss_notification(self, notification_id: str) -> Notification | None:
+    def dismiss_notification(self, notification_id: str) -> Notification | None:
         existing = self.get_notification(notification_id)
         if existing is None:
             return None
@@ -123,7 +124,7 @@ class NotificationService:
                 (updated.updatedAt, updated.dismissedAt, notification_id),
             )
 
-        await self._broadcaster.broadcast_dismissed(updated)
+        self._broadcast(self._broadcaster.broadcast_dismissed(updated))
         return updated
 
     def get_notification(self, notification_id: str) -> Notification | None:
@@ -158,3 +159,13 @@ class NotificationService:
             updatedAt=int(row[9]),
             dismissedAt=int(row[10]) if row[10] is not None else None,
         )
+
+    @staticmethod
+    def _broadcast(coroutine) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(coroutine)
+            return
+
+        loop.create_task(coroutine)

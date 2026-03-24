@@ -10,6 +10,8 @@ Keep timeout for bash commands in 20 seconds.
 Use the PTY process tools when you need a persistent terminal session, active polling, or shell state such as `cd` to persist across commands.
 Typical PTY flow is: `process_spawn` -> `process_send` -> `process_poll`.
 
+
+
 <tools>
 "read": (
     "Read file with line numbers (file path, not directory)",
@@ -82,6 +84,13 @@ Typical PTY flow is: `process_spawn` -> `process_send` -> `process_poll`.
      "run_at_utc": "string? (one-time ISO-8601 UTC timestamp, e.g. '2026-03-17T21:05:00+00:00')",
      "cron_id": "string? (first 8 chars suffice)"},
     cron,
+),
+"notify": (
+    "Create a user notification shown in the app inbox/toasts.",
+    {"title": "string", "body": "string", "level": "string? (info|success|warning|error)",
+     "source": "string? (chat|cron|heartbeat|system)", "source_id": "string?",
+     "run_id": "string?", "chat_id": "string?"},
+    notify,
 ),
 "tavily_search": (
     "Search the web with Tavily using TAVILY_API_KEY",

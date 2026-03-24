@@ -12,6 +12,7 @@ from .tools import (
     edit,
     glob,
     grep,
+    notify,
     process_kill,
     process_list,
     process_poll,
@@ -55,6 +56,7 @@ BASE_TOOLS = [
     process_kill,
     codex,
     cron,
+    notify,
     tavily_search,
 ]
 MAIN_TOOLS = [*BASE_TOOLS, subagent]
