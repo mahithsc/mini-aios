@@ -19,6 +19,7 @@ from .tools import (
     tavily_search,
     write,
 )
+from .tools.canvas import show_canvas
 from .tools.codex import codex
 from .tools.cron import cron
 from .tools.notify import notify
@@ -56,6 +57,7 @@ BASE_TOOLS = [
     process_kill,
     codex,
     cron,
+    show_canvas,
     notify,
     tavily_search,
 ]

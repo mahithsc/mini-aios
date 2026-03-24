@@ -28,6 +28,13 @@ You are given the power to provide notifications. Notifications are useful for l
     {"path": "string", "old": "string", "new": "string", "all": "boolean?"},
     edit,
 ),
+"show_canvas": (
+    "Prepare a canvas artifact for the current chat. Use for images, videos, and files that should appear in the chat's canvas.",
+    {"kind": "string (image|video|file)", "title": "string?", "url": "string?",
+     "file_path": "string?", "name": "string?", "mime_type": "string?",
+     "thumbnail_url": "string?", "text_preview": "string?", "size_bytes": "number?"},
+    show_canvas,
+),
 "glob": (
     "Find files by pattern, sorted by mtime",
     {"pat": "string", "path": "string?"},
