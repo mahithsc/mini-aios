@@ -1,0 +1,4 @@
+Canvas demo
+
+This is a simple artifact displayed in the canvas.
+You can ask me to put code, docs, images, or reports here.
