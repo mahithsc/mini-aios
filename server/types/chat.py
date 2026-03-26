@@ -18,6 +18,7 @@ class MessageAttachment(BaseModel):
     filePath: str
     mimeType: str | None = None
     sizeBytes: int | None = None
+    uploadedAt: UnixMs | None = None
 
 
 class ChatMetadata(BaseModel):
