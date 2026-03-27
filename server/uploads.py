@@ -14,6 +14,7 @@ from server.types.chat import MessageAttachment
 UPLOAD_ROOT = "uploads"
 MAX_ATTACHMENTS_PER_REQUEST = 10
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_AUDIO_ATTACHMENT_BYTES = 100 * 1024 * 1024
 CHUNK_SIZE = 1024 * 1024
 TEXT_FILE_EXTENSIONS = {
     ".c",
@@ -58,6 +59,23 @@ DOCUMENT_MIME_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     *TEXT_MIME_TYPES,
 }
+AUDIO_FILE_EXTENSIONS = {
+    ".m4a",
+    ".mp3",
+    ".ogg",
+    ".wav",
+}
+AUDIO_MIME_TYPES = {
+    "audio/m4a",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/wav",
+    "audio/webm",
+    "audio/x-m4a",
+    "audio/x-wav",
+}
 
 
 def _sanitize_path_segment(value: str, fallback: str) -> str:
@@ -98,14 +116,19 @@ def _infer_mime_type(upload: UploadFile, filename: str) -> str | None:
 def _is_supported_attachment(mime_type: str | None, filename: str) -> bool:
     if mime_type and mime_type.startswith("image/"):
         return True
+    if mime_type in AUDIO_MIME_TYPES:
+        return True
     if mime_type in DOCUMENT_MIME_TYPES:
         return True
-    return Path(filename).suffix.lower() in TEXT_FILE_EXTENSIONS
+    extension = Path(filename).suffix.lower()
+    return extension in TEXT_FILE_EXTENSIONS or extension in AUDIO_FILE_EXTENSIONS
 
 
-def _attachment_kind(mime_type: str | None) -> str:
+def _attachment_kind(mime_type: str | None, filename: str) -> str:
     if mime_type and mime_type.startswith("image/"):
         return "image"
+    if mime_type in AUDIO_MIME_TYPES or Path(filename).suffix.lower() in AUDIO_FILE_EXTENSIONS:
+        return "audio"
     return "file"
 
 
@@ -127,6 +150,10 @@ async def save_uploads(chat_id: str, files: list[UploadFile]) -> list[MessageAtt
     for upload in files:
         safe_filename = _sanitize_filename(upload.filename)
         mime_type = _infer_mime_type(upload, safe_filename)
+        attachment_kind = _attachment_kind(mime_type, safe_filename)
+        max_attachment_bytes = (
+            MAX_AUDIO_ATTACHMENT_BYTES if attachment_kind == "audio" else MAX_ATTACHMENT_BYTES
+        )
 
         if not _is_supported_attachment(mime_type, safe_filename):
             raise HTTPException(
@@ -147,10 +174,11 @@ async def save_uploads(chat_id: str, files: list[UploadFile]) -> list[MessageAtt
                         break
 
                     size_bytes += len(chunk)
-                    if size_bytes > MAX_ATTACHMENT_BYTES:
+                    if size_bytes > max_attachment_bytes:
+                        limit_mb = max_attachment_bytes // (1024 * 1024)
                         raise HTTPException(
                             status_code=status.HTTP_400_BAD_REQUEST,
-                            detail=f"{safe_filename} exceeds the 20 MB attachment limit.",
+                            detail=f"{safe_filename} exceeds the {limit_mb} MB attachment limit.",
                         )
 
                     target.write(chunk)
@@ -163,7 +191,7 @@ async def save_uploads(chat_id: str, files: list[UploadFile]) -> list[MessageAtt
         saved_attachments.append(
             MessageAttachment(
                 id=str(uuid.uuid4()),
-                kind=_attachment_kind(mime_type),
+                kind=attachment_kind,
                 name=safe_filename,
                 filePath=str(relative_path),
                 mimeType=mime_type,

@@ -8,7 +8,7 @@ UnixMs = int
 
 ChatStatus = Literal["idle", "streaming", "error"]
 MessageStatus = Literal["pending", "streaming", "complete", "error"]
-AttachmentKind = Literal["image", "file"]
+AttachmentKind = Literal["image", "file", "audio"]
 
 
 class MessageAttachment(BaseModel):
