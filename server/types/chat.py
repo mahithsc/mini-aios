@@ -8,7 +8,7 @@ UnixMs = int
 
 ChatStatus = Literal["idle", "streaming", "error"]
 MessageStatus = Literal["pending", "streaming", "complete", "error"]
-AttachmentKind = Literal["image", "file"]
+AttachmentKind = Literal["image", "file", "audio"]
 
 
 class MessageAttachment(BaseModel):
@@ -18,6 +18,7 @@ class MessageAttachment(BaseModel):
     filePath: str
     mimeType: str | None = None
     sizeBytes: int | None = None
+    uploadedAt: UnixMs | None = None
 
 
 class ChatMetadata(BaseModel):

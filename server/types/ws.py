@@ -5,12 +5,16 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from .chat import Chat, ChatMetadata
+from .notification import Notification, NotificationDismissRequest, NotificationListResponse
 from .run import ProcessSnapshotListRequest, Run, RunEvent, RunResumeRequest, RunSnapshot
 
 WSEnvelopeTypes = Literal[
     "chat",
     "chat-history",
     "chat.submit",
+    "notification.list",
+    "notification.created",
+    "notification.dismiss",
     "run.accepted",
     "run.event",
     "process.snapshot.list",
@@ -36,6 +40,21 @@ class ChatHistoryWSEnvelope(WSEnvelope):
 class ChatSubmitWSEnvelope(WSEnvelope):
     type: Literal["chat.submit"] = "chat.submit"
     data: dict[str, Any] | Chat
+
+
+class NotificationListWSEnvelope(WSEnvelope):
+    type: Literal["notification.list"] = "notification.list"
+    data: NotificationListResponse | None = None
+
+
+class NotificationCreatedWSEnvelope(WSEnvelope):
+    type: Literal["notification.created"] = "notification.created"
+    data: Notification
+
+
+class NotificationDismissWSEnvelope(WSEnvelope):
+    type: Literal["notification.dismiss"] = "notification.dismiss"
+    data: NotificationDismissRequest | Notification
 
 
 class RunAcceptedWSEnvelope(WSEnvelope):

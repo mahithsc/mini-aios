@@ -20,6 +20,13 @@ from .chat import (
     UnixMs,
     UserMessage,
 )
+from .notification import (
+    Notification,
+    NotificationDismissRequest,
+    NotificationLevel,
+    NotificationListResponse,
+    NotificationSource,
+)
 from .run import (
     RunCreateRequest,
     ProcessSnapshotListRequest,
@@ -36,6 +43,9 @@ from .ws import (
     ChatHistoryWSEnvelope,
     ChatSubmitWSEnvelope,
     ChatWSEnvelope,
+    NotificationCreatedWSEnvelope,
+    NotificationDismissWSEnvelope,
+    NotificationListWSEnvelope,
     ProcessSnapshotListWSEnvelope,
     RunAcceptedWSEnvelope,
     RunEventWSEnvelope,
@@ -59,6 +69,14 @@ __all__ = [
     "LLMEvent",
     "MessageAttachment",
     "MessageStatus",
+    "Notification",
+    "NotificationCreatedWSEnvelope",
+    "NotificationDismissRequest",
+    "NotificationDismissWSEnvelope",
+    "NotificationLevel",
+    "NotificationListResponse",
+    "NotificationListWSEnvelope",
+    "NotificationSource",
     "ProcessSnapshotListRequest",
     "ProcessSnapshotListWSEnvelope",
     "Run",

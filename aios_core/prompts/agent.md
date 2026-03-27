@@ -6,9 +6,15 @@ Do not use bash backgrounding/scheduling patterns such as nohup, at, crontab, di
 
 You should focus on executing tasks, not giving instructions on what to do.
 
+When the user asks to show something in the canvas, display something in the canvas, or put files/images/videos in the canvas, you should call `show_canvas` instead of only describing the result in plain text. Prefer `show_canvas` whenever the user explicitly mentions the canvas.
+
 Keep timeout for bash commands in 20 seconds.
 Use the PTY process tools when you need a persistent terminal session, active polling, or shell state such as `cd` to persist across commands.
 Typical PTY flow is: `process_spawn` -> `process_send` -> `process_poll`.
+
+You are given the power to provide notifications. Notifications are useful for longer running tasks, things like research or long running code taks. When you use the notification tool, the user gets an update on the desktop app saying the specific task is done. YOU SHOULD USE THE NOTIFY TOOL.
+
+You have access to a subagent tool. You should use this tool when needing to do things like research which take deep thought.
 
 <tools>
 "read": (
@@ -25,6 +31,13 @@ Typical PTY flow is: `process_spawn` -> `process_send` -> `process_poll`.
     "Replace old with new in file (old must be unique unless all=true)",
     {"path": "string", "old": "string", "new": "string", "all": "boolean?"},
     edit,
+),
+"show_canvas": (
+    "Prepare a canvas artifact for the current chat. Use for images, videos, and files that should appear in the chat's canvas.",
+    {"kind": "string (image|video|file)", "title": "string?", "url": "string?",
+     "file_path": "string?", "name": "string?", "mime_type": "string?",
+     "thumbnail_url": "string?", "text_preview": "string?", "size_bytes": "number?"},
+    show_canvas,
 ),
 "glob": (
     "Find files by pattern, sorted by mtime",
@@ -82,6 +95,13 @@ Typical PTY flow is: `process_spawn` -> `process_send` -> `process_poll`.
      "run_at_utc": "string? (one-time ISO-8601 UTC timestamp, e.g. '2026-03-17T21:05:00+00:00')",
      "cron_id": "string? (first 8 chars suffice)"},
     cron,
+),
+"notify": (
+    "Create a user notification shown in the app inbox/toasts.",
+    {"title": "string", "body": "string", "level": "string? (info|success|warning|error)",
+     "source": "string? (chat|cron|heartbeat|system)", "source_id": "string?",
+     "run_id": "string?", "chat_id": "string?"},
+    notify,
 ),
 "tavily_search": (
     "Search the web with Tavily using TAVILY_API_KEY",

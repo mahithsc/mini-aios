@@ -11,7 +11,8 @@ runs/
 # skills
 skills/
 
-# crons
+# local db
+aios.db
 crons.db
 cron_logs/
 

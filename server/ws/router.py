@@ -3,8 +3,10 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from aios_core.sessions import list_chat_history, load_chat_session, save_chat_session, update_chat_status
+from server.notifications.runtime import get_notification_service
 from server.runs.runtime import get_runs_service
 from server.types.chat import Chat, ChatMessage, UserMessage
+from server.types.notification import NotificationDismissRequest
 from server.types.run import RunCreateRequest
 from server.types.ws import WSEnvelope
 
@@ -74,6 +76,26 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
             type="chat-history",
             data=[chat.model_dump(mode="json") for chat in list_chat_history()],
         )
+        return
+
+    if envelope.type == "notification.list":
+        notifications = get_notification_service().list_notifications()
+        yield WSEnvelope(
+            type="notification.list",
+            data=notifications.model_dump(mode="json"),
+        )
+        return
+
+    if envelope.type == "notification.dismiss":
+        if envelope.data is None:
+            return
+
+        dismiss_request = (
+            envelope.data
+            if isinstance(envelope.data, NotificationDismissRequest)
+            else NotificationDismissRequest.model_validate(envelope.data)
+        )
+        get_notification_service().dismiss_notification(dismiss_request.id)
         return
 
     if envelope.type in {"chat", "chat.submit"}:

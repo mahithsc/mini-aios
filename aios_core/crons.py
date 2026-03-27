@@ -1,4 +1,3 @@
-import sqlite3
 import uuid
 import logging
 import os
@@ -10,11 +9,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.cron import CronTrigger
 from .agent import create_agent
+from .db import DB_PATH, get_db_connection, initialize_app_db
 from .prompt_loader import render_prompt
 from .workspace import ensure_workspace_dir
 
 _WORKSPACE_DIR = ensure_workspace_dir()
-DB_PATH = str(_WORKSPACE_DIR / "crons.db")
 CRON_LOG_DIR = str(_WORKSPACE_DIR / "cron_logs")
 DEFAULT_CRON_TIMEZONE = os.getenv("AIOS_DEFAULT_TIMEZONE", "America/New_York")
 log = logging.getLogger(__name__)
@@ -28,11 +27,10 @@ class CronManager:
         self._scheduler = None
 
     def _get_conn(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+        return get_db_connection(self.db_path)
 
     def _init_db(self):
+        initialize_app_db(self.db_path)
         with self._get_conn() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS crons (

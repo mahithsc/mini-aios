@@ -13,4 +13,12 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "uvicorn>=0.42.0",
     "zeroconf>=0.148.0",
+    "httpx>=0.27.0",
+    "websockets>=12.0",
+    "python-multipart>=0.0.22",
+]
+
+[tool.uv.workspace]
+members = [
+    "work/sonosctl",
 ]

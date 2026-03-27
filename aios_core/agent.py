@@ -22,6 +22,11 @@ from .tools import (
     tavily_search,
     write,
 )
+from .tools.canvas import show_canvas
+from .tools.codex import codex
+from .tools.cron import cron
+from .tools.notify import notify
+from .tools.subagent import subagent
 from agno.agent import Agent
 from agno.models.anthropic import Claude
 from agno.models.openai import OpenAIChat
@@ -55,6 +60,8 @@ BASE_TOOLS = [
     process_kill,
     codex,
     cron,
+    show_canvas,
+    notify,
     tavily_search,
 ]
 MAIN_TOOLS = [*BASE_TOOLS, subagent]

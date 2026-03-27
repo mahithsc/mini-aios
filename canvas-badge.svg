@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="200" viewBox="0 0 640 200">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#111827"/>
+      <stop offset="100%" stop-color="#2563EB"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="640" height="200" rx="24" fill="url(#g)"/>
+  <circle cx="110" cy="100" r="60" fill="#F59E0B" opacity="0.95"/>
+  <path d="M95 105 L110 120 L135 85" fill="none" stroke="#111827" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="200" y="92" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto" font-size="40" fill="#FFFFFF" font-weight="700">Canvas Artifact</text>
+  <text x="200" y="135" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto" font-size="22" fill="#E5E7EB">Generated SVG badge • 2026-03-25</text>
+</svg>

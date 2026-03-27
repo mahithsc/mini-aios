@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 
 from .crons import cron_manager
+from .db import initialize_app_db
 from .heartbeat import heartbeat_service
 from .workspace import ensure_workspace_dir
 
@@ -30,6 +31,7 @@ def initialize_files():
     os.makedirs(RUNS_METADATA_DIR, exist_ok=True)
     os.makedirs(RUNS_SNAPSHOTS_DIR, exist_ok=True)
     os.makedirs(RUNS_EVENTS_DIR, exist_ok=True)
+    initialize_app_db()
 
     files_to_create = {
         SESSION_MANIFEST_PATH: [],
