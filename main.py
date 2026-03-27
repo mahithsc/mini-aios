@@ -6,7 +6,7 @@ import uvicorn
 
 
 def main() -> None:
-    host = os.getenv("AIOS_SERVER_HOST", "127.0.0.1")
+    host = os.getenv("AIOS_SERVER_HOST", "0.0.0.0")
     port = int(os.getenv("AIOS_SERVER_PORT", "8765"))
     uvicorn.run("server.server:app", host=host, port=port, reload=False)
 
