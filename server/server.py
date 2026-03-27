@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from aios_core.initialize import register_runtime_shutdown, shutdown_runtime, start_runtime
 from server.notifications.runtime import shutdown_notification_service, start_notification_service
-from server.runs.runtime import shutdown_runs_service, start_runs_service
+from server.execution.runtime import shutdown_runs_service, start_runs_service
 from server.uploads import save_uploads
 from server.ws.connection import handle_websocket_connection
 

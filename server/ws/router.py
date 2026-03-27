@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 
 from aios_core.sessions import list_chat_history, load_chat_session, save_chat_session, update_chat_status
 from server.notifications.runtime import get_notification_service
-from server.runs.runtime import get_runs_service
+from server.execution.runtime import get_runs_service
 from server.types.chat import Chat, ChatMessage, UserMessage
 from server.types.notification import NotificationDismissRequest
 from server.types.run import RunCreateRequest
