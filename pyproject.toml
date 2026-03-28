@@ -16,6 +16,8 @@ dependencies = [
     "httpx>=0.27.0",
     "websockets>=12.0",
     "python-multipart>=0.0.22",
+    "board>=1.0",
+    "neopixel>=0.0.1",
 ]
 
 [tool.uv.workspace]
