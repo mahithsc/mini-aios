@@ -40,6 +40,7 @@ class LightsService:
     max_brightness: float = 0.18
     transition_seconds: float = 0.35
     step_delay: float = 0.02
+    idle_color: Color = (0, 255, 0)
     answering_min_level: float = 0.08
     answering_max_level: float = 1.0
     answering_breath_seconds: float = 2.8
@@ -168,6 +169,9 @@ class LightsService:
 
         if mode == "error":
             return self._solid_frame(self.error_color)
+
+        if mode == "idle":
+            return self._solid_frame(self.idle_color)
 
         return self._solid_frame(self.off_color)
 
