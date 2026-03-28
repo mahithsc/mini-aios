@@ -394,6 +394,12 @@ wheels = [
 ]
 
 [[package]]
+name = "jetson-gpio"
+version = "2.1.12"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/74/5e/a40eaa9f4f79182b1e3a97059fbaeab4ee567639188fc00d352f3a129751/jetson_gpio-2.1.12.tar.gz", hash = "sha256:43110ba2e3bbf747bfe65ef2cc442cee91bdea8924e946bc64ec55b67f9eb948", size = 37412, upload-time = "2025-09-30T16:02:50.571Z" }
+
+[[package]]
 name = "jiter"
 version = "0.13.0"
 source = { registry = "https://pypi.org/simple" }
@@ -494,6 +500,7 @@ dependencies = [
     { name = "apscheduler" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "jetson-gpio" },
     { name = "openai" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
@@ -511,6 +518,7 @@ requires-dist = [
     { name = "apscheduler", specifier = ">=3.11.2" },
     { name = "fastapi", specifier = ">=0.135.1" },
     { name = "httpx", specifier = ">=0.27.0" },
+    { name = "jetson-gpio", specifier = ">=2.1.12" },
     { name = "openai", specifier = ">=2.26.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "python-multipart", specifier = ">=0.0.22" },

@@ -18,6 +18,7 @@ dependencies = [
     "python-multipart>=0.0.22",
     "adafruit-blinka>=9.0.4",
     "adafruit-circuitpython-neopixel-spi>=1.0.15",
+    "jetson-gpio>=2.1.12",
 ]
 
 [tool.uv.workspace]
