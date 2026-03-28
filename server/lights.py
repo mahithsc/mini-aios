@@ -39,11 +39,18 @@ class LightsService:
     spi_frequency: int = 6_400_000
     max_brightness: float = 0.18
     transition_seconds: float = 0.35
-    min_level: float = 0.08
-    max_level: float = 1.0
     step_delay: float = 0.02
-    breath_seconds: float = 2.8
-    thinking_color: Color = (120, 255, 80)
+    answering_min_level: float = 0.08
+    answering_max_level: float = 1.0
+    answering_breath_seconds: float = 2.8
+    answering_color: Color = (120, 255, 80)
+    thinking_step_delay: float = 0.04
+    thinking_pulse_seconds: float = 2.0
+    thinking_min_level: float = 0.05
+    thinking_max_level: float = 1.0
+    thinking_color: Color = (0, 255, 0)
+    thinking_segment_offsets: tuple[int, ...] = (-1, 0, 1)
+    thinking_segment_count: int = 4
     tool_color: Color = (80, 160, 255)
     error_color: Color = (255, 80, 80)
     off_color: Color = (0, 0, 0)
@@ -80,7 +87,7 @@ class LightsService:
         await self.set_mode(mode)
 
     async def _apply_mode(self, mode: LightMode) -> None:
-        target_frame = self._frame_for_mode(mode, phase=0.0)
+        target_frame = self._frame_for_mode(mode, elapsed=0.0)
         await self._transition_to_frame(target_frame)
 
         if self._is_animated_mode(mode):
@@ -92,9 +99,9 @@ class LightsService:
             if self._mode != mode:
                 return
 
-            phase = ((time.monotonic() - start) % self.breath_seconds) / self.breath_seconds
-            self._render_frame(self._frame_for_mode(mode, phase=phase))
-            await asyncio.sleep(self.step_delay)
+            elapsed = time.monotonic() - start
+            self._render_frame(self._frame_for_mode(mode, elapsed=elapsed))
+            await asyncio.sleep(self._animation_step_delay(mode))
 
     async def _stop_animation(self) -> None:
         if self._animation_task is None:
@@ -125,13 +132,36 @@ class LightsService:
             await asyncio.sleep(self.step_delay)
 
     def _is_animated_mode(self, mode: LightMode) -> bool:
-        return mode == "thinking"
+        return mode in {"thinking", "answering"}
 
-    def _frame_for_mode(self, mode: LightMode, *, phase: float) -> Frame:
+    def _animation_step_delay(self, mode: LightMode) -> float:
         if mode == "thinking":
+            return self.thinking_step_delay
+        return self.step_delay
+
+    def _frame_for_mode(self, mode: LightMode, *, elapsed: float) -> Frame:
+        if mode == "answering":
+            phase = (elapsed % self.answering_breath_seconds) / self.answering_breath_seconds
             glow = 0.5 - 0.5 * math.cos(phase * 2.0 * math.pi)
-            level = self.min_level + ((self.max_level - self.min_level) * glow)
-            return self._solid_frame(scale_color(self.thinking_color, level))
+            level = self.answering_min_level + (
+                (self.answering_max_level - self.answering_min_level) * glow
+            )
+            return self._solid_frame(scale_color(self.answering_color, level))
+
+        if mode == "thinking":
+            pulse_phase = (elapsed % self.thinking_pulse_seconds) / self.thinking_pulse_seconds
+            glow = 0.5 - 0.5 * math.cos(pulse_phase * 2.0 * math.pi)
+            level = self.thinking_min_level + (
+                (self.thinking_max_level - self.thinking_min_level) * glow
+            )
+            current_color = scale_color(self.thinking_color, level)
+            position = int(elapsed / max(self.thinking_step_delay, 0.001)) % self.num_pixels
+            frame = self._solid_frame(self.off_color)
+            for offset in self._thinking_quarter_offsets():
+                center = (position + offset) % self.num_pixels
+                for segment_offset in self.thinking_segment_offsets:
+                    frame[(center + segment_offset) % self.num_pixels] = current_color
+            return frame
 
         if mode == "tool":
             return self._solid_frame(self.tool_color)
@@ -143,6 +173,14 @@ class LightsService:
 
     def _solid_frame(self, color: Color) -> Frame:
         return [color for _ in range(self.num_pixels)]
+
+    def _thinking_quarter_offsets(self) -> tuple[int, ...]:
+        if self.thinking_segment_count <= 1:
+            return (0,)
+        return tuple(
+            int(round(index * self.num_pixels / self.thinking_segment_count))
+            for index in range(self.thinking_segment_count)
+        )
 
     def _ensure_pixels(self) -> bool:
         if not self._hardware_available:
