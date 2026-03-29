@@ -8,6 +8,7 @@ from agno.agent import RunEvent as AgentRunEvent
 from aios_core.agent import create_agent
 from aios_core.sessions import load_chat_session
 from server.execution.service import RunsService, build_run_event
+from server.lights import lights
 from server.types.run import Run
 from server.utils.utils import format_chat_messages_to_model_messages
 
@@ -57,6 +58,7 @@ class ChatRunner:
         produced_output = False
 
         try:
+            await lights.set_mode("thinking")
             agent = create_agent()
             async for event in agent.arun(messages, stream=True, stream_events=True):
                 if event.event == AgentRunEvent.run_content and event.content is not None:
@@ -125,6 +127,8 @@ class ChatRunner:
                 ),
             )
             return
+        finally:
+            await lights.set_mode("idle")
 
         if not produced_output:
             await runs_service.emit_event(
