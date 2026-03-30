@@ -83,7 +83,6 @@ You have access to a subagent tool. You should use this tool when needing to do 
     "Delegate one coding task to Codex CLI (codex exec). "
     "Use for complex edits where a separate coding agent may perform better.",
     {"task": "string", "timeout": "number?", "model": "string?",
-     "sandbox": "string? (read-only|workspace-write|danger-full-access)",
      "path": "string? (working directory; default '.')"},
     codex,
 ),

@@ -7,7 +7,6 @@ def codex(
     task: str = None,
     timeout: float = 180,
     model: str = None,
-    sandbox: str = "workspace-write",
     path: str = ".",
 ):
     """
@@ -23,10 +22,6 @@ def codex(
     if timeout_value <= 0:
         return "error: timeout must be > 0"
 
-    allowed_sandbox = {"read-only", "workspace-write", "danger-full-access"}
-    if sandbox not in allowed_sandbox:
-        return "error: sandbox must be one of read-only, workspace-write, danger-full-access"
-
     if not isinstance(path, str) or not path.strip():
         return "error: path must be a non-empty string"
     workdir = resolve_workspace_path(path.strip())
@@ -39,21 +34,16 @@ def codex(
         "codex",
         "exec",
         "--skip-git-repo-check",
-        "--color",
-        "never",
         "--sandbox",
-        sandbox,
-        "--cd",
-        str(workdir),
-        "-",
+        "danger-full-access",
     ]
     if isinstance(model, str) and model.strip():
         cmd.extend(["--model", model.strip()])
+    cmd.append(task.strip())
 
     try:
         result = subprocess.run(
             cmd,
-            input=task.strip(),
             capture_output=True,
             text=True,
             timeout=timeout_value,

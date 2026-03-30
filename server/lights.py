@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import math
-import board
 from dataclasses import dataclass, field
-import neopixel_spi as neopixel
 import time
 from typing import Any
+
+try:
+    import board
+except Exception:
+    board = None
+
+try:
+    import neopixel_spi as neopixel
+except Exception:
+    neopixel = None
 
 Color = tuple[int, int, int]
 Frame = list[Color]
