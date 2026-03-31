@@ -17,6 +17,14 @@ CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
 # Cap tool args/results when embedding in plain-text assistant content for the LLM.
 _MAX_TOOL_PAYLOAD_CHARS = 8_000
 _MAX_ATTACHMENT_TEXT_CHARS = 20_000
+_MAX_MESSAGE_CONTENT_CHARS = 40_000
+_MAX_HISTORY_CONTENT_CHARS = 120_000
+
+
+def _truncate_text(text: str, max_chars: int, *, suffix: str = "... (truncated for context)") -> str:
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars]}\n{suffix}"
 
 
 def _serialize_tool_payload(payload: object) -> str:
@@ -29,9 +37,7 @@ def _serialize_tool_payload(payload: object) -> str:
             text = json.dumps(payload, indent=2, default=str)
         except TypeError:
             text = str(payload)
-    if len(text) > _MAX_TOOL_PAYLOAD_CHARS:
-        return f"{text[:_MAX_TOOL_PAYLOAD_CHARS]}\n... (truncated for context)"
-    return text
+    return _truncate_text(text, _MAX_TOOL_PAYLOAD_CHARS)
 
 
 def _assistant_events_to_openai_content(message: AssistantMessage) -> str:
@@ -65,7 +71,11 @@ def _assistant_events_to_openai_content(message: AssistantMessage) -> str:
             continue
         else:
             continue
-    return "".join(parts)
+    return _truncate_text(
+        "".join(parts),
+        _MAX_MESSAGE_CONTENT_CHARS,
+        suffix="... (assistant transcript truncated for context)",
+    )
 
 
 def _resolve_attachment_path(attachment: MessageAttachment) -> Path:
@@ -92,8 +102,7 @@ def _read_attachment_preview(path: Path, attachment: MessageAttachment) -> str:
     except OSError as exc:
         return f"[Attached file: {attachment.name}]\nUnable to read attachment: {exc}"
 
-    if len(text) > _MAX_ATTACHMENT_TEXT_CHARS:
-        text = f"{text[:_MAX_ATTACHMENT_TEXT_CHARS]}\n... (truncated for context)"
+    text = _truncate_text(text, _MAX_ATTACHMENT_TEXT_CHARS)
 
     return f"[Attached file: {attachment.name}]\n{text}"
 
@@ -185,7 +194,11 @@ def _to_model_message(message: ChatMessage) -> Message:
         content, images, files = _message_content_with_attachments(message)
         return Message(
             role="user",
-            content=content or "",
+            content=_truncate_text(
+                content or "",
+                _MAX_MESSAGE_CONTENT_CHARS,
+                suffix="... (user message truncated for context)",
+            ),
             images=images or None,
             files=files or None,
         )
@@ -199,8 +212,39 @@ def _to_model_message(message: ChatMessage) -> Message:
     raise TypeError(f"Unsupported chat message type: {type(message)!r}")
 
 
+def _truncate_message_history(messages: list[Message]) -> list[Message]:
+    kept_messages: list[Message] = []
+    total_chars = 0
+
+    for message in reversed(messages):
+        content = message.content or ""
+        content_size = len(content)
+        if kept_messages and total_chars + content_size > _MAX_HISTORY_CONTENT_CHARS:
+            break
+        kept_messages.append(message)
+        total_chars += content_size
+
+    kept_messages.reverse()
+    dropped_count = len(messages) - len(kept_messages)
+    if dropped_count <= 0:
+        return kept_messages
+
+    return [
+        Message(
+            role="assistant",
+            content=(
+                "[Earlier conversation truncated to fit the current context window. "
+                f"{dropped_count} older message(s) were omitted. "
+                "Focus on the recent messages and ask for missing details if needed.]"
+            ),
+        ),
+        *kept_messages,
+    ]
+
+
 def format_chat_messages_to_model_messages(messages: list[ChatMessage]) -> list[Message]:
-    return [_to_model_message(CHAT_MESSAGE_ADAPTER.validate_python(message)) for message in messages]
+    model_messages = [_to_model_message(CHAT_MESSAGE_ADAPTER.validate_python(message)) for message in messages]
+    return _truncate_message_history(model_messages)
 
 
 def format_from_envelope_to_messages(envelope: WSEnvelope) -> list[Message]:

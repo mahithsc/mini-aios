@@ -1,13 +1,11 @@
 import json
 import os
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
-from .prompt_loader import load_prompt
-from .tools.codex import codex
-from .tools.cron import cron
-from .tools.subagent import subagent
-from .workspace import resolve_workspace_path
+from agno.agent import Agent
+from agno.models.openai import OpenAIChat
+from dotenv import load_dotenv
+
+from .agent_prompt import build_agent_prompt
 from .tools import (
     bash,
     edit,
@@ -27,23 +25,12 @@ from .tools.codex import codex
 from .tools.cron import cron
 from .tools.notify import notify
 from .tools.subagent import subagent
-from agno.agent import Agent
-from agno.models.anthropic import Claude
-from agno.models.openai import OpenAIChat
-from dotenv import load_dotenv
+from .workspace import resolve_workspace_path
 
 load_dotenv()
 
 SKILLS_INDEX_PATH = str(resolve_workspace_path("skills/skills_index.json"))
 DEFAULT_CRON_TIMEZONE = os.getenv("AIOS_DEFAULT_TIMEZONE", "America/New_York")
-SUBAGENT_TOOLS = """
-"subagent": (
-    "Delegate one focused task to a synchronous subagent. "
-    "For parallel work, call this tool multiple times.",
-    {"task": "string", "timeout": "number?"},
-    subagent,
-),
-"""
 
 
 BASE_TOOLS = [
@@ -67,41 +54,28 @@ BASE_TOOLS = [
 MAIN_TOOLS = [*BASE_TOOLS, subagent]
 
 
-def _build_prompt(include_subagent_tool: bool = True):
-    prompt = load_prompt("agent.md").replace(
-        "$subagent_tools",
-        SUBAGENT_TOOLS if include_subagent_tool else "",
-    )
-
-    scheduler_now = datetime.now(ZoneInfo(DEFAULT_CRON_TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S %Z")
-    utc_now = datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M:%S %Z")
-    prompt += (
-        f"\nCurrent scheduler time ({DEFAULT_CRON_TIMEZONE}): {scheduler_now}\n"
-        f"Current UTC time: {utc_now}\n"
-        f"Default cron timezone: {DEFAULT_CRON_TIMEZONE}\n"
-    )
+def _load_skills():
     try:
         with open(SKILLS_INDEX_PATH) as f:
-            skills = json.load(f)
+            return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        skills = []
+        return []
 
-    if skills:
-        prompt += "\n<skills>\n"
-        prompt += "You have learned the following skills from past experience. "
-        prompt += "Read the skill file before using it.\n\n"
-        for skill in skills:
-            prompt += f'- {skill["title"]}: {skill["summary"]} (file: {skill["file"]})\n'
-        prompt += "</skills>\n"
 
-    return prompt
+def _build_prompt(include_subagent_tool: bool = True):
+    return build_agent_prompt(
+        include_subagent_tool=include_subagent_tool,
+        default_cron_timezone=DEFAULT_CRON_TIMEZONE,
+        workspace_dir=str(resolve_workspace_path(".")),
+        skills=_load_skills(),
+    )
 
 
 def _create_agent_with_tools(tools, include_subagent_tool: bool):
     return Agent(
         system_message=_build_prompt(include_subagent_tool=include_subagent_tool),
         tools=tools,
-        model=OpenAIChat(id="gpt-5.2", reasoning_effort="medium"),
+        model=OpenAIChat(id="gpt-5.4"),
     )
 
 def create_main_agent():
