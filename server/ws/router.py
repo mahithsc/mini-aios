@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from aios_core.crons import cron_manager
 from aios_core.sessions import list_chat_history, load_chat_session, save_chat_session, update_chat_status
 from server.notifications.runtime import get_notification_service
 from server.execution.runtime import get_runs_service
+from server.types.cron import CronUpcomingListResponse
 from server.types.chat import Chat, ChatMessage, UserMessage
 from server.types.notification import NotificationDismissRequest
 from server.types.run import RunCreateRequest
@@ -83,6 +85,13 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
         yield WSEnvelope(
             type="notification.list",
             data=notifications.model_dump(mode="json"),
+        )
+        return
+
+    if envelope.type == "cron.upcoming.list":
+        yield WSEnvelope(
+            type="cron.upcoming.list",
+            data=CronUpcomingListResponse(crons=cron_manager.get_upcoming_crons()).model_dump(mode="json"),
         )
         return
 

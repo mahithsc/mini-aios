@@ -329,6 +329,69 @@ class CronManager:
             lines.append(f"- [{cid[:8]}] {name}: {description}\n  {timing}  |  last run: {last_run or 'never'}")
         return "\n".join(lines)
 
+    def get_upcoming_crons(self) -> list[dict[str, object]]:
+        """Return active crons sorted by nearest upcoming run time."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, name, description, schedule, schedule_timezone, run_at_utc, status, last_run_at "
+                "FROM crons WHERE status = 'active'"
+            ).fetchall()
+
+        now_utc = datetime.now(timezone.utc)
+        items: list[dict[str, object]] = []
+
+        for cron_id, name, description, schedule, schedule_timezone, run_at_utc, status, last_run_at in rows:
+            try:
+                next_run = self._get_next_run_time(
+                    schedule=schedule,
+                    schedule_timezone=schedule_timezone,
+                    run_at_utc=run_at_utc,
+                    now_utc=now_utc,
+                )
+            except ValueError as exc:
+                log.error("Skipping invalid cron %s (%s) in upcoming list: %s", cron_id[:8], name, exc)
+                continue
+
+            if next_run is None:
+                continue
+
+            items.append(
+                {
+                    "id": cron_id,
+                    "name": name,
+                    "description": description,
+                    "schedule": schedule or None,
+                    "scheduleTimezone": schedule_timezone,
+                    "runAtUtc": run_at_utc,
+                    "nextRunAt": int(next_run.astimezone(timezone.utc).timestamp() * 1000),
+                    "lastRunAt": last_run_at,
+                    "status": status,
+                }
+            )
+
+        items.sort(key=lambda item: int(item["nextRunAt"]))
+        return items
+
+    def _get_next_run_time(
+        self,
+        *,
+        schedule: str,
+        schedule_timezone: str | None,
+        run_at_utc: str | None,
+        now_utc: datetime,
+    ) -> datetime | None:
+        if run_at_utc:
+            next_run = self._parse_run_at_utc(run_at_utc)
+            return next_run if next_run > now_utc else None
+
+        trigger, _ = self._build_trigger(schedule, schedule_timezone, None)
+        next_run = trigger.get_next_fire_time(previous_fire_time=None, now=now_utc)
+        if next_run is None:
+            return None
+        if next_run.tzinfo is None:
+            return next_run.replace(tzinfo=timezone.utc)
+        return next_run
+
     def _run_cron(self, cron_id: str, instructions: str, one_time: bool = False):
         """Spawn an agent and run the cron instructions. Called by the scheduler."""
         started = datetime.now(timezone.utc).isoformat()
