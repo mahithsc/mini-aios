@@ -9,7 +9,7 @@ from server.execution.runtime import get_runs_service
 from server.types.cron import CronUpcomingListResponse
 from server.types.chat import Chat, ChatMessage, UserMessage
 from server.types.notification import NotificationDismissRequest
-from server.types.run import RunCreateRequest
+from server.types.run import RunCreateRequest, RunStopRequest
 from server.types.ws import WSEnvelope
 
 
@@ -105,6 +105,18 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
             else NotificationDismissRequest.model_validate(envelope.data)
         )
         get_notification_service().dismiss_notification(dismiss_request.id)
+        return
+
+    if envelope.type == "run.stop":
+        if envelope.data is None:
+            return
+
+        stop_request = (
+            envelope.data
+            if isinstance(envelope.data, RunStopRequest)
+            else RunStopRequest.model_validate(envelope.data)
+        )
+        await get_runs_service().stop_run(stop_request.runId)
         return
 
     if envelope.type in {"chat", "chat.submit"}:

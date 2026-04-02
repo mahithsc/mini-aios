@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from .chat import Chat, ChatMetadata
 from .cron import CronUpcomingListResponse
 from .notification import Notification, NotificationDismissRequest, NotificationListResponse
-from .run import ProcessSnapshotListRequest, Run, RunEvent, RunResumeRequest, RunSnapshot
+from .run import ProcessSnapshotListRequest, Run, RunEvent, RunResumeRequest, RunSnapshot, RunStopRequest
 
 WSEnvelopeTypes = Literal[
     "chat",
@@ -19,6 +19,7 @@ WSEnvelopeTypes = Literal[
     "notification.dismiss",
     "run.accepted",
     "run.event",
+    "run.stop",
     "process.snapshot.list",
     "run.resume",
 ]
@@ -72,6 +73,11 @@ class RunAcceptedWSEnvelope(WSEnvelope):
 class RunEventWSEnvelope(WSEnvelope):
     type: Literal["run.event"] = "run.event"
     data: RunEvent
+
+
+class RunStopWSEnvelope(WSEnvelope):
+    type: Literal["run.stop"] = "run.stop"
+    data: RunStopRequest
 
 
 class ProcessSnapshotListWSEnvelope(WSEnvelope):

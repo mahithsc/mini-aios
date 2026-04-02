@@ -17,7 +17,7 @@ from .initialize import (
 from server.types.chat import AssistantMessage, ChatMessage, ChatMetadata, LLMEvent, UserMessage
 
 CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
-VALID_CHAT_STATUSES = {"idle", "streaming", "error"}
+VALID_CHAT_STATUSES = {"idle", "streaming", "error", "cancelled"}
 
 
 def _create_session_filename() -> str:

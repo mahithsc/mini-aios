@@ -15,19 +15,25 @@ RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
 SKILLS_DIR = "skills"
 SESSION_DIR = "session"
 RUNS_DIR = "runs"
+APPS_DIR = "apps"
+WORKSPACE_DIR = ensure_workspace_dir()
+SKILLS_DIR = str(WORKSPACE_DIR / SKILLS_DIR)
+SESSION_DIR = str(WORKSPACE_DIR / SESSION_DIR)
+RUNS_DIR = str(WORKSPACE_DIR / RUNS_DIR)
+APPS_DIR = str(WORKSPACE_DIR / APPS_DIR)
 RUNS_METADATA_DIR = f"{RUNS_DIR}/metadata"
 RUNS_SNAPSHOTS_DIR = f"{RUNS_DIR}/snapshots"
 RUNS_EVENTS_DIR = f"{RUNS_DIR}/events"
 SESSION_MANIFEST_PATH = f"{SESSION_DIR}/session_manifest.json"
 SKILLS_INDEX_PATH = f"{SKILLS_DIR}/skills_index.json"
-
-WORKSPACE_DIR = ensure_workspace_dir()
+APPS_INDEX_PATH = f"{APPS_DIR}/apps.json"
 _RUNTIME_STARTED = False
 
 
 def initialize_files():
     os.makedirs(SKILLS_DIR, exist_ok=True)
     os.makedirs(SESSION_DIR, exist_ok=True)
+    os.makedirs(APPS_DIR, exist_ok=True)
     os.makedirs(RUNS_METADATA_DIR, exist_ok=True)
     os.makedirs(RUNS_SNAPSHOTS_DIR, exist_ok=True)
     os.makedirs(RUNS_EVENTS_DIR, exist_ok=True)
@@ -36,6 +42,7 @@ def initialize_files():
     files_to_create = {
         SESSION_MANIFEST_PATH: [],
         SKILLS_INDEX_PATH: [],
+        APPS_INDEX_PATH: {"version": 1, "apps": []},
     }
 
     for path, default_content in files_to_create.items():

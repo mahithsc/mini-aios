@@ -259,6 +259,14 @@ def _run_event_to_chat_event(event: RunEvent) -> dict[str, object] | None:
             "error": error if isinstance(error, str) else "Run failed.",
         }
 
+    if event.event.type == "cancelled":
+        reason = data.get("reason")
+        return {
+            **payload,
+            "type": "stream_cancelled",
+            "reason": reason if isinstance(reason, str) else "Run stopped by user.",
+        }
+
     if event.event.type == "completed":
         return {
             **payload,
@@ -325,6 +333,8 @@ def _assistant_status_for_event(event: LLMEvent) -> MessageStatus:
     event_type = event.type
     if event_type == "stream_error":
         return "error"
+    if event_type == "stream_cancelled":
+        return "cancelled"
     if event_type == "stream_end":
         return "complete"
     return "streaming"
@@ -333,6 +343,8 @@ def _assistant_status_for_event(event: LLMEvent) -> MessageStatus:
 def _chat_status_for_event(event: LLMEvent) -> str:
     if event.type == "stream_error":
         return "error"
+    if event.type == "stream_cancelled":
+        return "cancelled"
     if event.type == "stream_end":
         return "idle"
     return "streaming"

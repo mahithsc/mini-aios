@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 from agno.agent import Agent
 from agno.models.openai import OpenAIChat
@@ -21,8 +22,10 @@ from .tools import (
     write,
 )
 from .tools.canvas import show_canvas
+from .tools.app import app
 from .tools.codex import codex
 from .tools.cron import cron
+from .tools.fetch import fetch
 from .tools.notify import notify
 from .tools.subagent import subagent
 from .workspace import resolve_workspace_path
@@ -47,9 +50,11 @@ BASE_TOOLS = [
     process_kill,
     codex,
     cron,
+    app,
     show_canvas,
     notify,
     tavily_search,
+    fetch,
 ]
 MAIN_TOOLS = [*BASE_TOOLS, subagent]
 
@@ -57,9 +62,56 @@ MAIN_TOOLS = [*BASE_TOOLS, subagent]
 def _load_skills():
     try:
         with open(SKILLS_INDEX_PATH) as f:
-            return json.load(f)
+            raw_skills = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return []
+
+    if isinstance(raw_skills, dict):
+        raw_skills = raw_skills.get("skills", [])
+
+    if not isinstance(raw_skills, list):
+        return []
+
+    skills = []
+    for entry in raw_skills:
+        if isinstance(entry, str):
+            name = entry.strip()
+            if not name:
+                continue
+            skills.append(
+                {
+                    "name": name,
+                    "title": name,
+                    "file": f"skills/{name}.md",
+                }
+            )
+            continue
+
+        if not isinstance(entry, dict):
+            continue
+
+        file_path = str(entry.get("file") or entry.get("path") or "").strip()
+        name = str(
+            entry.get("name")
+            or entry.get("id")
+            or entry.get("title")
+            or Path(file_path).stem
+        ).strip()
+        if not name:
+            continue
+
+        skills.append(
+            {
+                "name": name,
+                "title": str(entry.get("title") or name).strip() or name,
+                "summary": str(
+                    entry.get("summary") or entry.get("description") or ""
+                ).strip(),
+                "file": file_path or f"skills/{name}.md",
+            }
+        )
+
+    return skills
 
 
 def _build_prompt(include_subagent_tool: bool = True):

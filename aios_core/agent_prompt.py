@@ -83,6 +83,16 @@ _BASE_TOOLS_BLOCK = """
      "cron_id": "string? (first 8 chars suffice)"},
     cron,
 ),
+"app": (
+    "Manage workspace apps (actions: create, list, get, activate, pause, state_get)",
+    {"action": "string", "app_id": "string?", "slug": "string?", "name": "string?",
+     "description": "string?", "entrypoint_content": "string?",
+     "run_on_startup": "boolean?",
+     "app_type": "string? (static|server, default static)",
+     "port": "number? (port for server apps)",
+     "start_command": "string? (command to start server apps, e.g. 'npm run dev')"},
+    app,
+),
 "notify": (
     "Create a user notification shown in the app inbox/toasts.",
     {"title": "string", "body": "string", "level": "string? (info|success|warning|error)",
@@ -97,6 +107,11 @@ _BASE_TOOLS_BLOCK = """
      "include_domains": "array?", "exclude_domains": "array?", "time_range": "string?",
      "timeout": "number?"},
     tavily_search,
+),
+"fetch": (
+    "Fetch a web page by URL and return its contents as readable text. HTML is converted to plain text automatically.",
+    {"url": "string", "timeout": "number?"},
+    fetch,
 ),
 """.strip()
 
@@ -194,6 +209,34 @@ def build_agent_prompt(
             """
             Notifications are useful for longer-running tasks such as research or longer coding work.
             When a long-running task completes, use `notify` so the user gets an update in the desktop app.
+            """,
+        ),
+        _section(
+            "apps",
+            f"""
+            You can build reusable applications for the user using the `app` tool and the workspace.
+
+            **Creating an app:**
+            1. Call `app(action="create", name="...", description="...", app_type="static"|"server")` to register the app and create its directory.
+            2. The app directory is created at `{workspace_dir}/apps/<slug>/src/`. Write your code files there using the `write` tool.
+
+            **Static apps** (HTML/CSS/JS):
+            - Write an `index.html` (and any CSS/JS) into `{workspace_dir}/apps/<slug>/src/`.
+            - These are served automatically at `http://localhost:8765/apps/<slug>/src/`.
+            - After creating files, tell the user the URL so they can open it.
+
+            **Server apps** (Next.js, Flask, etc.):
+            - Scaffold the project in `{workspace_dir}/apps/<slug>/`.
+            - When creating, set `start_command` (e.g. "npm run dev") and `port` (e.g. 3000).
+            - Use `process_spawn` + `process_send` to install dependencies and start the dev server.
+            - The app will be available at `http://localhost:<port>`.
+
+            **Managing apps:**
+            - `app(action="list")` — list all apps
+            - `app(action="get", slug="...")` — get app details
+            - `app(action="activate", slug="...")` / `app(action="pause", slug="...")` — toggle status
+
+            Always prefer extending an existing app over creating a duplicate. Check `app(action="list")` first.
             """,
         ),
         _section(

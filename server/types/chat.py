@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field
 
 UnixMs = int
 
-ChatStatus = Literal["idle", "streaming", "error"]
-MessageStatus = Literal["pending", "streaming", "complete", "error"]
+ChatStatus = Literal["idle", "streaming", "error", "cancelled"]
+MessageStatus = Literal["pending", "streaming", "complete", "error", "cancelled"]
 AttachmentKind = Literal["image", "file", "audio"]
 
 
@@ -80,6 +80,11 @@ class StreamErrorEvent(BaseLLMEvent):
     error: str
 
 
+class StreamCancelledEvent(BaseLLMEvent):
+    type: Literal["stream_cancelled"] = "stream_cancelled"
+    reason: str
+
+
 LLMEvent = Annotated[
     StreamStartEvent
     | TokenEvent
@@ -87,7 +92,8 @@ LLMEvent = Annotated[
     | ToolCallEndEvent
     | ToolCallErrorEvent
     | StreamEndEvent
-    | StreamErrorEvent,
+    | StreamErrorEvent
+    | StreamCancelledEvent,
     Field(discriminator="type"),
 ]
 

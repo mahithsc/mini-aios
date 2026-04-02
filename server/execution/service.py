@@ -20,6 +20,8 @@ class RunExecutor(Protocol):
 @dataclass(slots=True)
 class ActiveRun:
     run: Run
+    execution_task: asyncio.Task[None] | None = None
+    cancel_requested: bool = False
 
 
 class RunsService:
@@ -133,6 +135,48 @@ class RunsService:
         self._sync_active_run(snapshot)
         return snapshot
 
+    def mark_cancelled(self, run_id: str, reason: str | None = None) -> RunSnapshot:
+        existing_snapshot = self._store.get_snapshot(run_id)
+        snapshot = self._store.save_snapshot(
+            run_id,
+            status="cancelled",
+            last_sequence=self._get_last_sequence(run_id),
+            preview=reason or (existing_snapshot.preview if existing_snapshot is not None else None),
+            active_step=None,
+        )
+        self._sync_active_run(snapshot)
+        return snapshot
+
+    async def stop_run(self, run_id: str) -> bool:
+        async with self._lock:
+            active = self._active_runs.get(run_id)
+            if active is None:
+                return False
+
+            if active.cancel_requested:
+                return True
+
+            active.cancel_requested = True
+            execution_task = active.execution_task
+
+        if execution_task is None:
+            await self.emit_event(
+                run_id,
+                build_run_event(
+                    run_id=run_id,
+                    event_type="cancelled",
+                    chat_id=active.run.chatId,
+                    data={"reason": "Run stopped by user."},
+                ),
+            )
+            return True
+
+        if execution_task.done():
+            return False
+
+        execution_task.cancel()
+        return True
+
     async def _worker_loop(self, _: int) -> None:
         while True:
             run_id = await self._queue.get()
@@ -146,6 +190,9 @@ class RunsService:
                     self.mark_error(run_id, error=f"No runner registered for run kind '{active.run.kind}'.")
                     continue
 
+                if active.cancel_requested:
+                    continue
+
                 snapshot = self._store.save_snapshot(
                     run_id,
                     status="running",
@@ -154,7 +201,30 @@ class RunsService:
                 )
                 self._sync_active_run(snapshot)
                 try:
-                    await runner.execute(active.run, self)
+                    if active.cancel_requested:
+                        continue
+
+                    execution_task = asyncio.create_task(
+                        runner.execute(active.run, self),
+                        name=f"run-execute-{run_id}",
+                    )
+                    active.execution_task = execution_task
+                    await execution_task
+                except asyncio.CancelledError:
+                    if active.cancel_requested:
+                        await self.emit_event(
+                            run_id,
+                            build_run_event(
+                                run_id=run_id,
+                                event_type="cancelled",
+                                chat_id=active.run.chatId,
+                                data={"reason": "Run stopped by user."},
+                            ),
+                        )
+                        continue
+                    if active.execution_task is not None:
+                        active.execution_task.cancel()
+                    raise
                 except Exception as exc:
                     await self.emit_event(
                         run_id,
@@ -165,6 +235,9 @@ class RunsService:
                             data={"error": str(exc)},
                         ),
                     )
+                finally:
+                    if active.execution_task is not None and active.execution_task.done():
+                        active.execution_task = None
             finally:
                 self._queue.task_done()
 
@@ -173,7 +246,7 @@ class RunsService:
         if active is None:
             return
 
-        if snapshot.status in {"completed", "error"}:
+        if snapshot.status in {"completed", "error", "cancelled"}:
             self._active_runs.pop(snapshot.runId, None)
             return
 
@@ -190,6 +263,8 @@ class RunsService:
             return "completed"
         if event_type == "error":
             return "error"
+        if event_type == "cancelled":
+            return "cancelled"
         return "running"
 
     def _derive_preview(self, event: RunEvent) -> str | None:
@@ -213,7 +288,7 @@ class RunsService:
         tool_name = data.get("toolName")
         if event.event.type == "tool_call_start" and isinstance(tool_name, str) and tool_name:
             return tool_name
-        if event.event.type in {"completed", "error"}:
+        if event.event.type in {"completed", "error", "cancelled"}:
             return None
         return event.event.type
 
