@@ -21,8 +21,8 @@ _BASE_TOOLS_BLOCK = """
     edit,
 ),
 "show_canvas": (
-    "Prepare a canvas artifact for the current chat. Use for images, videos, and files that should appear in the chat's canvas.",
-    {"kind": "string (image|video|file)", "title": "string?", "url": "string?",
+    "Prepare a canvas artifact for the current chat. Use for images, videos, files, and HTML previews that should appear in the chat's canvas.",
+    {"kind": "string (image|video|file|html)", "title": "string?", "url": "string?",
      "file_path": "string?", "name": "string?", "mime_type": "string?",
      "thumbnail_url": "string?", "text_preview": "string?", "size_bytes": "number?"},
     show_canvas,
@@ -152,6 +152,10 @@ def build_agent_prompt(
     include_subagent_tool: bool,
     default_cron_timezone: str,
     workspace_dir: str,
+    current_chat_id: str | None = None,
+    current_chat_files_dir: str | None = None,
+    current_chat_artifacts_dir: str | None = None,
+    current_chat_artifact_url_template: str | None = None,
     skills: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     scheduler_now = datetime.now(ZoneInfo(default_cron_timezone)).strftime(
@@ -202,6 +206,7 @@ def build_agent_prompt(
             """
             When the user asks to show something in the canvas, display something in the canvas, or put files, images, or videos in the canvas, call `show_canvas` instead of only describing the result in plain text.
             Prefer `show_canvas` whenever the user explicitly mentions the canvas.
+            For generated HTML previews, use `show_canvas(kind="html", ...)` with a served URL and the workspace path to the generated `index.html`.
             """,
         ),
         _section(
@@ -256,6 +261,42 @@ def build_agent_prompt(
             """,
         ),
     ]
+
+    if current_chat_id and current_chat_files_dir and current_chat_artifacts_dir:
+        artifact_url_line = (
+            f"Served artifact URL template: {current_chat_artifact_url_template}"
+            if current_chat_artifact_url_template
+            else ""
+        )
+        sections.append(
+            _section(
+                "current_chat",
+                f"""
+                Current chat id: {current_chat_id}
+                Default chat files directory: {current_chat_files_dir}
+                Default chat artifacts directory: {current_chat_artifacts_dir}
+                {artifact_url_line}
+                """,
+            )
+        )
+        sections.append(
+            _section(
+                "generative_ui",
+                f"""
+                You may create generative UI when a visual explanation or interactive artifact would materially help the user.
+                For this MVP, generative UI must be exactly one self-contained `index.html` using Tailwind via CDN and inline JavaScript only.
+                Do not create extra asset files for generative UI.
+                Place each generated UI in a new artifact folder under `{current_chat_artifacts_dir}/<artifact-id>/index.html`.
+                After writing the file, call `show_canvas(kind="html", ...)` with:
+                - `url`: the served HTML URL for that artifact
+                - `file_path`: the workspace-relative path to the `index.html`
+                - `mime_type`: `text/html`
+                - `name`: `index.html`
+                - `text_preview`: a short 1-2 sentence explanation of what the UI shows
+                Keep a short normal text response alongside the generated UI so the artifact complements the answer.
+                """,
+            )
+        )
 
     if include_subagent_tool:
         sections.append(

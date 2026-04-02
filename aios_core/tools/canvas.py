@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse
+import os
+from pathlib import Path
+from urllib.parse import quote, urlparse
 
-SUPPORTED_CANVAS_KINDS = {"image", "video", "file"}
+from aios_core.workspace import ensure_workspace_dir
+from server.types.artifact import GenerativeUIArtifact
+
+SUPPORTED_CANVAS_KINDS = {"image", "video", "file", "html"}
+DEFAULT_SERVER_BASE_URL = os.getenv("AIOS_SERVER_BASE_URL", "http://localhost:8765").rstrip("/")
 
 
 def _is_non_empty_string(value: object) -> bool:
@@ -18,6 +24,37 @@ def _normalize_optional_string(value: object) -> str | None:
 def _is_http_url(value: str) -> bool:
     parsed = urlparse(value)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _infer_served_url_from_file_path(file_path: str | None) -> str | None:
+    if not _is_non_empty_string(file_path):
+        return None
+
+    workspace_dir = ensure_workspace_dir().resolve()
+    path = Path(file_path).expanduser()
+
+    if not path.is_absolute():
+        path = (workspace_dir / path).resolve()
+    else:
+        path = path.resolve()
+
+    try:
+        relative_path = path.relative_to(workspace_dir)
+    except ValueError:
+        return None
+
+    parts = relative_path.parts
+
+    if len(parts) >= 4 and parts[0] == "apps":
+        app_relative_path = Path(*parts[1:]).as_posix()
+        return f"{DEFAULT_SERVER_BASE_URL}/apps/{quote(app_relative_path, safe='/')}"
+
+    if len(parts) >= 4 and parts[0] == "session" and parts[2] == "artifacts":
+        chat_id = quote(parts[1], safe="")
+        artifact_relative_path = Path(*parts[3:]).as_posix()
+        return f"{DEFAULT_SERVER_BASE_URL}/session-artifacts/{chat_id}/{quote(artifact_relative_path, safe='/')}"
+
+    return None
 
 
 def show_canvas(
@@ -50,6 +87,10 @@ def show_canvas(
     normalized_thumbnail_url = _normalize_optional_string(thumbnail_url)
     normalized_text_preview = _normalize_optional_string(text_preview)
 
+    inferred_url = _infer_served_url_from_file_path(normalized_file_path)
+    if normalized_url is None and inferred_url is not None:
+        normalized_url = inferred_url
+
     if not normalized_url and not normalized_file_path:
         return "error: either url or file_path is required"
     if normalized_url and not _is_http_url(normalized_url):
@@ -63,6 +104,12 @@ def show_canvas(
         if size_bytes < 0:
             return "error: size_bytes must be >= 0"
 
+    if normalized_kind == "html":
+        if not normalized_url:
+            return "error: html artifacts require a served http(s) url"
+        if normalized_mime_type is None:
+            normalized_mime_type = "text/html"
+
     artifact = {
         "version": 1,
         "kind": normalized_kind,
@@ -75,6 +122,16 @@ def show_canvas(
         "textPreview": normalized_text_preview,
         "sizeBytes": size_bytes,
     }
+
+    if normalized_kind == "html" and normalized_file_path is not None:
+        artifact["htmlArtifact"] = GenerativeUIArtifact(
+            id=(normalized_name or normalized_title or "artifact").replace(" ", "-").lower(),
+            title=normalized_title,
+            filePath=normalized_file_path,
+            url=normalized_url or "",
+            mimeType="text/html",
+            textPreview=normalized_text_preview,
+        ).model_dump(mode="json")
 
     return {
         "ok": True,

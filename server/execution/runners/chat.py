@@ -59,7 +59,7 @@ class ChatRunner:
 
         try:
             await lights.set_mode("thinking")
-            agent = create_agent()
+            agent = create_agent(chat_id=chat_id)
             async for event in agent.arun(messages, stream=True, stream_events=True):
                 if event.event == AgentRunEvent.run_content and event.content is not None:
                     produced_output = True

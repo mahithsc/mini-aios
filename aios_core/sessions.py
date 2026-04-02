@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -20,14 +21,191 @@ CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
 VALID_CHAT_STATUSES = {"idle", "streaming", "error", "cancelled"}
 
 
-def _create_session_filename() -> str:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"chat_{timestamp}.json"
+def _sanitize_path_segment(value: str, fallback: str) -> str:
+    sanitized = "".join(
+        character if character.isalnum() or character in "._-" else "-" for character in value
+    )
+    sanitized = sanitized.strip("._-")
+    return sanitized or fallback
+
+
+def get_chat_session_relative_dir(chat_id: str) -> Path:
+    return Path("session") / _sanitize_path_segment(chat_id, "chat")
+
+
+def get_chat_uploads_relative_dir(chat_id: str) -> Path:
+    return get_chat_session_relative_dir(chat_id) / "uploads"
+
+
+def get_chat_files_relative_dir(chat_id: str) -> Path:
+    return get_chat_session_relative_dir(chat_id) / "files"
+
+
+def get_chat_artifacts_relative_dir(chat_id: str) -> Path:
+    return get_chat_session_relative_dir(chat_id) / "artifacts"
+
+
+def get_chat_artifact_relative_dir(chat_id: str, artifact_id: str) -> Path:
+    return get_chat_artifacts_relative_dir(chat_id) / _sanitize_path_segment(artifact_id, "artifact")
+
+
+def get_chat_artifact_entrypoint_relative_path(chat_id: str, artifact_id: str) -> Path:
+    return get_chat_artifact_relative_dir(chat_id, artifact_id) / "index.html"
+
+
+def _chat_session_dir(chat_id: str) -> Path:
+    return Path(SESSION_DIR) / _sanitize_path_segment(chat_id, "chat")
+
+
+def _chat_session_file(chat_id: str) -> Path:
+    return _chat_session_dir(chat_id) / "chat.json"
+
+
+def _chat_uploads_dir(chat_id: str) -> Path:
+    return _chat_session_dir(chat_id) / "uploads"
+
+
+def _chat_files_dir(chat_id: str) -> Path:
+    return _chat_session_dir(chat_id) / "files"
+
+
+def _chat_artifacts_dir(chat_id: str) -> Path:
+    return _chat_session_dir(chat_id) / "artifacts"
+
+
+def get_chat_files_dir(chat_id: str) -> Path:
+    return _chat_files_dir(chat_id)
+
+
+def get_chat_artifacts_dir(chat_id: str) -> Path:
+    return _chat_artifacts_dir(chat_id)
+
+
+def get_chat_artifact_dir(chat_id: str, artifact_id: str) -> Path:
+    return _chat_artifacts_dir(chat_id) / _sanitize_path_segment(artifact_id, "artifact")
+
+
+def get_chat_artifact_entrypoint_path(chat_id: str, artifact_id: str) -> Path:
+    return get_chat_artifact_dir(chat_id, artifact_id) / "index.html"
+
+
+def _ensure_chat_dirs(chat_id: str) -> Path:
+    session_dir = _chat_session_dir(chat_id)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    _chat_uploads_dir(chat_id).mkdir(parents=True, exist_ok=True)
+    _chat_files_dir(chat_id).mkdir(parents=True, exist_ok=True)
+    _chat_artifacts_dir(chat_id).mkdir(parents=True, exist_ok=True)
+    return session_dir
+
+
+def ensure_chat_artifact_dir(chat_id: str, artifact_id: str) -> Path:
+    _ensure_chat_dirs(chat_id)
+    artifact_dir = get_chat_artifact_dir(chat_id, artifact_id)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    return artifact_dir
 
 
 def _get_session_entry(chat_id: str) -> dict[str, Any] | None:
     manifest = load_manifest()
     return next((entry for entry in manifest if entry.get("id") == chat_id), None)
+
+
+def _session_file_from_entry(chat_id: str, session_entry: dict[str, Any]) -> Path:
+    file_name = session_entry.get("file")
+    if isinstance(file_name, str) and file_name:
+        return Path(SESSION_DIR) / file_name
+    return _chat_session_file(chat_id)
+
+
+def _update_manifest_entry(chat_id: str, updated_entry: dict[str, Any]) -> None:
+    manifest = load_manifest()
+    for entry in manifest:
+        if entry.get("id") == chat_id:
+            entry.update(updated_entry)
+            save_manifest(manifest)
+            return
+
+
+def _migrate_attachment_paths(chat_id: str, messages: list[Any]) -> bool:
+    changed = False
+    legacy_prefix = f"uploads/{_sanitize_path_segment(chat_id, 'chat')}/"
+    next_prefix = f"{get_chat_uploads_relative_dir(chat_id).as_posix()}/"
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+
+        attachments = message.get("attachments")
+        if not isinstance(attachments, list):
+            continue
+
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+
+            file_path = attachment.get("filePath")
+            if isinstance(file_path, str) and file_path.startswith(legacy_prefix):
+                attachment["filePath"] = file_path.replace(legacy_prefix, next_prefix, 1)
+                changed = True
+
+    return changed
+
+
+def _migrate_legacy_upload_dir(chat_id: str) -> None:
+    legacy_upload_dir = Path.cwd() / "uploads" / _sanitize_path_segment(chat_id, "chat")
+    target_upload_dir = _chat_uploads_dir(chat_id)
+    if not legacy_upload_dir.exists() or legacy_upload_dir == target_upload_dir:
+        return
+
+    target_upload_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    if not target_upload_dir.exists():
+        shutil.move(str(legacy_upload_dir), str(target_upload_dir))
+        return
+
+    for source in legacy_upload_dir.iterdir():
+        destination = target_upload_dir / source.name
+        if destination.exists():
+            continue
+        shutil.move(str(source), str(destination))
+
+    try:
+        legacy_upload_dir.rmdir()
+    except OSError:
+        pass
+
+
+def _load_raw_session_messages(session_path: Path) -> list[Any]:
+    messages = json.loads(session_path.read_text(encoding="utf-8"))
+    if not isinstance(messages, list):
+        return []
+    return messages
+
+
+def _migrate_session_entry(chat_id: str, session_entry: dict[str, Any], *, persist_manifest: bool) -> Path:
+    target_path = _chat_session_file(chat_id)
+    current_path = _session_file_from_entry(chat_id, session_entry)
+    _ensure_chat_dirs(chat_id)
+    _migrate_legacy_upload_dir(chat_id)
+
+    if current_path.exists():
+        raw_messages = _load_raw_session_messages(current_path)
+        attachments_changed = _migrate_attachment_paths(chat_id, raw_messages)
+        should_write_target = attachments_changed or current_path != target_path or not target_path.exists()
+
+        if should_write_target:
+            target_path.write_text(json.dumps(raw_messages, indent=2), encoding="utf-8")
+
+        if current_path != target_path and current_path.exists():
+            current_path.unlink(missing_ok=True)
+
+    relative_target_path = str(target_path.relative_to(Path(SESSION_DIR)))
+    if session_entry.get("file") != relative_target_path:
+        session_entry["file"] = relative_target_path
+        if persist_manifest:
+            _update_manifest_entry(chat_id, session_entry)
+
+    return target_path
 
 
 def _get_legacy_message_timestamp(index: int) -> int:
@@ -129,14 +307,11 @@ def load_chat_session(chat_id: str) -> list[ChatMessage]:
     if session_entry is None:
         return []
 
-    session_path = Path(SESSION_DIR) / session_entry["file"]
+    session_path = _migrate_session_entry(chat_id, dict(session_entry), persist_manifest=True)
     if not session_path.exists():
         return []
 
-    messages = json.loads(session_path.read_text(encoding="utf-8"))
-    if not isinstance(messages, list):
-        return []
-
+    messages = _load_raw_session_messages(session_path)
     return [_normalize_chat_message(message, index=index) for index, message in enumerate(messages)]
 
 
@@ -194,7 +369,7 @@ def save_chat_session(chat_id: str, messages: list[BaseModel | dict[str, Any]]) 
     if session_entry is None:
         session_entry = {
             "id": chat_id,
-            "file": _create_session_filename(),
+            "file": f"{_sanitize_path_segment(chat_id, 'chat')}/chat.json",
             "status": "idle",
             "addedAt": _create_manifest_timestamp(),
         }
@@ -204,11 +379,15 @@ def save_chat_session(chat_id: str, messages: list[BaseModel | dict[str, Any]]) 
             session_entry["status"] = "idle"
         session_entry.setdefault("addedAt", _create_manifest_timestamp())
 
-    session_path = Path(SESSION_DIR) / session_entry["file"]
+    _ensure_chat_dirs(chat_id)
+    _migrate_legacy_upload_dir(chat_id)
+    session_path = _chat_session_file(chat_id)
     serializable_messages = [
         _normalize_chat_message(message, index=index).model_dump(mode="json")
         for index, message in enumerate(messages)
     ]
+    _migrate_attachment_paths(chat_id, serializable_messages)
+    session_entry["file"] = str(session_path.relative_to(Path(SESSION_DIR)))
     session_path.write_text(json.dumps(serializable_messages, indent=2), encoding="utf-8")
     save_manifest(manifest)
 

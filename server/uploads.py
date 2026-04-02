@@ -8,10 +8,10 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile, status
 
+from aios_core.sessions import get_chat_uploads_relative_dir
 from aios_core.workspace import resolve_workspace_path
 from server.types.chat import MessageAttachment
 
-UPLOAD_ROOT = "uploads"
 MAX_ATTACHMENTS_PER_REQUEST = 10
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_AUDIO_ATTACHMENT_BYTES = 100 * 1024 * 1024
@@ -94,7 +94,7 @@ def _sanitize_filename(filename: str | None) -> str:
 
 
 def _get_relative_upload_dir(chat_id: str) -> Path:
-    return Path(UPLOAD_ROOT) / _sanitize_path_segment(chat_id, "chat")
+    return get_chat_uploads_relative_dir(chat_id)
 
 
 def _get_unique_relative_path(chat_id: str, filename: str) -> Path:
