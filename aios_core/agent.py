@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 
 from agno.agent import Agent
 from agno.models.openai import OpenAIChat
@@ -7,6 +6,11 @@ from dotenv import load_dotenv
 
 from .agent_prompt import build_agent_prompt
 from .skills import load_skills
+from .sessions import (
+    get_chat_artifacts_dir,
+    get_chat_files_dir,
+    get_chat_session_relative_dir,
+)
 from .tools import (
     bash,
     edit,
@@ -34,18 +38,6 @@ load_dotenv()
 
 DEFAULT_CRON_TIMEZONE = os.getenv("AIOS_DEFAULT_TIMEZONE", "America/New_York")
 DEFAULT_SERVER_BASE_URL = os.getenv("AIOS_SERVER_BASE_URL", "http://localhost:8765")
-
-
-def _sanitize_path_segment(value: str, fallback: str) -> str:
-    sanitized = "".join(
-        character if character.isalnum() or character in "._-" else "-" for character in value
-    )
-    sanitized = sanitized.strip("._-")
-    return sanitized or fallback
-
-
-def _chat_session_relative_dir(chat_id: str) -> Path:
-    return Path("session") / _sanitize_path_segment(chat_id, "chat")
 
 
 BASE_TOOLS = [
@@ -76,10 +68,9 @@ def _build_prompt(include_subagent_tool: bool = True, chat_id: str | None = None
     current_chat_artifacts_dir = None
     current_chat_artifact_url_template = None
     if chat_id:
-        chat_session_dir = resolve_workspace_path(_chat_session_relative_dir(chat_id))
-        current_chat_files_dir = str(chat_session_dir / "files")
-        current_chat_artifacts_dir = str(chat_session_dir / "artifacts")
-        sanitized_chat_id = _chat_session_relative_dir(chat_id).name
+        current_chat_files_dir = str(get_chat_files_dir(chat_id))
+        current_chat_artifacts_dir = str(get_chat_artifacts_dir(chat_id))
+        sanitized_chat_id = get_chat_session_relative_dir(chat_id).name
         current_chat_artifact_url_template = (
             f"{DEFAULT_SERVER_BASE_URL}/session-artifacts/"
             f"{sanitized_chat_id}/<artifact-id>/index.html"

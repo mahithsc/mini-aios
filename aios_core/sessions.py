@@ -9,16 +9,13 @@ from typing import Any
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from .initialize import (
-    SESSION_DIR,
-    _create_manifest_timestamp,
-    load_manifest,
-    save_manifest,
-)
+from .workspace import resolve_workspace_path
 from server.types.chat import AssistantMessage, ChatMessage, ChatMetadata, LLMEvent, UserMessage
 
 CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
 VALID_CHAT_STATUSES = {"idle", "streaming", "error", "cancelled"}
+SESSION_DIR = resolve_workspace_path("session")
+SESSION_MANIFEST_PATH = SESSION_DIR / "session_manifest.json"
 
 
 def _sanitize_path_segment(value: str, fallback: str) -> str:
@@ -29,73 +26,183 @@ def _sanitize_path_segment(value: str, fallback: str) -> str:
     return sanitized or fallback
 
 
+def _create_manifest_timestamp() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _infer_manifest_added_at(entry: dict[str, Any]) -> str:
+    file_name = entry.get("file")
+    if isinstance(file_name, str):
+        try:
+            return datetime.strptime(file_name, "chat_%Y%m%d_%H%M%S.json").isoformat(
+                timespec="seconds"
+            )
+        except ValueError:
+            pass
+
+    return _create_manifest_timestamp()
+
+
+def load_manifest() -> list[dict[str, Any]]:
+    if not SESSION_MANIFEST_PATH.exists():
+        return []
+
+    with SESSION_MANIFEST_PATH.open(encoding="utf-8") as handle:
+        manifest = json.load(handle)
+
+    if not isinstance(manifest, list):
+        return []
+
+    normalized_manifest = []
+    manifest_changed = False
+
+    for entry in manifest:
+        if not isinstance(entry, dict):
+            continue
+
+        normalized_entry = dict(entry)
+        added_at = normalized_entry.get("addedAt")
+        if not isinstance(added_at, str) or not added_at:
+            normalized_entry["addedAt"] = _infer_manifest_added_at(normalized_entry)
+            manifest_changed = True
+
+        normalized_manifest.append(normalized_entry)
+
+    if manifest_changed:
+        save_manifest(normalized_manifest)
+
+    return normalized_manifest
+
+
+def save_manifest(manifest: list[dict[str, Any]]) -> None:
+    SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    with SESSION_MANIFEST_PATH.open("w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, indent=2)
+
+
+def get_sandbox_relative_dir(owner_id: str) -> Path:
+    return Path("session") / _sanitize_path_segment(owner_id, "chat")
+
+
+def get_sandbox_uploads_relative_dir(owner_id: str) -> Path:
+    return get_sandbox_relative_dir(owner_id) / "uploads"
+
+
+def get_sandbox_files_relative_dir(owner_id: str) -> Path:
+    return get_sandbox_relative_dir(owner_id) / "files"
+
+
+def get_sandbox_artifacts_relative_dir(owner_id: str) -> Path:
+    return get_sandbox_relative_dir(owner_id) / "artifacts"
+
+
+def get_sandbox_artifact_relative_dir(owner_id: str, artifact_id: str) -> Path:
+    return get_sandbox_artifacts_relative_dir(owner_id) / _sanitize_path_segment(artifact_id, "artifact")
+
+
+def get_sandbox_transcript_relative_path(owner_id: str) -> Path:
+    return get_sandbox_relative_dir(owner_id) / "chat.json"
+
+
+def get_sandbox_artifact_entrypoint_relative_path(owner_id: str, artifact_id: str) -> Path:
+    return get_sandbox_artifact_relative_dir(owner_id, artifact_id) / "index.html"
+
+
 def get_chat_session_relative_dir(chat_id: str) -> Path:
-    return Path("session") / _sanitize_path_segment(chat_id, "chat")
+    return get_sandbox_relative_dir(chat_id)
 
 
 def get_chat_uploads_relative_dir(chat_id: str) -> Path:
-    return get_chat_session_relative_dir(chat_id) / "uploads"
+    return get_sandbox_uploads_relative_dir(chat_id)
 
 
 def get_chat_files_relative_dir(chat_id: str) -> Path:
-    return get_chat_session_relative_dir(chat_id) / "files"
+    return get_sandbox_files_relative_dir(chat_id)
 
 
 def get_chat_artifacts_relative_dir(chat_id: str) -> Path:
-    return get_chat_session_relative_dir(chat_id) / "artifacts"
+    return get_sandbox_artifacts_relative_dir(chat_id)
 
 
 def get_chat_artifact_relative_dir(chat_id: str, artifact_id: str) -> Path:
-    return get_chat_artifacts_relative_dir(chat_id) / _sanitize_path_segment(artifact_id, "artifact")
+    return get_sandbox_artifact_relative_dir(chat_id, artifact_id)
 
 
 def get_chat_artifact_entrypoint_relative_path(chat_id: str, artifact_id: str) -> Path:
-    return get_chat_artifact_relative_dir(chat_id, artifact_id) / "index.html"
+    return get_sandbox_artifact_entrypoint_relative_path(chat_id, artifact_id)
 
 
-def _chat_session_dir(chat_id: str) -> Path:
-    return Path(SESSION_DIR) / _sanitize_path_segment(chat_id, "chat")
+def _sandbox_dir(owner_id: str) -> Path:
+    return Path(SESSION_DIR) / _sanitize_path_segment(owner_id, "chat")
 
 
-def _chat_session_file(chat_id: str) -> Path:
-    return _chat_session_dir(chat_id) / "chat.json"
+def _sandbox_transcript_file(owner_id: str) -> Path:
+    return _sandbox_dir(owner_id) / "chat.json"
 
 
-def _chat_uploads_dir(chat_id: str) -> Path:
-    return _chat_session_dir(chat_id) / "uploads"
+def _sandbox_uploads_dir(owner_id: str) -> Path:
+    return _sandbox_dir(owner_id) / "uploads"
 
 
-def _chat_files_dir(chat_id: str) -> Path:
-    return _chat_session_dir(chat_id) / "files"
+def _sandbox_files_dir(owner_id: str) -> Path:
+    return _sandbox_dir(owner_id) / "files"
 
 
-def _chat_artifacts_dir(chat_id: str) -> Path:
-    return _chat_session_dir(chat_id) / "artifacts"
+def _sandbox_artifacts_dir(owner_id: str) -> Path:
+    return _sandbox_dir(owner_id) / "artifacts"
+
+
+def get_sandbox_dir(owner_id: str) -> Path:
+    return _sandbox_dir(owner_id)
+
+
+def get_sandbox_transcript_path(owner_id: str) -> Path:
+    return _sandbox_transcript_file(owner_id)
+
+
+def get_sandbox_files_dir(owner_id: str) -> Path:
+    return _sandbox_files_dir(owner_id)
+
+
+def get_sandbox_artifacts_dir(owner_id: str) -> Path:
+    return _sandbox_artifacts_dir(owner_id)
+
+
+def get_sandbox_artifact_dir(owner_id: str, artifact_id: str) -> Path:
+    return _sandbox_artifacts_dir(owner_id) / _sanitize_path_segment(artifact_id, "artifact")
+
+
+def get_sandbox_artifact_entrypoint_path(owner_id: str, artifact_id: str) -> Path:
+    return get_sandbox_artifact_dir(owner_id, artifact_id) / "index.html"
 
 
 def get_chat_files_dir(chat_id: str) -> Path:
-    return _chat_files_dir(chat_id)
+    return get_sandbox_files_dir(chat_id)
 
 
 def get_chat_artifacts_dir(chat_id: str) -> Path:
-    return _chat_artifacts_dir(chat_id)
+    return get_sandbox_artifacts_dir(chat_id)
 
 
 def get_chat_artifact_dir(chat_id: str, artifact_id: str) -> Path:
-    return _chat_artifacts_dir(chat_id) / _sanitize_path_segment(artifact_id, "artifact")
+    return get_sandbox_artifact_dir(chat_id, artifact_id)
 
 
 def get_chat_artifact_entrypoint_path(chat_id: str, artifact_id: str) -> Path:
-    return get_chat_artifact_dir(chat_id, artifact_id) / "index.html"
+    return get_sandbox_artifact_entrypoint_path(chat_id, artifact_id)
+
+
+def _ensure_sandbox_dirs(owner_id: str) -> Path:
+    session_dir = _sandbox_dir(owner_id)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    _sandbox_uploads_dir(owner_id).mkdir(parents=True, exist_ok=True)
+    _sandbox_files_dir(owner_id).mkdir(parents=True, exist_ok=True)
+    _sandbox_artifacts_dir(owner_id).mkdir(parents=True, exist_ok=True)
+    return session_dir
 
 
 def _ensure_chat_dirs(chat_id: str) -> Path:
-    session_dir = _chat_session_dir(chat_id)
-    session_dir.mkdir(parents=True, exist_ok=True)
-    _chat_uploads_dir(chat_id).mkdir(parents=True, exist_ok=True)
-    _chat_files_dir(chat_id).mkdir(parents=True, exist_ok=True)
-    _chat_artifacts_dir(chat_id).mkdir(parents=True, exist_ok=True)
-    return session_dir
+    return _ensure_sandbox_dirs(chat_id)
 
 
 def ensure_chat_artifact_dir(chat_id: str, artifact_id: str) -> Path:
@@ -114,7 +221,7 @@ def _session_file_from_entry(chat_id: str, session_entry: dict[str, Any]) -> Pat
     file_name = session_entry.get("file")
     if isinstance(file_name, str) and file_name:
         return Path(SESSION_DIR) / file_name
-    return _chat_session_file(chat_id)
+    return _sandbox_transcript_file(chat_id)
 
 
 def _update_manifest_entry(chat_id: str, updated_entry: dict[str, Any]) -> None:
@@ -129,7 +236,7 @@ def _update_manifest_entry(chat_id: str, updated_entry: dict[str, Any]) -> None:
 def _migrate_attachment_paths(chat_id: str, messages: list[Any]) -> bool:
     changed = False
     legacy_prefix = f"uploads/{_sanitize_path_segment(chat_id, 'chat')}/"
-    next_prefix = f"{get_chat_uploads_relative_dir(chat_id).as_posix()}/"
+    next_prefix = f"{get_sandbox_uploads_relative_dir(chat_id).as_posix()}/"
 
     for message in messages:
         if not isinstance(message, dict):
@@ -153,7 +260,7 @@ def _migrate_attachment_paths(chat_id: str, messages: list[Any]) -> bool:
 
 def _migrate_legacy_upload_dir(chat_id: str) -> None:
     legacy_upload_dir = Path.cwd() / "uploads" / _sanitize_path_segment(chat_id, "chat")
-    target_upload_dir = _chat_uploads_dir(chat_id)
+    target_upload_dir = _sandbox_uploads_dir(chat_id)
     if not legacy_upload_dir.exists() or legacy_upload_dir == target_upload_dir:
         return
 
@@ -183,9 +290,9 @@ def _load_raw_session_messages(session_path: Path) -> list[Any]:
 
 
 def _migrate_session_entry(chat_id: str, session_entry: dict[str, Any], *, persist_manifest: bool) -> Path:
-    target_path = _chat_session_file(chat_id)
+    target_path = _sandbox_transcript_file(chat_id)
     current_path = _session_file_from_entry(chat_id, session_entry)
-    _ensure_chat_dirs(chat_id)
+    _ensure_sandbox_dirs(chat_id)
     _migrate_legacy_upload_dir(chat_id)
 
     if current_path.exists():
@@ -379,9 +486,9 @@ def save_chat_session(chat_id: str, messages: list[BaseModel | dict[str, Any]]) 
             session_entry["status"] = "idle"
         session_entry.setdefault("addedAt", _create_manifest_timestamp())
 
-    _ensure_chat_dirs(chat_id)
+    _ensure_sandbox_dirs(chat_id)
     _migrate_legacy_upload_dir(chat_id)
-    session_path = _chat_session_file(chat_id)
+    session_path = _sandbox_transcript_file(chat_id)
     serializable_messages = [
         _normalize_chat_message(message, index=index).model_dump(mode="json")
         for index, message in enumerate(messages)
