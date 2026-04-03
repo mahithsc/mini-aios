@@ -1,4 +1,3 @@
-import json
 import os
 from pathlib import Path
 
@@ -7,6 +6,7 @@ from agno.models.openai import OpenAIChat
 from dotenv import load_dotenv
 
 from .agent_prompt import build_agent_prompt
+from .skills import load_skills
 from .tools import (
     bash,
     edit,
@@ -32,7 +32,6 @@ from .workspace import resolve_workspace_path
 
 load_dotenv()
 
-SKILLS_INDEX_PATH = str(resolve_workspace_path("skills/skills_index.json"))
 DEFAULT_CRON_TIMEZONE = os.getenv("AIOS_DEFAULT_TIMEZONE", "America/New_York")
 DEFAULT_SERVER_BASE_URL = os.getenv("AIOS_SERVER_BASE_URL", "http://localhost:8765")
 
@@ -72,61 +71,6 @@ BASE_TOOLS = [
 MAIN_TOOLS = [*BASE_TOOLS, subagent]
 
 
-def _load_skills():
-    try:
-        with open(SKILLS_INDEX_PATH) as f:
-            raw_skills = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-
-    if isinstance(raw_skills, dict):
-        raw_skills = raw_skills.get("skills", [])
-
-    if not isinstance(raw_skills, list):
-        return []
-
-    skills = []
-    for entry in raw_skills:
-        if isinstance(entry, str):
-            name = entry.strip()
-            if not name:
-                continue
-            skills.append(
-                {
-                    "name": name,
-                    "title": name,
-                    "file": f"skills/{name}.md",
-                }
-            )
-            continue
-
-        if not isinstance(entry, dict):
-            continue
-
-        file_path = str(entry.get("file") or entry.get("path") or "").strip()
-        name = str(
-            entry.get("name")
-            or entry.get("id")
-            or entry.get("title")
-            or Path(file_path).stem
-        ).strip()
-        if not name:
-            continue
-
-        skills.append(
-            {
-                "name": name,
-                "title": str(entry.get("title") or name).strip() or name,
-                "summary": str(
-                    entry.get("summary") or entry.get("description") or ""
-                ).strip(),
-                "file": file_path or f"skills/{name}.md",
-            }
-        )
-
-    return skills
-
-
 def _build_prompt(include_subagent_tool: bool = True, chat_id: str | None = None):
     current_chat_files_dir = None
     current_chat_artifacts_dir = None
@@ -149,7 +93,7 @@ def _build_prompt(include_subagent_tool: bool = True, chat_id: str | None = None
         current_chat_files_dir=current_chat_files_dir,
         current_chat_artifacts_dir=current_chat_artifacts_dir,
         current_chat_artifact_url_template=current_chat_artifact_url_template,
-        skills=_load_skills(),
+        skills=load_skills(),
     )
 
 
