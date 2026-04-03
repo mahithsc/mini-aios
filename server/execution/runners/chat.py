@@ -116,6 +116,33 @@ class ChatRunner:
                             },
                         ),
                     )
+                elif event.event == AgentRunEvent.custom_event:
+                    if getattr(event, "kind", None) != "subagent_tool_event":
+                        continue
+
+                    produced_output = True
+                    tool_name = getattr(event, "tool_name", None)
+                    await runs_service.emit_event(
+                        run.id,
+                        build_run_event(
+                            run_id=run.id,
+                            event_type="subagent_tool_event",
+                            chat_id=chat_id,
+                            data={
+                                "parentToolCallId": getattr(event, "parent_tool_call_id", None),
+                                "childRunId": getattr(event, "child_run_id", None),
+                                "childEventType": getattr(event, "child_event_type", None),
+                                "toolCallId": getattr(event, "tool_call_id", None),
+                                "toolName": tool_name,
+                                "input": getattr(event, "input", None),
+                                "output": _normalize_tool_result(
+                                    tool_name if isinstance(tool_name, str) else "",
+                                    getattr(event, "output", None),
+                                ),
+                                "error": getattr(event, "error", None),
+                            },
+                        ),
+                    )
         except Exception as exc:
             await runs_service.emit_event(
                 run.id,

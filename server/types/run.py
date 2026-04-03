@@ -13,6 +13,7 @@ RunEventType = Literal[
     "token",
     "tool_call_start",
     "tool_call_end",
+    "subagent_tool_event",
     "progress",
     "completed",
     "error",

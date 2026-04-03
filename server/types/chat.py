@@ -85,6 +85,25 @@ class StreamCancelledEvent(BaseLLMEvent):
     reason: str
 
 
+class SubagentToolEvent(BaseLLMEvent):
+    type: Literal["subagent_tool_event"] = "subagent_tool_event"
+    parentToolCallId: str
+    childRunId: str
+    childEventType: Literal[
+        "stream_start",
+        "tool_call_start",
+        "tool_call_end",
+        "tool_call_error",
+        "stream_end",
+        "stream_error",
+    ]
+    toolCallId: str | None = None
+    toolName: str | None = None
+    input: object | None = None
+    output: object | None = None
+    error: str | None = None
+
+
 LLMEvent = Annotated[
     StreamStartEvent
     | TokenEvent
@@ -93,7 +112,8 @@ LLMEvent = Annotated[
     | ToolCallErrorEvent
     | StreamEndEvent
     | StreamErrorEvent
-    | StreamCancelledEvent,
+    | StreamCancelledEvent
+    | SubagentToolEvent,
     Field(discriminator="type"),
 ]
 
@@ -127,5 +147,4 @@ class OpenAIMessage(BaseModel):
 
 class OpenAIMessages(BaseModel):
     messages: list[OpenAIMessage]
-
 

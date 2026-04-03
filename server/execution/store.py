@@ -273,6 +273,42 @@ def _run_event_to_chat_event(event: RunEvent) -> dict[str, object] | None:
             "type": "stream_end",
         }
 
+    if event.event.type == "subagent_tool_event":
+        parent_tool_call_id = data.get("parentToolCallId")
+        child_run_id = data.get("childRunId")
+        child_event_type = data.get("childEventType")
+        tool_call_id = data.get("toolCallId")
+        tool_name = data.get("toolName")
+        error = data.get("error")
+
+        if (
+            not isinstance(parent_tool_call_id, str)
+            or not isinstance(child_run_id, str)
+            or child_event_type
+            not in {
+                "stream_start",
+                "tool_call_start",
+                "tool_call_end",
+                "tool_call_error",
+                "stream_end",
+                "stream_error",
+            }
+        ):
+            return None
+
+        return {
+            **payload,
+            "type": "subagent_tool_event",
+            "parentToolCallId": parent_tool_call_id,
+            "childRunId": child_run_id,
+            "childEventType": child_event_type,
+            "toolCallId": tool_call_id if isinstance(tool_call_id, str) else None,
+            "toolName": tool_name if isinstance(tool_name, str) else None,
+            "input": data.get("input"),
+            "output": data.get("output"),
+            "error": error if isinstance(error, str) else None,
+        }
+
     return None
 
 
