@@ -45,10 +45,6 @@ def _infer_served_url_from_file_path(file_path: str | None) -> str | None:
 
     parts = relative_path.parts
 
-    if len(parts) >= 4 and parts[0] == "apps":
-        app_relative_path = Path(*parts[1:]).as_posix()
-        return f"{DEFAULT_SERVER_BASE_URL}/apps/{quote(app_relative_path, safe='/')}"
-
     if len(parts) >= 4 and parts[0] == "session" and parts[2] == "artifacts":
         chat_id = quote(parts[1], safe="")
         artifact_relative_path = Path(*parts[3:]).as_posix()

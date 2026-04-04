@@ -1,9 +1,8 @@
 import subprocess
 
-from ..workspace import ensure_workspace_dir
+from ..runtime_context import default_chat_files_cwd
 
 RESET, DIM = "\033[0m", "\033[2m"
-_WORKSPACE_DIR = ensure_workspace_dir()
 
 
 def bash(cmd: str, timeout: float = 30):
@@ -15,7 +14,7 @@ def bash(cmd: str, timeout: float = 30):
             text=True,
             timeout=float(timeout),
             stdin=subprocess.DEVNULL,
-            cwd=str(_WORKSPACE_DIR),
+            cwd=str(default_chat_files_cwd()),
         )
         out = (result.stdout + result.stderr).strip()
     except subprocess.TimeoutExpired as e:

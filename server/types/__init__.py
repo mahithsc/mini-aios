@@ -1,3 +1,7 @@
+from .assistant import (
+    Assistant,
+    AssistantInitRequest,
+)
 from .chat import (
     AssistantMessage,
     AttachmentKind,
@@ -44,6 +48,8 @@ from .run import (
     RunStatus,
 )
 from .ws import (
+    AssistantInitWSEnvelope,
+    AssistantListWSEnvelope,
     ChatHistoryWSEnvelope,
     ChatSubmitWSEnvelope,
     ChatWSEnvelope,
@@ -60,6 +66,10 @@ from .ws import (
 )
 
 __all__ = [
+    "Assistant",
+    "AssistantInitRequest",
+    "AssistantInitWSEnvelope",
+    "AssistantListWSEnvelope",
     "AssistantMessage",
     "AttachmentKind",
     "BaseLLMEvent",

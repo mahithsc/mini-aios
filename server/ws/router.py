@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from aios_core.assistants import initialize_assistant, list_assistants
 from aios_core.crons import cron_manager
 from aios_core.sessions import list_chat_history, load_chat_session, save_chat_session, update_chat_status
 from server.notifications.runtime import get_notification_service
 from server.execution.runtime import get_runs_service
+from server.types.assistant import AssistantInitRequest
 from server.types.cron import CronUpcomingListResponse
 from server.types.chat import Chat, ChatMessage, UserMessage
 from server.types.notification import NotificationDismissRequest
@@ -53,6 +55,35 @@ def _conversation_messages_for_turn(chat: Chat) -> list[ChatMessage]:
 
 
 async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
+    if envelope.type == "assistant.list":
+        yield WSEnvelope(
+            type="assistant.list",
+            data=[assistant.model_dump(mode="json") for assistant in list_assistants()],
+        )
+        return
+
+    if envelope.type == "assistant.init":
+        if envelope.data is None:
+            return
+
+        request = (
+            envelope.data
+            if isinstance(envelope.data, AssistantInitRequest)
+            else AssistantInitRequest.model_validate(envelope.data)
+        )
+        assistant = initialize_assistant(
+            request.chatId,
+            title=request.title,
+            identity_body=request.identityBody,
+            heartbeat_body=request.heartbeatBody,
+            memory_body=request.memoryBody,
+        )
+        yield WSEnvelope(
+            type="assistant.init",
+            data=assistant.model_dump(mode="json"),
+        )
+        return
+
     if envelope.type == "chat-history":
         if isinstance(envelope.data, str):
             chat_id = envelope.data

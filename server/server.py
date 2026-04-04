@@ -6,11 +6,9 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 
 from aios_core.initialize import register_runtime_shutdown, shutdown_runtime, start_runtime
 from aios_core.sessions import get_chat_artifacts_dir
-from aios_core.workspace import resolve_workspace_path
 from server.notifications.runtime import shutdown_notification_service, start_notification_service
 from server.execution.runtime import shutdown_runs_service, start_runs_service
 from server.lights import lights
@@ -79,11 +77,3 @@ async def get_session_artifact_file(chat_id: str, artifact_path: str) -> FileRes
         raise HTTPException(status_code=404, detail="Artifact not found.")
 
     return FileResponse(requested_path)
-
-
-# Serve static app files from workspace/apps/ directory.
-# A static app at workspace/apps/<slug>/src/index.html is accessible at
-# http://localhost:8765/apps/<slug>/src/index.html
-_apps_dir = resolve_workspace_path("apps")
-_apps_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/apps", StaticFiles(directory=str(_apps_dir), html=True), name="apps")

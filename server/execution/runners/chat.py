@@ -6,6 +6,7 @@ import json
 from agno.agent import RunEvent as AgentRunEvent
 
 from aios_core.agent import create_agent
+from aios_core.runtime_context import pop_chat_runtime_context, push_chat_runtime_context
 from aios_core.sessions import load_chat_session
 from server.execution.service import RunsService, build_run_event
 from server.lights import lights
@@ -56,6 +57,7 @@ class ChatRunner:
         )
 
         produced_output = False
+        runtime_context_tokens = push_chat_runtime_context(chat_id)
 
         try:
             await lights.set_mode("thinking")
@@ -155,6 +157,7 @@ class ChatRunner:
             )
             return
         finally:
+            pop_chat_runtime_context(runtime_context_tokens)
             await lights.set_mode("idle")
 
         if not produced_output:

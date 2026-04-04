@@ -83,15 +83,12 @@ _BASE_TOOLS_BLOCK = """
      "cron_id": "string? (first 8 chars suffice)"},
     cron,
 ),
-"app": (
-    "Manage workspace apps (actions: create, list, get, activate, pause, state_get)",
-    {"action": "string", "app_id": "string?", "slug": "string?", "name": "string?",
-     "description": "string?", "entrypoint_content": "string?",
-     "run_on_startup": "boolean?",
-     "app_type": "string? (static|server, default static)",
-     "port": "number? (port for server apps)",
-     "start_command": "string? (command to start server apps, e.g. 'npm run dev')"},
-    app,
+"assistant": (
+    "Manage the current chat as a persistent assistant (actions: init, get, list). "
+    "Use init when the user wants ongoing ownership, monitoring, or long-running responsibility.",
+    {"action": "string", "title": "string?", "identity": "string?",
+     "heartbeat": "string?", "memory": "string?"},
+    assistant,
 ),
 "notify": (
     "Create a user notification shown in the app inbox/toasts.",
@@ -156,6 +153,9 @@ def build_agent_prompt(
     current_chat_files_dir: str | None = None,
     current_chat_artifacts_dir: str | None = None,
     current_chat_artifact_url_template: str | None = None,
+    assistant_title: str | None = None,
+    assistant_identity: str | None = None,
+    assistant_memory: str | None = None,
     skills: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     scheduler_now = datetime.now(ZoneInfo(default_cron_timezone)).strftime(
@@ -176,8 +176,27 @@ def build_agent_prompt(
             """
             Focus on executing tasks, not just giving instructions.
             Have a bias for action and use tools when they reduce user effort.
+            Before making the first tool call in a turn, briefly explain what you are about to do and why.
+            Keep that preamble short: 1-3 sentences or a compact bullet list is enough.
+            Do not start chaining tool calls with no explanation unless the user explicitly asks for silent execution.
+            Prefer inspect-first behavior. For non-trivial work, gather a small amount of context before committing to a plan.
             Ask follow-up questions when the task is ambiguous, risky, or long-horizon enough that clarification will materially improve the result.
             Before creating a new project or folder, inspect the workspace for existing relevant work and extend it when possible instead of creating a duplicate.
+            When the user wants ongoing ownership over a domain or task, convert the current chat into an assistant with the `assistant` tool instead of requiring a separate setup flow.
+            """,
+        ),
+        _section(
+            "turn_protocol",
+            """
+            Follow this turn protocol for non-trivial tasks:
+            1. Briefly state the immediate plan.
+            2. Inspect the relevant context.
+            3. Explain the next action before major tool sequences.
+            4. Execute tools.
+            5. After important results, briefly explain what you learned or what changed.
+            6. Then continue or finish.
+
+            Do not dump long hidden reasoning. Keep user-facing planning concise, concrete, and action-oriented.
             """,
         ),
         _section(
@@ -194,6 +213,10 @@ def build_agent_prompt(
             f"""
             Use non-interactive shell commands.
             Keep timeout for bash commands at 20 seconds unless there is a strong reason to do otherwise.
+            When a task requires multiple tools, state the immediate plan before starting and then execute it.
+            If the plan changes after inspecting context, briefly say what changed before continuing.
+            Do not fire off long sequences of unrelated tool calls. Group tool use around one clear goal at a time.
+            If a result is surprising, stop and explain it before proceeding.
             For any delayed, recurring, or scheduled task, always use the `cron` tool.
             Do not use bash backgrounding or scheduling patterns such as `nohup`, `at`, `crontab`, `disown`, `sleep` with `&`, or a trailing `&`.
             Current scheduler time ({default_cron_timezone}): {scheduler_now}
@@ -217,39 +240,12 @@ def build_agent_prompt(
             """,
         ),
         _section(
-            "apps",
-            f"""
-            You can build reusable applications for the user using the `app` tool and the workspace.
-
-            **Creating an app:**
-            1. Call `app(action="create", name="...", description="...", app_type="static"|"server")` to register the app and create its directory.
-            2. The app directory is created at `{workspace_dir}/apps/<slug>/src/`. Write your code files there using the `write` tool.
-
-            **Static apps** (HTML/CSS/JS):
-            - Write an `index.html` (and any CSS/JS) into `{workspace_dir}/apps/<slug>/src/`.
-            - These are served automatically at `http://localhost:8765/apps/<slug>/src/`.
-            - After creating files, tell the user the URL so they can open it.
-
-            **Server apps** (Next.js, Flask, etc.):
-            - Scaffold the project in `{workspace_dir}/apps/<slug>/`.
-            - When creating, set `start_command` (e.g. "npm run dev") and `port` (e.g. 3000).
-            - Use `process_spawn` + `process_send` to install dependencies and start the dev server.
-            - The app will be available at `http://localhost:<port>`.
-
-            **Managing apps:**
-            - `app(action="list")` — list all apps
-            - `app(action="get", slug="...")` — get app details
-            - `app(action="activate", slug="...")` / `app(action="pause", slug="...")` — toggle status
-
-            Always prefer extending an existing app over creating a duplicate. Check `app(action="list")` first.
-            """,
-        ),
-        _section(
             "writing_code",
             """
             A big part of your job is writing code.
             Use the `codex` tool for coding tasks where a dedicated coding agent will likely produce a better result.
             For non-trivial coding work, inspect context, form a plan, pressure-test it, then hand `codex` a clear and specific task.
+            When coding, explain the intended change before editing and summarize the outcome after the edit or command finishes.
             """,
         ),
         _section(
@@ -276,6 +272,8 @@ def build_agent_prompt(
                 Default chat files directory: {current_chat_files_dir}
                 Default chat artifacts directory: {current_chat_artifacts_dir}
                 {artifact_url_line}
+                Relative paths for file tools, search tools, shell commands, PTY sessions, and Codex default to the chat files directory.
+                Use explicit workspace-relative paths like `session/...` or `runs/...` only when you intentionally want to work outside the chat files directory.
                 """,
             )
         )
@@ -298,6 +296,41 @@ def build_agent_prompt(
             )
         )
 
+    if assistant_identity or assistant_memory:
+        assistant_name = assistant_title or current_chat_id or "assistant"
+        sections.append(
+            _section(
+                "assistant",
+                f"""
+                This chat is registered as a persistent assistant named {assistant_name}.
+                Treat the assistant documents below as durable operating context.
+                Use recent transcript history for the current interaction, but do not rely on the transcript alone for long-lived identity or memory.
+                """,
+            )
+        )
+        if assistant_identity:
+            sections.append(
+                _section(
+                    "assistant_identity",
+                    f"""
+                    Assistant identity file:
+
+                    {assistant_identity}
+                    """,
+                )
+            )
+        if assistant_memory:
+            sections.append(
+                _section(
+                    "assistant_memory",
+                    f"""
+                    Assistant memory file:
+
+                    {assistant_memory}
+                    """,
+                )
+            )
+
     if include_subagent_tool:
         sections.append(
             _section(
@@ -305,6 +338,8 @@ def build_agent_prompt(
                 """
                 Subagents are powerful for focused research or decomposing work.
                 Only give a subagent the instructions and background needed for the intended task.
+                Before delegating, tell the user what you are delegating and why.
+                After delegation returns, summarize the result before moving on.
                 """,
             )
         )

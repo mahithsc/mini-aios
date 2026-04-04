@@ -1,10 +1,10 @@
 import os
 
-from ..workspace import resolve_workspace_path
+from ..runtime_context import resolve_chat_files_path
 
 
 def read(path: str, offset: int = 0, limit: int = None):
-    resolved = resolve_workspace_path(path)
+    resolved = resolve_chat_files_path(path)
     try:
         lines = open(resolved).readlines()
     except FileNotFoundError:
@@ -18,7 +18,7 @@ def read(path: str, offset: int = 0, limit: int = None):
 
 
 def write(path: str, content: str):
-    resolved = resolve_workspace_path(path)
+    resolved = resolve_chat_files_path(path)
     os.makedirs(os.path.dirname(str(resolved)), exist_ok=True)
     with open(resolved, "w") as f:
         f.write(content)
@@ -26,7 +26,7 @@ def write(path: str, content: str):
 
 
 def edit(path: str, old: str, new: str, all: bool = False):
-    resolved = resolve_workspace_path(path)
+    resolved = resolve_chat_files_path(path)
     text = open(resolved).read()
     if old not in text:
         return "error: old_string not found"

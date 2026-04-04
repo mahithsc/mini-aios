@@ -443,7 +443,7 @@ def list_chat_history() -> list[ChatMetadata]:
         history.append(
             ChatMetadata(
                 id=chat_id,
-                title=_get_chat_title(messages),
+                title=_get_chat_title(messages) or entry.get("title"),
                 createdAt=created_at,
                 updatedAt=updated_at,
                 status=status if status in VALID_CHAT_STATUSES else None,
@@ -467,7 +467,6 @@ def update_chat_status(chat_id: str, status: str | None) -> None:
         session_entry.pop("status", None)
 
     save_manifest(manifest)
-
 
 def save_chat_session(chat_id: str, messages: list[BaseModel | dict[str, Any]]) -> str:
     manifest = load_manifest()

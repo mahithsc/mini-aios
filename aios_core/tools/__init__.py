@@ -12,7 +12,7 @@ __all__ = [
     "process_kill",
     "bash",
     "cron",
-    "app",
+    "assistant",
     "notify",
     "codex",
     "tavily_search",
@@ -63,10 +63,10 @@ def __getattr__(name: str):
         from .cron import cron
 
         return cron
-    if name == "app":
-        from .app import app
+    if name == "assistant":
+        from .assistant import assistant
 
-        return app
+        return assistant
     if name == "notify":
         from .notify import notify
 

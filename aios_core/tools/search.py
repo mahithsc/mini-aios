@@ -2,11 +2,11 @@ import os
 import re
 import glob as globlib
 
-from ..workspace import resolve_workspace_path
+from ..runtime_context import resolve_chat_files_path
 
 
 def glob(pat: str, path: str = "."):
-    resolved_path = str(resolve_workspace_path(path))
+    resolved_path = str(resolve_chat_files_path(path))
     pattern = (resolved_path + "/" + pat).replace("//", "/")
     files = globlib.glob(pattern, recursive=True)
     files = sorted(
@@ -20,7 +20,7 @@ def glob(pat: str, path: str = "."):
 def grep(pat: str, path: str = "."):
     pattern = re.compile(pat)
     hits = []
-    resolved_path = str(resolve_workspace_path(path))
+    resolved_path = str(resolve_chat_files_path(path))
     for filepath in globlib.glob(resolved_path + "/**", recursive=True):
         try:
             for line_num, line in enumerate(open(filepath), 1):

@@ -11,8 +11,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-
-from ..workspace import ensure_workspace_dir, resolve_workspace_path
+from ..runtime_context import default_chat_files_cwd, resolve_chat_files_path
 
 _DEFAULT_SHELL = "/bin/bash"
 _DEFAULT_OUTPUT_LIMIT = 200_000
@@ -353,7 +352,10 @@ class ProcessManager:
         env: dict[str, str] | None = None,
         shell: str | None = None,
     ) -> dict[str, object]:
-        resolved_cwd = resolve_workspace_path(cwd or ensure_workspace_dir())
+        if cwd is None:
+            resolved_cwd = default_chat_files_cwd()
+        else:
+            resolved_cwd = resolve_chat_files_path(cwd)
         if not resolved_cwd.exists():
             return {"error": f"path does not exist: {resolved_cwd}"}
         if not resolved_cwd.is_dir():
