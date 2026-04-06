@@ -72,7 +72,7 @@ class HeartbeatScheduler:
 
 heartbeat_scheduler = HeartbeatScheduler(
     interval_seconds=int(os.getenv("AIOS_HEARTBEAT_INTERVAL_SECONDS", DEFAULT_HEARTBEAT_INTERVAL_SECONDS)),
-    enabled=_env_flag("AIOS_HEARTBEAT_ENABLED", True),
+    enabled=_env_flag("AIOS_HEARTBEAT_ENABLED", False),
 )
 
 
