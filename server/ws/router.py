@@ -11,7 +11,7 @@ from server.types.assistant import AssistantInitRequest
 from server.types.cron import CronUpcomingListResponse
 from server.types.chat import Chat, ChatMessage, UserMessage
 from server.types.notification import NotificationDismissRequest
-from server.types.run import RunCreateRequest, RunStopRequest
+from server.types.run import ProcessSnapshotListRequest, RunCreateRequest, RunResumeRequest, RunStopRequest
 from server.types.ws import WSEnvelope
 
 
@@ -126,6 +126,42 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
         )
         return
 
+    if envelope.type == "process.snapshot.list":
+        request = (
+            ProcessSnapshotListRequest()
+            if envelope.data is None
+            else (
+                envelope.data
+                if isinstance(envelope.data, ProcessSnapshotListRequest)
+                else ProcessSnapshotListRequest.model_validate(envelope.data)
+            )
+        )
+        snapshots = get_runs_service().list_recent_runs(
+            statuses=request.statuses,
+            kinds=request.kinds,
+            limit=request.limit,
+        )
+        yield WSEnvelope(
+            type="process.snapshot.list",
+            data=[snapshot.model_dump(mode="json") for snapshot in snapshots],
+        )
+        return
+
+    if envelope.type == "run.resume":
+        if envelope.data is None:
+            return
+
+        request = (
+            envelope.data
+            if isinstance(envelope.data, RunResumeRequest)
+            else RunResumeRequest.model_validate(envelope.data)
+        )
+        yield WSEnvelope(
+            type="run.resume",
+            data=[event.model_dump(mode="json") for event in get_runs_service().resume_events(request.runId, request.afterSequence)],
+        )
+        return
+
     if envelope.type == "notification.dismiss":
         if envelope.data is None:
             return
@@ -165,14 +201,11 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
         next_messages = _conversation_messages_for_turn(chat)
         save_chat_session(chat.id, next_messages)
         update_chat_status(chat.id, "streaming")
-        run = await get_runs_service().submit_run(
+        await get_runs_service().submit_run(
             RunCreateRequest(
                 kind="chat",
                 chatId=chat.id,
                 turnId=turn_id,
             )
         )
-        yield WSEnvelope(
-            type="run.accepted",
-            data=run.model_dump(mode="json"),
-        ) 
+        return

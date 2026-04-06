@@ -46,6 +46,7 @@ class RunEventPayload(BaseModel):
 
 class RunEvent(BaseModel):
     runId: str
+    kind: RunKind | None = None
     sequence: int
     createdAt: UnixMs
     chatId: str | None = None
@@ -65,6 +66,8 @@ class RunSnapshot(BaseModel):
 
 class ProcessSnapshotListRequest(BaseModel):
     statuses: list[RunStatus] = Field(default_factory=list)
+    kinds: list[RunKind] = Field(default_factory=list)
+    limit: int | None = Field(default=None, ge=1)
 
 
 class RunResumeRequest(BaseModel):

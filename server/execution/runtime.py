@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from server.execution.runners.heartbeat import HeartbeatRunner
 from server.execution.runners.chat import ChatRunner
 from server.execution.broadcaster import RunBroadcaster
 from server.execution.service import RunsService
@@ -30,6 +31,7 @@ def initialize_runs_service() -> RunsService:
             worker_count=_resolve_worker_count(),
         )
         _runs_service.register_runner(ChatRunner())
+        _runs_service.register_runner(HeartbeatRunner())
     return _runs_service
 
 

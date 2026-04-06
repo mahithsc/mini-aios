@@ -10,7 +10,7 @@ from aios_core.initialize import RUNS_EVENTS_DIR, RUNS_METADATA_DIR, RUNS_SNAPSH
 from pydantic import TypeAdapter
 
 from server.types.chat import AssistantMessage, ChatMessage, LLMEvent, MessageStatus
-from server.types.run import Run, RunCreateRequest, RunEvent, RunSnapshot, RunStatus
+from server.types.run import Run, RunCreateRequest, RunEvent, RunKind, RunSnapshot, RunStatus
 
 LLM_EVENT_ADAPTER = TypeAdapter(LLMEvent)
 
@@ -42,7 +42,12 @@ class RunStore:
     def get_snapshot(self, run_id: str) -> RunSnapshot | None:
         raise NotImplementedError
 
-    def list_snapshots(self, statuses: list[RunStatus] | None = None) -> list[RunSnapshot]:
+    def list_snapshots(
+        self,
+        statuses: list[RunStatus] | None = None,
+        kinds: list[RunKind] | None = None,
+        limit: int | None = None,
+    ) -> list[RunSnapshot]:
         raise NotImplementedError
 
     def list_events_after(self, run_id: str, sequence: int) -> list[RunEvent]:
@@ -135,17 +140,27 @@ class FileRunStore(RunStore):
             return None
         return RunSnapshot.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
-    def list_snapshots(self, statuses: list[RunStatus] | None = None) -> list[RunSnapshot]:
+    def list_snapshots(
+        self,
+        statuses: list[RunStatus] | None = None,
+        kinds: list[RunKind] | None = None,
+        limit: int | None = None,
+    ) -> list[RunSnapshot]:
         allowed_statuses = set(statuses or [])
+        allowed_kinds = set(kinds or [])
         snapshots: list[RunSnapshot] = []
 
         for path in self._snapshots_dir.glob("*.json"):
             snapshot = RunSnapshot.model_validate(json.loads(path.read_text(encoding="utf-8")))
             if allowed_statuses and snapshot.status not in allowed_statuses:
                 continue
+            if allowed_kinds and snapshot.kind not in allowed_kinds:
+                continue
             snapshots.append(snapshot)
 
         snapshots.sort(key=lambda item: item.updatedAt, reverse=True)
+        if limit is not None:
+            return snapshots[:limit]
         return snapshots
 
     def list_events_after(self, run_id: str, sequence: int) -> list[RunEvent]:

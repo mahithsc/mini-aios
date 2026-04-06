@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 
 from aios_core.initialize import register_runtime_shutdown, shutdown_runtime, start_runtime
 from aios_core.sessions import get_chat_artifacts_dir
+from server.execution.heartbeat import shutdown_heartbeat_scheduler, start_heartbeat_scheduler
 from server.notifications.runtime import shutdown_notification_service, start_notification_service
 from server.execution.runtime import shutdown_runs_service, start_runs_service
 from server.lights import lights
@@ -20,14 +21,16 @@ register_runtime_shutdown()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    start_runtime(start_heartbeat=False)
+    start_runtime()
     await lights.start()
     await start_notification_service()
     await start_runs_service()
+    await start_heartbeat_scheduler()
     try:
         yield
     finally:
         await lights.shutdown()
+        await shutdown_heartbeat_scheduler()
         await shutdown_notification_service()
         await shutdown_runs_service()
         shutdown_runtime()

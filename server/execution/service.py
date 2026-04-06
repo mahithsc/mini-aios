@@ -7,7 +7,9 @@ from typing import Protocol
 
 from server.execution.broadcaster import RunBroadcaster
 from server.execution.store import RunStore
-from server.types.run import Run, RunCreateRequest, RunEvent, RunEventType, RunSnapshot
+from server.types.run import Run, RunCreateRequest, RunEvent, RunEventType, RunKind, RunSnapshot, RunStatus
+
+_STALE_RUN_ERROR_MESSAGE = "Server restarted before run completed."
 
 
 class RunExecutor(Protocol):
@@ -46,6 +48,7 @@ class RunsService:
         if self._started:
             return
 
+        await self._reconcile_stale_runs()
         self._started = True
         self._workers = [
             asyncio.create_task(self._worker_loop(index), name=f"runs-worker-{index}")
@@ -71,9 +74,12 @@ class RunsService:
 
         async with self._lock:
             self._active_runs[run.id] = ActiveRun(run=run)
-            await self._queue.put(run.id)
 
         self._store.save_snapshot(run.id, status="queued", last_sequence=0)
+        await self._broadcaster.broadcast_run_accepted(run)
+
+        async with self._lock:
+            await self._queue.put(run.id)
         return run
 
     def get_run(self, run_id: str) -> Run | None:
@@ -82,11 +88,22 @@ class RunsService:
             return active.run
         return self._store.get_run(run_id)
 
-    def list_active_runs(self) -> list[RunSnapshot]:
-        return self._store.list_snapshots(statuses=["queued", "running"])
+    def list_active_runs(
+        self,
+        *,
+        kinds: list[RunKind] | None = None,
+        limit: int | None = None,
+    ) -> list[RunSnapshot]:
+        return self._store.list_snapshots(statuses=["queued", "running"], kinds=kinds, limit=limit)
 
-    def list_recent_runs(self) -> list[RunSnapshot]:
-        return self._store.list_snapshots()
+    def list_recent_runs(
+        self,
+        *,
+        statuses: list[RunStatus] | None = None,
+        kinds: list[RunKind] | None = None,
+        limit: int | None = None,
+    ) -> list[RunSnapshot]:
+        return self._store.list_snapshots(statuses=statuses, kinds=kinds, limit=limit)
 
     def get_snapshot(self, run_id: str) -> RunSnapshot | None:
         return self._store.get_snapshot(run_id)
@@ -95,7 +112,19 @@ class RunsService:
         return self._store.list_events_after(run_id, after_sequence)
 
     async def emit_event(self, run_id: str, event: RunEvent) -> RunEvent:
-        persisted_event = self._store.append_event(run_id, event)
+        run = self._store.get_run(run_id)
+        if run is None:
+            raise KeyError(f"Run {run_id} does not exist.")
+
+        persisted_event = self._store.append_event(
+            run_id,
+            event.model_copy(
+                update={
+                    "kind": run.kind,
+                    "chatId": event.chatId if event.chatId is not None else run.chatId,
+                }
+            ),
+        )
         snapshot = self._store.save_snapshot(
             run_id,
             status=self._derive_status(persisted_event),
@@ -103,13 +132,29 @@ class RunsService:
             preview=self._derive_preview(persisted_event),
             active_step=self._derive_active_step(persisted_event),
         )
-        run = self._store.get_run(run_id)
         if run is not None and run.chatId:
             self._store.project_chat_state(run_id, run.chatId, persisted_event)
 
         self._sync_active_run(snapshot)
         await self._broadcaster.broadcast_run_event(persisted_event)
         return persisted_event
+
+    async def _reconcile_stale_runs(self) -> None:
+        stale_snapshots = self._store.list_snapshots(statuses=["queued", "running"])
+        for snapshot in stale_snapshots:
+            run = self._store.get_run(snapshot.runId)
+            if run is None:
+                continue
+
+            await self.emit_event(
+                snapshot.runId,
+                build_run_event(
+                    run_id=snapshot.runId,
+                    event_type="error",
+                    chat_id=run.chatId,
+                    data={"error": _STALE_RUN_ERROR_MESSAGE},
+                ),
+            )
 
     def mark_completed(self, run_id: str) -> RunSnapshot:
         existing_snapshot = self._store.get_snapshot(run_id)
