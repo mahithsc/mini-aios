@@ -14,6 +14,7 @@ dependencies = [
     "uvicorn>=0.42.0",
     "zeroconf>=0.148.0",
     "httpx>=0.27.0",
+    "ollama",
     "websockets>=12.0",
     "python-multipart>=0.0.22",
     "adafruit-blinka>=9.0.4",

@@ -1,19 +1,24 @@
+import os
 import argparse
 from pathlib import Path
 from uuid import uuid4
 
 from agno.agent import Agent
-from agno.models.openrouter import OpenRouter
+# from agno.models.openrouter import OpenRouter
+from agno.models.ollama import Ollama
 from dotenv import load_dotenv
 
 load_dotenv()
 
 UIS_DIR = Path(__file__).resolve().parent / "uis"
+OLLAMA_HOST = os.getenv("AIOS_OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("AIOS_OLLAMA_MODEL", "gemma4:e4b")
 
 agent = Agent(
     # system_message="You are a generative UI agent. Generate a complete index.html document using HTML, Tailwind CSS via CDN, and JavaScript when needed. Return only raw HTML for the file contents. Do not wrap the response in markdown code fences. Give me an entire index.html file. What you output should be a complete index.html file. It should be a valid html file with tailwind and js.",
     system_message="You are a helpful assistant.",
-    model=OpenRouter(id="openai/gpt-4o-mini"),
+    # model=OpenRouter(id="openai/gpt-4o-mini"),
+    model=Ollama(id=OLLAMA_MODEL, host=OLLAMA_HOST),
     markdown=True,
 )
 

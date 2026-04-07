@@ -7,7 +7,7 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _DEV_WORKSPACE_DIR = _PROJECT_ROOT / "workspace"
 _PROD_ENV_VALUES = {"prod", "production"}
-_RUNTIME_DIR_NAMES = ("skills", "session", "runs", "apps", "cron_logs", "heartbeat_logs")
+_RUNTIME_DIR_NAMES = ("skills", "session", "runs", "assistants", "cron_logs", "heartbeat_logs")
 _RUNTIME_FILE_NAMES = ("aios.db", "crons.db")
 
 def get_environment() -> str:

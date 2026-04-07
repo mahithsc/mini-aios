@@ -14,7 +14,7 @@ _CURRENT_CHAT_ARTIFACTS_DIR: ContextVar[str | None] = ContextVar(
     "aios_current_chat_artifacts_dir", default=None
 )
 _WORKSPACE_ROOT_SENTINELS = {
-    "apps",
+    "assistants",
     "cron_logs",
     "heartbeat_logs",
     "runs",
