@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 # sessions
 session/
+<<<<<<< Updated upstream
 
 # skills
 skills/
@@ -20,3 +21,6 @@ cron_logs/
 workspace/
 
 ./heartbeat_logs/
+=======
+crons.db
+>>>>>>> Stashed changes

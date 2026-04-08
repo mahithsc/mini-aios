@@ -4,15 +4,17 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from .assistant import Assistant, AssistantInitRequest
+from .assistant import Assistant, AssistantCreateRequest, AssistantDetail, AssistantSubmitRequest
 from .chat import Chat, ChatMetadata
 from .cron import CronUpcomingListResponse
 from .notification import Notification, NotificationDismissRequest, NotificationListResponse
 from .run import ProcessSnapshotListRequest, Run, RunEvent, RunResumeRequest, RunSnapshot, RunStopRequest
 
 WSEnvelopeTypes = Literal[
+    "assistant.create",
+    "assistant.get",
     "assistant.list",
-    "assistant.init",
+    "assistant.submit",
     "chat",
     "chat-history",
     "chat.submit",
@@ -38,9 +40,19 @@ class AssistantListWSEnvelope(WSEnvelope):
     data: list[Assistant] | None = None
 
 
-class AssistantInitWSEnvelope(WSEnvelope):
-    type: Literal["assistant.init"] = "assistant.init"
-    data: AssistantInitRequest | Assistant
+class AssistantCreateWSEnvelope(WSEnvelope):
+    type: Literal["assistant.create"] = "assistant.create"
+    data: AssistantCreateRequest | AssistantDetail
+
+
+class AssistantGetWSEnvelope(WSEnvelope):
+    type: Literal["assistant.get"] = "assistant.get"
+    data: str | AssistantDetail | None = None
+
+
+class AssistantSubmitWSEnvelope(WSEnvelope):
+    type: Literal["assistant.submit"] = "assistant.submit"
+    data: AssistantSubmitRequest | AssistantDetail
 
 
 class ChatWSEnvelope(WSEnvelope):

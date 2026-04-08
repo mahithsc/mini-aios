@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from aios_core.assistants import initialize_assistant, list_assistants
+from aios_core.assistants import (
+    create_assistant,
+    get_assistant_detail,
+    list_assistants,
+    load_assistant_session,
+    save_assistant_session,
+)
 from aios_core.crons import cron_manager
 from aios_core.sessions import list_chat_history, load_chat_session, save_chat_session, update_chat_status
 from server.notifications.runtime import get_notification_service
 from server.execution.runtime import get_runs_service
-from server.types.assistant import AssistantInitRequest
+from server.types.assistant import AssistantCreateRequest, AssistantSubmitRequest
 from server.types.cron import CronUpcomingListResponse
 from server.types.chat import Chat, ChatMessage, UserMessage
 from server.types.notification import NotificationDismissRequest
@@ -19,8 +25,8 @@ def parse_ws_envelope(payload: object) -> WSEnvelope:
     return WSEnvelope.model_validate(payload)
 
 
-def _get_latest_user_message(chat: Chat) -> UserMessage:
-    for message in reversed(chat.messages):
+def _get_latest_user_message(messages: list[ChatMessage]) -> UserMessage:
+    for message in reversed(messages):
         if isinstance(message, UserMessage):
             return message
 
@@ -45,7 +51,7 @@ def _conversation_messages_for_turn(chat: Chat) -> list[ChatMessage]:
     client is shorter (e.g. not yet hydrated), fall back to disk + latest user.
     """
     persisted_messages = load_chat_session(chat.id)
-    latest_user_message = _get_latest_user_message(chat)
+    latest_user_message = _get_latest_user_message(chat.messages)
     client_messages = list(chat.messages)
 
     if len(client_messages) >= len(persisted_messages):
@@ -54,33 +60,78 @@ def _conversation_messages_for_turn(chat: Chat) -> list[ChatMessage]:
     return _append_user_message(persisted_messages, latest_user_message)
 
 
-async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
-    if envelope.type == "assistant.list":
-        yield WSEnvelope(
-            type="assistant.list",
-            data=[assistant.model_dump(mode="json") for assistant in list_assistants()],
-        )
-        return
+def _assistant_messages_for_turn(request: AssistantSubmitRequest) -> list[ChatMessage]:
+    persisted_messages = load_assistant_session(request.assistantId)
+    latest_user_message = _get_latest_user_message(request.messages)
+    client_messages = list(request.messages)
 
-    if envelope.type == "assistant.init":
+    if len(client_messages) >= len(persisted_messages):
+        return client_messages
+
+    return _append_user_message(persisted_messages, latest_user_message)
+
+
+async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
+    if envelope.type == "assistant.create":
         if envelope.data is None:
             return
 
         request = (
             envelope.data
-            if isinstance(envelope.data, AssistantInitRequest)
-            else AssistantInitRequest.model_validate(envelope.data)
+            if isinstance(envelope.data, AssistantCreateRequest)
+            else AssistantCreateRequest.model_validate(envelope.data)
         )
-        assistant = initialize_assistant(
-            request.chatId,
+        assistant = create_assistant(
+            request.id,
             title=request.title,
-            identity_body=request.identityBody,
-            heartbeat_body=request.heartbeatBody,
-            memory_body=request.memoryBody,
+            prompt=request.prompt,
         )
         yield WSEnvelope(
-            type="assistant.init",
+            type="assistant.create",
             data=assistant.model_dump(mode="json"),
+        )
+        return
+
+    if envelope.type == "assistant.get":
+        if not isinstance(envelope.data, str):
+            return
+
+        assistant = get_assistant_detail(envelope.data)
+        if assistant is None:
+            return
+
+        yield WSEnvelope(
+            type="assistant.get",
+            data=assistant.model_dump(mode="json"),
+        )
+        return
+
+    if envelope.type == "assistant.submit":
+        if envelope.data is None:
+            return
+
+        request = (
+            envelope.data
+            if isinstance(envelope.data, AssistantSubmitRequest)
+            else AssistantSubmitRequest.model_validate(envelope.data)
+        )
+        if get_assistant_detail(request.assistantId) is None:
+            return
+        next_messages = _assistant_messages_for_turn(request)
+        save_assistant_session(request.assistantId, next_messages)
+        await get_runs_service().submit_run(
+            RunCreateRequest(
+                kind="chat",
+                assistantId=request.assistantId,
+                turnId=request.turnId,
+            )
+        )
+        return
+
+    if envelope.type == "assistant.list":
+        yield WSEnvelope(
+            type="assistant.list",
+            data=[assistant.model_dump(mode="json") for assistant in list_assistants()],
         )
         return
 

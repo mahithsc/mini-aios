@@ -25,7 +25,7 @@ def assistant(
         )
         return {
             "assistant": assistant_record.model_dump(mode="json"),
-            "message": f"Initialized assistant '{assistant_record.title}' for chat {current_chat_id}.",
+            "message": f"Initialized assistant '{assistant_record.title}' with id {current_chat_id}.",
         }
 
     if action == "get":

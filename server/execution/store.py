@@ -5,6 +5,7 @@ import time
 import uuid
 from pathlib import Path
 
+from aios_core.assistants import load_assistant_session, save_assistant_session
 from aios_core.sessions import load_chat_session, save_chat_session, update_chat_status
 from aios_core.initialize import RUNS_EVENTS_DIR, RUNS_METADATA_DIR, RUNS_SNAPSHOTS_DIR
 from pydantic import TypeAdapter
@@ -56,6 +57,9 @@ class RunStore:
     def project_chat_state(self, run_id: str, chat_id: str, event: RunEvent) -> None:
         raise NotImplementedError
 
+    def project_assistant_state(self, run_id: str, assistant_id: str, event: RunEvent) -> None:
+        raise NotImplementedError
+
 
 class FileRunStore(RunStore):
     def __init__(
@@ -78,6 +82,7 @@ class FileRunStore(RunStore):
             createdAt=now,
             updatedAt=now,
             chatId=request.chatId,
+            assistantId=request.assistantId,
             sourceId=request.sourceId,
             turnId=request.turnId,
         )
@@ -123,6 +128,7 @@ class FileRunStore(RunStore):
             status=status,
             updatedAt=updated_at,
             chatId=run.chatId,
+            assistantId=run.assistantId,
             lastSequence=last_sequence,
             preview=preview,
             activeStep=active_step,
@@ -185,6 +191,18 @@ class FileRunStore(RunStore):
         messages = load_chat_session(chat_id)
         save_chat_session(chat_id, _apply_chat_event(messages, run_id, llm_event))
         update_chat_status(chat_id, _chat_status_for_event(LLM_EVENT_ADAPTER.validate_python(llm_event)))
+
+    def project_assistant_state(self, run_id: str, assistant_id: str, event: RunEvent) -> None:
+        llm_event = _run_event_to_chat_event(event)
+        if llm_event is None:
+            return
+
+        messages = load_assistant_session(assistant_id)
+        save_assistant_session(
+            assistant_id,
+            _apply_chat_event(messages, run_id, llm_event),
+            updated_at=event.createdAt,
+        )
 
     def _ensure_directories(self) -> None:
         self._metadata_dir.mkdir(parents=True, exist_ok=True)

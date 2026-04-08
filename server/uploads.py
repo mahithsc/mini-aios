@@ -97,8 +97,7 @@ def _get_relative_upload_dir(chat_id: str) -> Path:
     return get_chat_uploads_relative_dir(chat_id)
 
 
-def _get_unique_relative_path(chat_id: str, filename: str) -> Path:
-    relative_dir = _get_relative_upload_dir(chat_id)
+def _get_unique_relative_path(relative_dir: Path, filename: str) -> Path:
     candidate = relative_dir / filename
     target_path = resolve_workspace_path(candidate)
 
@@ -145,6 +144,7 @@ async def save_uploads(chat_id: str, files: list[UploadFile]) -> list[MessageAtt
             detail=f"You can upload up to {MAX_ATTACHMENTS_PER_REQUEST} files at a time.",
         )
 
+    relative_dir = _get_relative_upload_dir(chat_id)
     saved_attachments: list[MessageAttachment] = []
 
     for upload in files:
@@ -161,7 +161,7 @@ async def save_uploads(chat_id: str, files: list[UploadFile]) -> list[MessageAtt
                 detail=f"Unsupported attachment type for {safe_filename}.",
             )
 
-        relative_path = _get_unique_relative_path(chat_id, safe_filename)
+        relative_path = _get_unique_relative_path(relative_dir, safe_filename)
         absolute_path = resolve_workspace_path(relative_path)
         absolute_path.parent.mkdir(parents=True, exist_ok=True)
 

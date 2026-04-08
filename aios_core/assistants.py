@@ -8,14 +8,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from aios_core.sessions import (
-    load_chat_session,
-    load_manifest,
-    save_chat_session,
-    save_manifest,
-)
+from pydantic import TypeAdapter
+
 from aios_core.workspace import resolve_workspace_path
-from server.types.assistant import Assistant
+from server.types.assistant import Assistant, AssistantDetail
+from server.types.chat import ChatMessage, UserMessage
 
 ASSISTANTS_DIR = resolve_workspace_path("assistants")
 ASSISTANTS_REGISTRY_PATH = ASSISTANTS_DIR / "registry.json"
@@ -23,9 +20,11 @@ LEGACY_ASSISTANTS_REGISTRY_PATH = resolve_workspace_path("session/assistants.jso
 IDENTITY_FILE_NAME = "IDENTITY.md"
 HEARTBEAT_FILE_NAME = "HEARTBEAT.md"
 MEMORY_FILE_NAME = "MEMORY.md"
+ASSISTANT_SESSION_FILE_NAME = "assistant.json"
 UPLOADS_DIR_NAME = "uploads"
 FILES_DIR_NAME = "files"
 ARTIFACTS_DIR_NAME = "artifacts"
+CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
 log = logging.getLogger(__name__)
 
 
@@ -40,8 +39,8 @@ def _now_ms() -> int:
     return int(datetime.now().timestamp() * 1000)
 
 
-def _default_title(chat_id: str) -> str:
-    return f"Assistant {chat_id[:8]}"
+def _default_title(assistant_id: str) -> str:
+    return f"Assistant {assistant_id[:8]}"
 
 
 def _sanitize_path_segment(value: str, fallback: str) -> str:
@@ -108,8 +107,8 @@ def save_assistants_registry(assistants: list[Assistant]) -> None:
     )
 
 
-def get_assistant(chat_id: str) -> Assistant | None:
-    return next((assistant for assistant in load_assistants_registry() if assistant.chatId == chat_id), None)
+def get_assistant(assistant_id: str) -> Assistant | None:
+    return next((assistant for assistant in load_assistants_registry() if assistant.id == assistant_id), None)
 
 
 def list_assistants() -> list[Assistant]:
@@ -133,6 +132,10 @@ def _assistant_file_paths(assistant_id: str) -> tuple[Path, Path, Path]:
     )
 
 
+def _assistant_session_path(assistant_id: str) -> Path:
+    return _assistant_dir(assistant_id) / ASSISTANT_SESSION_FILE_NAME
+
+
 def _assistant_uploads_dir(assistant_id: str) -> Path:
     return _assistant_dir(assistant_id) / UPLOADS_DIR_NAME
 
@@ -143,6 +146,20 @@ def _assistant_files_dir(assistant_id: str) -> Path:
 
 def _assistant_artifacts_dir(assistant_id: str) -> Path:
     return _assistant_dir(assistant_id) / ARTIFACTS_DIR_NAME
+
+
+def get_assistant_session_path(assistant_id: str) -> Path:
+    return _assistant_session_path(assistant_id)
+
+
+def get_assistant_files_dir(assistant_id: str) -> Path:
+    _ensure_assistant_workspace_dirs(assistant_id)
+    return _assistant_files_dir(assistant_id)
+
+
+def get_assistant_artifacts_dir(assistant_id: str) -> Path:
+    _ensure_assistant_workspace_dirs(assistant_id)
+    return _assistant_artifacts_dir(assistant_id)
 
 
 def _ensure_assistant_workspace_dirs(assistant_id: str) -> Path:
@@ -161,9 +178,13 @@ def _relative_to_workspace(path: Path) -> str:
 def _migrate_assistant_storage(assistant: Assistant) -> Assistant:
     _ensure_assistant_workspace_dirs(assistant.id)
     identity_path, heartbeat_path, memory_path = _assistant_file_paths(assistant.id)
+    assistant_session_path = _assistant_session_path(assistant.id)
     current_identity_path = resolve_workspace_path(assistant.identityPath)
     current_heartbeat_path = resolve_workspace_path(assistant.heartbeatPath)
     current_memory_path = resolve_workspace_path(assistant.memoryPath)
+    legacy_session_path = resolve_workspace_path(
+        Path("session") / _sanitize_path_segment(assistant.id, "chat") / "chat.json"
+    )
 
     for current_path, target_path in (
         (current_identity_path, identity_path),
@@ -177,33 +198,32 @@ def _migrate_assistant_storage(assistant: Assistant) -> Assistant:
         if current_path.exists() and not target_path.exists():
             shutil.move(str(current_path), str(target_path))
 
+    if legacy_session_path.exists() and not assistant_session_path.exists():
+        assistant_session_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(legacy_session_path), str(assistant_session_path))
+
     next_identity_path = identity_path if current_identity_path != identity_path else current_identity_path
     next_heartbeat_path = heartbeat_path if current_heartbeat_path != heartbeat_path else current_heartbeat_path
     next_memory_path = memory_path if current_memory_path != memory_path else current_memory_path
 
+    current_relative_identity_path = _relative_to_workspace(next_identity_path)
+    current_relative_heartbeat_path = _relative_to_workspace(next_heartbeat_path)
+    current_relative_memory_path = _relative_to_workspace(next_memory_path)
+
     if (
-        assistant.identityPath == _relative_to_workspace(next_identity_path)
-        and assistant.heartbeatPath == _relative_to_workspace(next_heartbeat_path)
-        and assistant.memoryPath == _relative_to_workspace(next_memory_path)
+        assistant.identityPath == current_relative_identity_path
+        and assistant.heartbeatPath == current_relative_heartbeat_path
+        and assistant.memoryPath == current_relative_memory_path
     ):
         return assistant
 
     return assistant.model_copy(
         update={
-            "identityPath": _relative_to_workspace(next_identity_path),
-            "heartbeatPath": _relative_to_workspace(next_heartbeat_path),
-            "memoryPath": _relative_to_workspace(next_memory_path),
+            "identityPath": current_relative_identity_path,
+            "heartbeatPath": current_relative_heartbeat_path,
+            "memoryPath": current_relative_memory_path,
         }
     )
-
-
-def _upsert_manifest_title(chat_id: str, title: str) -> None:
-    manifest = load_manifest()
-    entry = next((item for item in manifest if item.get("id") == chat_id), None)
-    if entry is None:
-        return
-    entry["title"] = title
-    save_manifest(manifest)
 
 
 def _ensure_assistant_file(path: Path, *, default_content: str) -> str:
@@ -214,8 +234,8 @@ def _ensure_assistant_file(path: Path, *, default_content: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def load_assistant_context(chat_id: str) -> AssistantContext | None:
-    assistant = get_assistant(chat_id)
+def load_assistant_context(assistant_id: str) -> AssistantContext | None:
+    assistant = get_assistant(assistant_id)
     if assistant is None:
         return None
 
@@ -235,48 +255,157 @@ def load_assistant_context(chat_id: str) -> AssistantContext | None:
     )
 
 
+def load_assistant_session(assistant_id: str) -> list[ChatMessage]:
+    session_path = _assistant_session_path(assistant_id)
+    if not session_path.exists():
+        return []
+
+    try:
+        payload = json.loads(session_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+
+    if not isinstance(payload, list):
+        return []
+
+    messages: list[ChatMessage] = []
+    for item in payload:
+        try:
+            messages.append(CHAT_MESSAGE_ADAPTER.validate_python(item))
+        except Exception:
+            continue
+    return messages
+
+
+def save_assistant_session(
+    assistant_id: str,
+    messages: list[ChatMessage],
+    *,
+    updated_at: int | None = None,
+) -> None:
+    _ensure_assistant_workspace_dirs(assistant_id)
+    session_path = _assistant_session_path(assistant_id)
+    session_path.write_text(
+        json.dumps([message.model_dump(mode="json") for message in messages], indent=2),
+        encoding="utf-8",
+    )
+    touch_assistant(assistant_id, updated_at=updated_at)
+
+
+def get_assistant_detail(assistant_id: str) -> AssistantDetail | None:
+    assistant = get_assistant(assistant_id)
+    if assistant is None:
+        return None
+
+    return AssistantDetail(
+        **assistant.model_dump(mode="json"),
+        messages=load_assistant_session(assistant_id),
+    )
+
+
+def touch_assistant(assistant_id: str, *, updated_at: int | None = None) -> Assistant | None:
+    assistants = load_assistants_registry()
+    assistant = next((item for item in assistants if item.id == assistant_id), None)
+    if assistant is None:
+        return None
+
+    next_updated_at = updated_at if updated_at is not None else _now_ms()
+    updated_assistant = assistant.model_copy(update={"updatedAt": next_updated_at})
+    next_assistants = [item for item in assistants if item.id != assistant_id]
+    next_assistants.append(updated_assistant)
+    save_assistants_registry(next_assistants)
+    return updated_assistant
+
+
+def create_assistant(
+    assistant_id: str,
+    *,
+    title: str | None = None,
+    prompt: str,
+    identity_body: str | None = None,
+    heartbeat_body: str | None = None,
+    memory_body: str | None = None,
+) -> AssistantDetail:
+    prompt_body = prompt.strip()
+    if not prompt_body:
+        raise ValueError("Assistant prompt is required.")
+
+    assistant_record = initialize_assistant(
+        assistant_id,
+        title=title,
+        identity_body=identity_body,
+        heartbeat_body=heartbeat_body,
+        memory_body=memory_body,
+    )
+
+    now = _now_ms()
+    initial_message = UserMessage(
+        id=f"{assistant_id}:prompt",
+        createdAt=now,
+        updatedAt=now,
+        status="complete",
+        role="user",
+        content=prompt_body,
+    )
+    save_assistant_session(assistant_id, [initial_message], updated_at=now)
+    assistant_record = get_assistant(assistant_id) or assistant_record
+
+    return AssistantDetail(
+        **assistant_record.model_dump(mode="json"),
+        messages=[initial_message],
+    )
+
+
 def initialize_assistant(
-    chat_id: str,
+    assistant_id: str,
     *,
     title: str | None = None,
     identity_body: str | None = None,
     heartbeat_body: str | None = None,
     memory_body: str | None = None,
 ) -> Assistant:
-    existing_messages = load_chat_session(chat_id)
-    save_chat_session(chat_id, existing_messages)
-
-    assistant_title = (title or "").strip() or _default_title(chat_id)
-    identity_path, heartbeat_path, memory_path = _assistant_file_paths(chat_id)
-    _ensure_assistant_workspace_dirs(chat_id)
+    assistant_title = (title or "").strip() or _default_title(assistant_id)
+    identity_path, heartbeat_path, memory_path = _assistant_file_paths(assistant_id)
+    _ensure_assistant_workspace_dirs(assistant_id)
 
     if not identity_path.exists() or identity_body is not None:
         identity_path.write_text(
-            (identity_body.strip() if isinstance(identity_body, str) and identity_body.strip() else _default_identity(assistant_title)),
+            (
+                identity_body.strip()
+                if isinstance(identity_body, str) and identity_body.strip()
+                else _default_identity(assistant_title)
+            ),
             encoding="utf-8",
         )
     if not heartbeat_path.exists() or heartbeat_body is not None:
         heartbeat_path.write_text(
-            (heartbeat_body.strip() if isinstance(heartbeat_body, str) and heartbeat_body.strip() else _default_heartbeat()),
+            (
+                heartbeat_body.strip()
+                if isinstance(heartbeat_body, str) and heartbeat_body.strip()
+                else _default_heartbeat()
+            ),
             encoding="utf-8",
         )
     if not memory_path.exists() or memory_body is not None:
         memory_path.write_text(
-            (memory_body.strip() if isinstance(memory_body, str) and memory_body.strip() else _default_memory(assistant_title)),
+            (
+                memory_body.strip()
+                if isinstance(memory_body, str) and memory_body.strip()
+                else _default_memory(assistant_title)
+            ),
             encoding="utf-8",
         )
 
     now = _now_ms()
     assistants = load_assistants_registry()
-    existing = next((assistant for assistant in assistants if assistant.chatId == chat_id), None)
+    existing = next((assistant for assistant in assistants if assistant.id == assistant_id), None)
 
     relative_identity_path = _relative_to_workspace(identity_path)
     relative_heartbeat_path = _relative_to_workspace(heartbeat_path)
     relative_memory_path = _relative_to_workspace(memory_path)
 
     assistant = Assistant(
-        id=chat_id,
-        chatId=chat_id,
+        id=assistant_id,
         title=assistant_title,
         createdAt=existing.createdAt if existing is not None else now,
         updatedAt=now,
@@ -286,10 +415,9 @@ def initialize_assistant(
         memoryPath=relative_memory_path,
     )
 
-    next_assistants = [item for item in assistants if item.chatId != chat_id]
+    next_assistants = [item for item in assistants if item.id != assistant_id]
     next_assistants.append(assistant)
     save_assistants_registry(next_assistants)
-    _upsert_manifest_title(chat_id, assistant_title)
 
     return assistant
 

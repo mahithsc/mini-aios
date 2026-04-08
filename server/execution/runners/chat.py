@@ -5,8 +5,13 @@ import json
 
 from agno.agent import RunEvent as AgentRunEvent
 
+from aios_core.assistants import load_assistant_session
 from aios_core.agent import create_agent
-from aios_core.runtime_context import pop_chat_runtime_context, push_chat_runtime_context
+from aios_core.runtime_context import (
+    pop_chat_runtime_context,
+    push_assistant_runtime_context,
+    push_chat_runtime_context,
+)
 from aios_core.sessions import load_chat_session
 from server.execution.service import RunsService, build_run_event
 from server.lights import lights
@@ -34,34 +39,43 @@ class ChatRunner:
 
     async def execute(self, run: Run, runs_service: RunsService) -> None:
         chat_id = run.chatId
-        if not chat_id:
+        assistant_id = run.assistantId
+        if not chat_id and not assistant_id:
             await runs_service.emit_event(
                 run.id,
                 build_run_event(
                     run_id=run.id,
                     event_type="error",
                     chat_id=None,
+                    assistant_id=None,
                     data={"error": "Chat run is missing chatId."},
                 ),
             )
             return
 
-        messages = format_chat_messages_to_model_messages(load_chat_session(chat_id))
+        messages = format_chat_messages_to_model_messages(
+            load_assistant_session(assistant_id) if assistant_id else load_chat_session(chat_id or "")
+        )
         await runs_service.emit_event(
             run.id,
             build_run_event(
                 run_id=run.id,
                 event_type="started",
                 chat_id=chat_id,
+                assistant_id=assistant_id,
             ),
         )
 
         produced_output = False
-        runtime_context_tokens = push_chat_runtime_context(chat_id)
+        runtime_context_tokens = (
+            push_assistant_runtime_context(assistant_id)
+            if assistant_id
+            else push_chat_runtime_context(chat_id or "")
+        )
 
         try:
             await lights.set_mode("thinking")
-            agent = create_agent(chat_id=chat_id)
+            agent = create_agent(chat_id=chat_id, assistant_id=assistant_id)
             async for event in agent.arun(messages, stream=True, stream_events=True):
                 if event.event == AgentRunEvent.run_content and event.content is not None:
                     produced_output = True
@@ -71,6 +85,7 @@ class ChatRunner:
                             run_id=run.id,
                             event_type="token",
                             chat_id=chat_id,
+                            assistant_id=assistant_id,
                             data={"value": event.content},
                         ),
                     )
@@ -81,6 +96,7 @@ class ChatRunner:
                             run_id=run.id,
                             event_type="error",
                             chat_id=chat_id,
+                            assistant_id=assistant_id,
                             data={"error": event.content or "Agent run failed."},
                         ),
                     )
@@ -94,6 +110,7 @@ class ChatRunner:
                             run_id=run.id,
                             event_type="tool_call_start",
                             chat_id=chat_id,
+                            assistant_id=assistant_id,
                             data={
                                 "toolCallId": str(getattr(tool, "tool_call_id", None) or id(tool)),
                                 "toolName": tool.tool_name,
@@ -111,6 +128,7 @@ class ChatRunner:
                             run_id=run.id,
                             event_type="tool_call_end",
                             chat_id=chat_id,
+                            assistant_id=assistant_id,
                             data={
                                 "toolCallId": str(getattr(tool, "tool_call_id", None) or id(tool)),
                                 "toolName": tool.tool_name,
@@ -130,6 +148,7 @@ class ChatRunner:
                             run_id=run.id,
                             event_type="subagent_tool_event",
                             chat_id=chat_id,
+                            assistant_id=assistant_id,
                             data={
                                 "parentToolCallId": getattr(event, "parent_tool_call_id", None),
                                 "childRunId": getattr(event, "child_run_id", None),
@@ -152,6 +171,7 @@ class ChatRunner:
                     run_id=run.id,
                     event_type="error",
                     chat_id=chat_id,
+                    assistant_id=assistant_id,
                     data={"error": str(exc)},
                 ),
             )
@@ -167,6 +187,7 @@ class ChatRunner:
                     run_id=run.id,
                     event_type="error",
                     chat_id=chat_id,
+                    assistant_id=assistant_id,
                     data={"error": "Agent run ended without producing any output."},
                 ),
             )
@@ -178,5 +199,6 @@ class ChatRunner:
                 run_id=run.id,
                 event_type="completed",
                 chat_id=chat_id,
+                assistant_id=assistant_id,
             ),
         )

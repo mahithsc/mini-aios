@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .chat import UnixMs
+from .chat import ChatMessage, UnixMs
 
 
 class Assistant(BaseModel):
     id: str
-    chatId: str
     title: str
     createdAt: UnixMs
     updatedAt: UnixMs
@@ -17,9 +16,17 @@ class Assistant(BaseModel):
     memoryPath: str
 
 
-class AssistantInitRequest(BaseModel):
-    chatId: str
+class AssistantDetail(Assistant):
+    messages: list[ChatMessage]
+
+
+class AssistantCreateRequest(BaseModel):
+    id: str
     title: str | None = None
-    identityBody: str | None = None
-    heartbeatBody: str | None = None
-    memoryBody: str | None = None
+    prompt: str
+
+
+class AssistantSubmitRequest(BaseModel):
+    assistantId: str
+    messages: list[ChatMessage]
+    turnId: str | None = None
