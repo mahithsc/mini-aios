@@ -64,13 +64,23 @@ Keep timeout for bash commands in 20 seconds.
 """
 
 
-def _build_prompt():
-    prompt = BASE_PROMPT
+def _load_skills():
     try:
         with open(SKILLS_INDEX_PATH) as f:
-            skills = json.load(f)
+            raw_skills = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        skills = []
+        return []
+
+    if isinstance(raw_skills, dict):
+        raw_skills = raw_skills.get("skills", [])
+    if not isinstance(raw_skills, list):
+        return []
+    return [skill for skill in raw_skills if isinstance(skill, dict)]
+
+
+def _build_prompt():
+    prompt = BASE_PROMPT
+    skills = _load_skills()
 
     if skills:
         prompt += "\n<skills>\n"
