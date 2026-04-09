@@ -96,6 +96,7 @@ def _build_prompt(
         include_subagent_tool=include_subagent_tool,
         default_cron_timezone=DEFAULT_CRON_TIMEZONE,
         workspace_dir=str(resolve_workspace_path(".")),
+        is_assistant=assistant_id is not None,
         current_chat_id=current_context_id,
         current_chat_files_dir=current_chat_files_dir,
         current_chat_artifacts_dir=current_chat_artifacts_dir,
