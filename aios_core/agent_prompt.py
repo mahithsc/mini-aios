@@ -283,16 +283,12 @@ def build_agent_prompt(
                 "generative_ui",
                 f"""
                 You may create generative UI when a visual explanation or interactive artifact would materially help the user.
-                For this MVP, generative UI must be exactly one self-contained `index.html` using Tailwind via CDN and inline JavaScript only.
-                Do not create extra asset files for generative UI.
-                Place each generated UI in a new artifact folder under `{current_chat_artifacts_dir}/<artifact-id>/index.html`.
-                After writing the file, call `show_canvas(kind="html", ...)` with:
-                - `url`: the served HTML URL for that artifact
-                - `file_path`: the workspace-relative path to the `index.html`
-                - `mime_type`: `text/html`
-                - `name`: `index.html`
-                - `text_preview`: a short 1-2 sentence explanation of what the UI shows
-                Keep a short normal text response alongside the generated UI so the artifact complements the answer.
+                Use `generative_widget` for generative UI.
+                Call `generative_widget(function="documentation")` first when you need the widget guidelines.
+                Then call `generative_widget(function="generate", widget=...)` with the actual widget markup.
+                For this MVP, the widget should be a single self-contained HTML or SVG fragment with inline styling and any inline JavaScript needed.
+                Do not wrap the widget markup in markdown fences.
+                Keep a short normal text response alongside the generated widget so the artifact complements the answer.
                 """,
             )
         )

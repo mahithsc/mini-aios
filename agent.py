@@ -2,7 +2,7 @@ import json
 
 from tools import *
 from agno.agent import Agent
-from agno.models.openai.responses import OpenAIResponses
+from agno.models.anthropic import Claude
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -97,5 +97,5 @@ def create_agent():
     return Agent(
         system_message=_build_prompt(),
         tools=[read, write, edit, glob, grep, bash, cron],
-        model=OpenAIResponses("gpt-5.4", reasoning_effort="medium"),
+        model=Claude(id="claude-opus-4-6"),
     )

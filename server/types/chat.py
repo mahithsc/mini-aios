@@ -147,4 +147,3 @@ class OpenAIMessage(BaseModel):
 
 class OpenAIMessages(BaseModel):
     messages: list[OpenAIMessage]
-

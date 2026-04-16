@@ -1,7 +1,7 @@
 import os
 
 from agno.agent import Agent
-from agno.models.openai import OpenAIResponses
+from agno.models.anthropic import Claude
 from dotenv import load_dotenv
 
 from .assistants import (
@@ -35,6 +35,7 @@ from .tools.canvas import show_canvas
 from .tools.codex import codex
 from .tools.cron import cron
 from .tools.fetch import fetch
+from .tools.generative_widget import generative_widget
 from .tools.notify import notify
 from .tools.subagent import subagent
 from .workspace import resolve_workspace_path
@@ -43,6 +44,7 @@ load_dotenv()
 
 DEFAULT_CRON_TIMEZONE = os.getenv("AIOS_DEFAULT_TIMEZONE", "America/New_York")
 DEFAULT_SERVER_BASE_URL = os.getenv("AIOS_SERVER_BASE_URL", "http://localhost:8765")
+DEFAULT_MODEL_ID = os.getenv("AIOS_MODEL_ID", "claude-opus-4-6")
 
 
 BASE_TOOLS = [
@@ -61,6 +63,7 @@ BASE_TOOLS = [
     codex,
     cron,
     show_canvas,
+    generative_widget,
     notify,
     tavily_search,
     fetch,
@@ -121,7 +124,7 @@ def _create_agent_with_tools(
             assistant_id=assistant_id,
         ),
         tools=tools,
-        model=OpenAIResponses(id="gpt-5.4", reasoning_effort="medium"),
+        model=Claude(id=DEFAULT_MODEL_ID),
     )
 
 def create_main_agent(chat_id: str | None = None, assistant_id: str | None = None):

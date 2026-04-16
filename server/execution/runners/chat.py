@@ -20,7 +20,7 @@ from server.utils.utils import format_chat_messages_to_model_messages
 
 
 def _normalize_tool_result(tool_name: str, result: object) -> object:
-    if tool_name != "show_canvas" or not isinstance(result, str):
+    if tool_name not in {"show_canvas", "generative_widget"} or not isinstance(result, str):
         return result
 
     try:
