@@ -44,7 +44,7 @@ load_dotenv()
 
 DEFAULT_CRON_TIMEZONE = os.getenv("AIOS_DEFAULT_TIMEZONE", "America/New_York")
 DEFAULT_SERVER_BASE_URL = os.getenv("AIOS_SERVER_BASE_URL", "http://localhost:8765")
-DEFAULT_MODEL_ID = os.getenv("AIOS_MODEL_ID", "claude-opus-4-6")
+DEFAULT_MODEL_ID = os.getenv("AIOS_MODEL_ID", "claude-sonnet-4-5-20250929")
 
 
 BASE_TOOLS = [
