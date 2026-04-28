@@ -12,6 +12,8 @@ from fastapi.encoders import jsonable_encoder
 @dataclass(slots=True)
 class ClientConnection:
     id: str
+    user_id: str
+    email: str | None
     websocket: WebSocket
 
 
@@ -20,9 +22,20 @@ class ConnectionManager:
         self._connections: dict[str, ClientConnection] = {}
         self._lock = asyncio.Lock()
 
-    async def connect(self, websocket: WebSocket) -> ClientConnection:
+    async def connect(
+        self,
+        websocket: WebSocket,
+        *,
+        user_id: str,
+        email: str | None,
+    ) -> ClientConnection:
         await websocket.accept()
-        connection = ClientConnection(id=str(uuid.uuid4()), websocket=websocket)
+        connection = ClientConnection(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            email=email,
+            websocket=websocket,
+        )
 
         async with self._lock:
             self._connections[connection.id] = connection

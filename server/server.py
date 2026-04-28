@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 
 from aios_core.initialize import register_runtime_shutdown, shutdown_runtime, start_runtime
 from aios_core.sessions import get_chat_artifacts_dir
+from server.routes.billing import router as billing_router
 from server.execution.heartbeat import shutdown_heartbeat_scheduler, start_heartbeat_scheduler
 from server.notifications.runtime import shutdown_notification_service, start_notification_service
 from server.execution.runtime import shutdown_runs_service, start_runs_service
@@ -44,6 +45,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(billing_router)
 
 
 @app.get("/health")
