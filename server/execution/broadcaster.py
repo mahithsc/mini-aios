@@ -10,17 +10,23 @@ class RunBroadcaster:
         self._manager = manager
 
     async def broadcast_run_accepted(self, run: Run) -> None:
-        await self._manager.broadcast(
-            RunAcceptedWSEnvelope(
-                type="run.accepted",
-                data=run,
-            )
+        envelope = RunAcceptedWSEnvelope(
+            type="run.accepted",
+            data=run,
         )
 
+        if run.userId:
+            await self._manager.broadcast_to_user(run.userId, envelope)
+
+        return
+
     async def broadcast_run_event(self, event: RunEvent) -> None:
-        await self._manager.broadcast(
-            RunEventWSEnvelope(
-                type="run.event",
-                data=event,
-            )
+        envelope = RunEventWSEnvelope(
+            type="run.event",
+            data=event,
         )
+
+        if event.userId:
+            await self._manager.broadcast_to_user(event.userId, envelope)
+
+        return

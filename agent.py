@@ -3,13 +3,13 @@ import os
 
 from tools import *
 from agno.agent import Agent
-from agno.models.anthropic import Claude
+from agno.models.openai import OpenAIChat
 from dotenv import load_dotenv
 
 load_dotenv()
 
 SKILLS_INDEX_PATH = "skills/skills_index.json"
-DEFAULT_MODEL_ID = os.getenv("AIOS_MODEL_ID", "claude-sonnet-4-5-20250929")
+DEFAULT_MODEL_ID = os.getenv("AIOS_MODEL_ID", "gpt-4.1")
 
 BASE_PROMPT = """\
 You are a helpful coding agent
@@ -99,5 +99,5 @@ def create_agent():
     return Agent(
         system_message=_build_prompt(),
         tools=[read, write, edit, glob, grep, bash, cron],
-        model=Claude(id=DEFAULT_MODEL_ID),
+        model=OpenAIChat(id=DEFAULT_MODEL_ID),
     )

@@ -69,8 +69,13 @@ class RunsService:
     def register_runner(self, runner: RunExecutor) -> None:
         self._runners[runner.kind] = runner
 
-    async def submit_run(self, request: RunCreateRequest) -> Run:
-        run = self._store.create_run(request)
+    async def submit_run(
+        self,
+        request: RunCreateRequest,
+        *,
+        user_id: str | None = None,
+    ) -> Run:
+        run = self._store.create_run(request, user_id=user_id)
 
         async with self._lock:
             self._active_runs[run.id] = ActiveRun(run=run)
@@ -82,34 +87,54 @@ class RunsService:
             await self._queue.put(run.id)
         return run
 
-    def get_run(self, run_id: str) -> Run | None:
+    def get_run(self, run_id: str, *, user_id: str | None = None) -> Run | None:
         active = self._active_runs.get(run_id)
         if active is not None:
+            if user_id is not None and active.run.userId != user_id:
+                return None
             return active.run
-        return self._store.get_run(run_id)
+        return self._store.get_run(run_id, user_id=user_id)
 
     def list_active_runs(
         self,
         *,
+        user_id: str | None = None,
         kinds: list[RunKind] | None = None,
         limit: int | None = None,
     ) -> list[RunSnapshot]:
-        return self._store.list_snapshots(statuses=["queued", "running"], kinds=kinds, limit=limit)
+        return self._store.list_snapshots(
+            user_id=user_id,
+            statuses=["queued", "running"],
+            kinds=kinds,
+            limit=limit,
+        )
 
     def list_recent_runs(
         self,
         *,
+        user_id: str | None = None,
         statuses: list[RunStatus] | None = None,
         kinds: list[RunKind] | None = None,
         limit: int | None = None,
     ) -> list[RunSnapshot]:
-        return self._store.list_snapshots(statuses=statuses, kinds=kinds, limit=limit)
+        return self._store.list_snapshots(
+            user_id=user_id,
+            statuses=statuses,
+            kinds=kinds,
+            limit=limit,
+        )
 
     def get_snapshot(self, run_id: str) -> RunSnapshot | None:
         return self._store.get_snapshot(run_id)
 
-    def resume_events(self, run_id: str, after_sequence: int) -> list[RunEvent]:
-        return self._store.list_events_after(run_id, after_sequence)
+    def resume_events(
+        self,
+        run_id: str,
+        after_sequence: int,
+        *,
+        user_id: str | None = None,
+    ) -> list[RunEvent]:
+        return self._store.list_events_after(run_id, after_sequence, user_id=user_id)
 
     async def emit_event(self, run_id: str, event: RunEvent) -> RunEvent:
         run = self._store.get_run(run_id)
@@ -121,6 +146,7 @@ class RunsService:
             event.model_copy(
                 update={
                     "kind": run.kind,
+                    "userId": event.userId if event.userId is not None else run.userId,
                     "chatId": event.chatId if event.chatId is not None else run.chatId,
                     "assistantId": (
                         event.assistantId if event.assistantId is not None else run.assistantId
@@ -197,10 +223,13 @@ class RunsService:
         self._sync_active_run(snapshot)
         return snapshot
 
-    async def stop_run(self, run_id: str) -> bool:
+    async def stop_run(self, run_id: str, *, user_id: str | None = None) -> bool:
         async with self._lock:
             active = self._active_runs.get(run_id)
             if active is None:
+                return False
+
+            if user_id is not None and active.run.userId != user_id:
                 return False
 
             if active.cancel_requested:

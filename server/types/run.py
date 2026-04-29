@@ -23,6 +23,7 @@ RunEventType = Literal[
 
 class Run(BaseModel):
     id: str
+    userId: str | None = None
     kind: RunKind
     status: RunStatus
     createdAt: UnixMs
@@ -48,6 +49,7 @@ class RunEventPayload(BaseModel):
 
 class RunEvent(BaseModel):
     runId: str
+    userId: str | None = None
     kind: RunKind | None = None
     sequence: int
     createdAt: UnixMs
@@ -58,6 +60,7 @@ class RunEvent(BaseModel):
 
 class RunSnapshot(BaseModel):
     runId: str
+    userId: str | None = None
     kind: RunKind
     status: RunStatus
     updatedAt: UnixMs

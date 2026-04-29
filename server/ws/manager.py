@@ -66,6 +66,17 @@ class ConnectionManager:
         for connection_id in connection_ids:
             await self.send(connection_id, envelope)
 
+    async def broadcast_to_user(self, user_id: str, envelope: Any) -> None:
+        async with self._lock:
+            connection_ids = [
+                connection.id
+                for connection in self._connections.values()
+                if connection.user_id == user_id
+            ]
+
+        for connection_id in connection_ids:
+            await self.send(connection_id, envelope)
+
     async def _get_connection(self, connection_id: str) -> ClientConnection | None:
         async with self._lock:
             return self._connections.get(connection_id)

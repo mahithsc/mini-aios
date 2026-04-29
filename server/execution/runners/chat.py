@@ -12,7 +12,7 @@ from aios_core.runtime_context import (
     push_assistant_runtime_context,
     push_chat_runtime_context,
 )
-from aios_core.sessions import load_chat_session
+from server.chats import get_chat
 from server.execution.service import RunsService, build_run_event
 from server.lights import lights
 from server.types.run import Run
@@ -53,9 +53,38 @@ class ChatRunner:
             )
             return
 
-        messages = format_chat_messages_to_model_messages(
-            load_assistant_session(assistant_id) if assistant_id else load_chat_session(chat_id or "")
-        )
+        if assistant_id:
+            chat_messages = load_assistant_session(assistant_id)
+        else:
+            if run.userId is None or chat_id is None:
+                await runs_service.emit_event(
+                    run.id,
+                    build_run_event(
+                        run_id=run.id,
+                        event_type="error",
+                        chat_id=chat_id,
+                        assistant_id=assistant_id,
+                        data={"error": "Chat run is missing userId."},
+                    ),
+                )
+                return
+
+            chat = get_chat(run.userId, chat_id)
+            if chat is None:
+                await runs_service.emit_event(
+                    run.id,
+                    build_run_event(
+                        run_id=run.id,
+                        event_type="error",
+                        chat_id=chat_id,
+                        assistant_id=assistant_id,
+                        data={"error": "Chat history was not found."},
+                    ),
+                )
+                return
+            chat_messages = chat.messages
+
+        messages = format_chat_messages_to_model_messages(chat_messages)
         await runs_service.emit_event(
             run.id,
             build_run_event(

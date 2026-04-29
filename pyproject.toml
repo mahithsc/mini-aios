@@ -23,8 +23,3 @@ dependencies = [
     "adafruit-circuitpython-neopixel-spi>=1.0.15",
     "jetson-gpio>=2.1.12",
 ]
-
-[tool.uv.workspace]
-members = [
-    "work/sonosctl",
-]

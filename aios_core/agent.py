@@ -1,7 +1,7 @@
 import os
 
 from agno.agent import Agent
-from agno.models.anthropic import Claude
+from agno.models.openai import OpenAIChat
 from dotenv import load_dotenv
 
 from .assistants import (
@@ -44,7 +44,7 @@ load_dotenv()
 
 DEFAULT_CRON_TIMEZONE = os.getenv("AIOS_DEFAULT_TIMEZONE", "America/New_York")
 DEFAULT_SERVER_BASE_URL = os.getenv("AIOS_SERVER_BASE_URL", "http://localhost:8765")
-DEFAULT_MODEL_ID = os.getenv("AIOS_MODEL_ID", "claude-sonnet-4-5-20250929")
+DEFAULT_MODEL_ID = os.getenv("AIOS_MODEL_ID", "gpt-4.1")
 
 
 BASE_TOOLS = [
@@ -124,7 +124,7 @@ def _create_agent_with_tools(
             assistant_id=assistant_id,
         ),
         tools=tools,
-        model=Claude(id=DEFAULT_MODEL_ID),
+        model=OpenAIChat(id=DEFAULT_MODEL_ID),
     )
 
 def create_main_agent(chat_id: str | None = None, assistant_id: str | None = None):

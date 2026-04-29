@@ -10,7 +10,8 @@ from aios_core.assistants import (
     save_assistant_session,
 )
 from aios_core.crons import cron_manager
-from aios_core.sessions import list_chat_history, load_chat_session, save_chat_session, update_chat_status
+from server.auth import AuthenticatedUser
+from server.chats import get_chat, list_chats, save_chat
 from server.notifications.runtime import get_notification_service
 from server.execution.runtime import get_runs_service
 from server.types.assistant import AssistantCreateRequest, AssistantSubmitRequest
@@ -39,18 +40,20 @@ def _append_user_message(messages: list[ChatMessage], user_message: UserMessage)
 
     return [*messages, user_message]
 
-def _conversation_messages_for_turn(chat: Chat) -> list[ChatMessage]:
+
+def _conversation_messages_for_turn(user_id: str, chat: Chat) -> list[ChatMessage]:
     """History + latest user turn to send to the model.
 
     The desktop client sends the full in-memory transcript (including assistant
-    tool_call_* events). Older code only re-read disk + appended the latest user
-    message, which dropped everything the client had for assistant turns.
+    tool_call_* events). Prefer that payload when it is at least as long as the
+    persisted Supabase transcript so tool results and ordering stay aligned with
+    the UI.
 
-    Prefer the client payload when it is at least as long as the persisted
-    session so tool results and ordering stay aligned with the UI. If the
-    client is shorter (e.g. not yet hydrated), fall back to disk + latest user.
+    If the client is shorter (e.g. not yet hydrated), fall back to persisted
+    history + the latest user turn.
     """
-    persisted_messages = load_chat_session(chat.id)
+    persisted_chat = get_chat(user_id, chat.id)
+    persisted_messages = persisted_chat.messages if persisted_chat is not None else []
     latest_user_message = _get_latest_user_message(chat.messages)
     client_messages = list(chat.messages)
 
@@ -71,7 +74,7 @@ def _assistant_messages_for_turn(request: AssistantSubmitRequest) -> list[ChatMe
     return _append_user_message(persisted_messages, latest_user_message)
 
 
-async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
+async def router(envelope: WSEnvelope, user: AuthenticatedUser) -> AsyncIterator[dict[str, object]]:
     if envelope.type == "assistant.create":
         if envelope.data is None:
             return
@@ -124,7 +127,8 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
                 kind="chat",
                 assistantId=request.assistantId,
                 turnId=request.turnId,
-            )
+            ),
+            user_id=user.id,
         )
         return
 
@@ -138,27 +142,20 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
     if envelope.type == "chat-history":
         if isinstance(envelope.data, str):
             chat_id = envelope.data
-            chat_history = next((chat for chat in list_chat_history() if chat.id == chat_id), None)
+            chat = get_chat(user.id, chat_id)
 
-            if chat_history is None:
+            if chat is None:
                 return
 
             yield WSEnvelope(
                 type="chat-history",
-                data=Chat(
-                    id=chat_history.id,
-                    title=chat_history.title,
-                    createdAt=chat_history.createdAt,
-                    updatedAt=chat_history.updatedAt,
-                    status=chat_history.status,
-                    messages=load_chat_session(chat_id),
-                ).model_dump(mode="json"),
+                data=chat.model_dump(mode="json"),
             )
             return
 
         yield WSEnvelope(
             type="chat-history",
-            data=[chat.model_dump(mode="json") for chat in list_chat_history()],
+            data=[chat.model_dump(mode="json") for chat in list_chats(user.id)],
         )
         return
 
@@ -188,6 +185,7 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
             )
         )
         snapshots = get_runs_service().list_recent_runs(
+            user_id=user.id,
             statuses=request.statuses,
             kinds=request.kinds,
             limit=request.limit,
@@ -209,7 +207,14 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
         )
         yield WSEnvelope(
             type="run.resume",
-            data=[event.model_dump(mode="json") for event in get_runs_service().resume_events(request.runId, request.afterSequence)],
+            data=[
+                event.model_dump(mode="json")
+                for event in get_runs_service().resume_events(
+                    request.runId,
+                    request.afterSequence,
+                    user_id=user.id,
+                )
+            ],
         )
         return
 
@@ -234,7 +239,7 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
             if isinstance(envelope.data, RunStopRequest)
             else RunStopRequest.model_validate(envelope.data)
         )
-        await get_runs_service().stop_run(stop_request.runId)
+        await get_runs_service().stop_run(stop_request.runId, user_id=user.id)
         return
 
     if envelope.type in {"chat", "chat.submit"}:
@@ -249,14 +254,25 @@ async def router(envelope: WSEnvelope) -> AsyncIterator[dict[str, object]]:
             turn_id = raw_turn_id if isinstance(raw_turn_id, str) else None
         else:
             chat = envelope.data if isinstance(envelope.data, Chat) else Chat.model_validate(envelope.data)
-        next_messages = _conversation_messages_for_turn(chat)
-        save_chat_session(chat.id, next_messages)
-        update_chat_status(chat.id, "streaming")
+        next_messages = _conversation_messages_for_turn(user.id, chat)
+        persisted_chat = get_chat(user.id, chat.id)
+        base_chat = persisted_chat if persisted_chat is not None else chat
+        save_chat(
+            user.id,
+            base_chat.model_copy(
+                update={
+                    "title": base_chat.title or chat.title,
+                    "status": "streaming",
+                    "messages": next_messages,
+                }
+            ),
+        )
         await get_runs_service().submit_run(
             RunCreateRequest(
                 kind="chat",
                 chatId=chat.id,
                 turnId=turn_id,
-            )
+            ),
+            user_id=user.id,
         )
         return
