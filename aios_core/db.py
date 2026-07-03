@@ -34,7 +34,7 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS notifications (
                 id              TEXT PRIMARY KEY,
-                source          TEXT NOT NULL CHECK (source IN ('chat', 'cron', 'heartbeat', 'system')),
+                source          TEXT NOT NULL CHECK (source IN ('chat', 'cron', 'system')),
                 source_id       TEXT,
                 run_id          TEXT,
                 chat_id         TEXT,

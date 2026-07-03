@@ -4,11 +4,6 @@ from agno.agent import Agent
 from agno.models.anthropic import Claude
 from dotenv import load_dotenv
 
-from .assistants import (
-    get_assistant_artifacts_dir,
-    get_assistant_files_dir,
-    load_assistant_context,
-)
 from .agent_prompt import build_agent_prompt
 from .skills import load_skills
 from .sessions import (
@@ -30,7 +25,6 @@ from .tools import (
     tavily_search,
     write,
 )
-from .tools.assistant import assistant
 from .tools.canvas import show_canvas
 from .tools.codex import codex
 from .tools.cron import cron
@@ -48,7 +42,6 @@ DEFAULT_MODEL_ID = os.getenv("AIOS_MODEL_ID", "claude-opus-4-6")
 
 
 BASE_TOOLS = [
-    assistant,
     read,
     write,
     edit,
@@ -74,18 +67,11 @@ MAIN_TOOLS = [*BASE_TOOLS, subagent]
 def _build_prompt(
     include_subagent_tool: bool = True,
     chat_id: str | None = None,
-    assistant_id: str | None = None,
 ):
     current_chat_files_dir = None
     current_chat_artifacts_dir = None
     current_chat_artifact_url_template = None
-    assistant_context = None
-    current_context_id = assistant_id or chat_id
-    if assistant_id:
-        current_chat_files_dir = str(get_assistant_files_dir(assistant_id))
-        current_chat_artifacts_dir = str(get_assistant_artifacts_dir(assistant_id))
-        assistant_context = load_assistant_context(assistant_id)
-    elif chat_id:
+    if chat_id:
         current_chat_files_dir = str(get_chat_files_dir(chat_id))
         current_chat_artifacts_dir = str(get_chat_artifacts_dir(chat_id))
         sanitized_chat_id = get_chat_session_relative_dir(chat_id).name
@@ -93,20 +79,15 @@ def _build_prompt(
             f"{DEFAULT_SERVER_BASE_URL}/session-artifacts/"
             f"{sanitized_chat_id}/<artifact-id>/index.html"
         )
-        assistant_context = load_assistant_context(chat_id)
 
     return build_agent_prompt(
         include_subagent_tool=include_subagent_tool,
         default_cron_timezone=DEFAULT_CRON_TIMEZONE,
         workspace_dir=str(resolve_workspace_path(".")),
-        is_assistant=assistant_id is not None,
-        current_chat_id=current_context_id,
+        current_chat_id=chat_id,
         current_chat_files_dir=current_chat_files_dir,
         current_chat_artifacts_dir=current_chat_artifacts_dir,
         current_chat_artifact_url_template=current_chat_artifact_url_template,
-        assistant_title=assistant_context.assistant.title if assistant_context else None,
-        assistant_identity=assistant_context.identity if assistant_context else None,
-        assistant_memory=assistant_context.memory if assistant_context else None,
         skills=load_skills(),
     )
 
@@ -115,33 +96,29 @@ def _create_agent_with_tools(
     tools,
     include_subagent_tool: bool,
     chat_id: str | None = None,
-    assistant_id: str | None = None,
 ):
     return Agent(
         system_message=_build_prompt(
             include_subagent_tool=include_subagent_tool,
             chat_id=chat_id,
-            assistant_id=assistant_id,
         ),
         tools=tools,
         model=Claude(id=DEFAULT_MODEL_ID),
     )
 
-def create_main_agent(chat_id: str | None = None, assistant_id: str | None = None):
+def create_main_agent(chat_id: str | None = None):
     return _create_agent_with_tools(
         MAIN_TOOLS,
         include_subagent_tool=True,
         chat_id=chat_id,
-        assistant_id=assistant_id,
     )
 
 
-def create_subagent_worker(chat_id: str | None = None, assistant_id: str | None = None):
+def create_subagent_worker(chat_id: str | None = None):
     return _create_agent_with_tools(
         BASE_TOOLS,
         include_subagent_tool=False,
         chat_id=chat_id,
-        assistant_id=assistant_id,
     )
 
 
@@ -149,9 +126,8 @@ def create_agent(
     include_subagent: bool = True,
     *,
     chat_id: str | None = None,
-    assistant_id: str | None = None,
 ):
     # Backward-compatible alias used across the codebase.
     if include_subagent:
-        return create_main_agent(chat_id=chat_id, assistant_id=assistant_id)
-    return create_subagent_worker(chat_id=chat_id, assistant_id=assistant_id)
+        return create_main_agent(chat_id=chat_id)
+    return create_subagent_worker(chat_id=chat_id)

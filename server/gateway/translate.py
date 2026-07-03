@@ -17,7 +17,7 @@ class ChatRunEventTranslator:
         self._run_text: dict[str, list[str]] = {}
 
     def translate(self, event: RunEvent) -> list[tuple[str, dict[str, Any]]]:
-        if event.kind != "chat" or not event.chatId or event.assistantId:
+        if event.kind != "chat" or not event.chatId:
             return []
 
         data = event.event.data or {}

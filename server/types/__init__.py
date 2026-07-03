@@ -1,9 +1,3 @@
-from .assistant import (
-    Assistant,
-    AssistantCreateRequest,
-    AssistantDetail,
-    AssistantSubmitRequest,
-)
 from .chat import (
     AssistantMessage,
     AttachmentKind,
@@ -50,10 +44,6 @@ from .run import (
     RunStatus,
 )
 __all__ = [
-    "Assistant",
-    "AssistantCreateRequest",
-    "AssistantDetail",
-    "AssistantSubmitRequest",
     "AssistantMessage",
     "AttachmentKind",
     "BaseLLMEvent",

@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from .chat import UnixMs
 
-RunKind = Literal["chat", "cron", "heartbeat"]
+RunKind = Literal["chat", "cron"]
 RunStatus = Literal["queued", "running", "completed", "error", "cancelled"]
 RunEventType = Literal[
     "started",
@@ -28,7 +28,6 @@ class Run(BaseModel):
     createdAt: UnixMs
     updatedAt: UnixMs
     chatId: str | None = None
-    assistantId: str | None = None
     sourceId: str | None = None
     turnId: str | None = None
 
@@ -36,7 +35,6 @@ class Run(BaseModel):
 class RunCreateRequest(BaseModel):
     kind: RunKind
     chatId: str | None = None
-    assistantId: str | None = None
     sourceId: str | None = None
     turnId: str | None = None
 
@@ -52,7 +50,6 @@ class RunEvent(BaseModel):
     sequence: int
     createdAt: UnixMs
     chatId: str | None = None
-    assistantId: str | None = None
     event: RunEventPayload
 
 
@@ -62,7 +59,6 @@ class RunSnapshot(BaseModel):
     status: RunStatus
     updatedAt: UnixMs
     chatId: str | None = None
-    assistantId: str | None = None
     lastSequence: int
     preview: str | None = None
     activeStep: str | None = None
