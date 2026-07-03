@@ -1,26 +1,17 @@
 from __future__ import annotations
 
+from server.gateway.bus import GatewayEventBus, get_gateway_bus
 from server.types.run import Run, RunEvent
-from server.types.ws import RunAcceptedWSEnvelope, RunEventWSEnvelope
-from server.ws.manager import ConnectionManager, connection_manager
 
 
 class RunBroadcaster:
-    def __init__(self, manager: ConnectionManager = connection_manager) -> None:
-        self._manager = manager
+    """Routes run lifecycle events into the gateway event bus (REST + SSE)."""
+
+    def __init__(self, bus: GatewayEventBus | None = None) -> None:
+        self._bus = bus or get_gateway_bus()
 
     async def broadcast_run_accepted(self, run: Run) -> None:
-        await self._manager.broadcast(
-            RunAcceptedWSEnvelope(
-                type="run.accepted",
-                data=run,
-            )
-        )
+        await self._bus.handle_run_accepted(run)
 
     async def broadcast_run_event(self, event: RunEvent) -> None:
-        await self._manager.broadcast(
-            RunEventWSEnvelope(
-                type="run.event",
-                data=event,
-            )
-        )
+        await self._bus.handle_run_event(event)
