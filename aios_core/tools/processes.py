@@ -12,11 +12,28 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from ..runtime_context import default_chat_files_cwd, resolve_chat_files_path
+from .ansi_strip import strip_ansi
 
 _DEFAULT_SHELL = "/bin/bash"
 _DEFAULT_OUTPUT_LIMIT = 200_000
 _READ_CHUNK_SIZE = 4096
 _DONE_MARKER_RE = re.compile(r"__AIOS_CMD_DONE__:([a-f0-9]+):(-?\d+)")
+_MAX_SESSIONS = 8
+_MAX_POLL_WAIT = 30.0
+# Internal command-wrapper lines (markers + their echoed printf/unset
+# commands) are protocol, not terminal output — never show them to the model.
+_MARKER_SCRUB_RE = re.compile(
+    r"^.*(?:__AIOS_CMD_(?:START|DONE)__|__aios_exit_code).*(?:\r?\n)?",
+    re.MULTILINE,
+)
+_ALLOWED_SIGNALS = {
+    "SIGTERM", "SIGKILL", "SIGINT", "SIGHUP", "SIGQUIT",
+    "SIGUSR1", "SIGUSR2", "SIGSTOP", "SIGCONT",
+}
+
+
+def _scrub_output(text: str) -> str:
+    return strip_ansi(_MARKER_SCRUB_RE.sub("", text))
 
 
 def _normalize_env(env: dict[str, str] | None) -> dict[str, str]:
@@ -50,6 +67,7 @@ class ProcessSession:
     reader_thread: threading.Thread | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
     active_command: dict[str, object] | None = None
+    scan_pos: int = 0
 
     def start(self) -> "ProcessSession":
         master_fd, slave_fd = pty.openpty()
@@ -156,7 +174,7 @@ class ProcessSession:
             current_cursor = self.buffer_start_cursor + len(self.buffer)
             normalized_cursor = max(int(cursor or 0), self.buffer_start_cursor)
             offset = normalized_cursor - self.buffer_start_cursor
-            output = self.buffer[offset:]
+            output = _scrub_output(self.buffer[offset:])
             return {
                 "process_id": self.id,
                 "pid": self.pid,
@@ -175,6 +193,11 @@ class ProcessSession:
         if self.proc is None or self.pid is None:
             return {"error": f"process is not running: {self.id}"}
 
+        if signal_name not in _ALLOWED_SIGNALS:
+            return {
+                "error": f"unsupported signal: {signal_name} "
+                f"(use one of {', '.join(sorted(_ALLOWED_SIGNALS))})"
+            }
         signal_value = getattr(signal, signal_name, None)
         if signal_value is None:
             return {"error": f"unknown signal: {signal_name}"}
@@ -285,6 +308,7 @@ class ProcessSession:
                 trim = len(self.buffer) - self.output_limit
                 self.buffer = self.buffer[trim:]
                 self.buffer_start_cursor += trim
+                self.scan_pos = max(self.scan_pos - trim, 0)
 
             self.last_activity_at = time.time()
             self._update_command_state_locked()
@@ -295,7 +319,12 @@ class ProcessSession:
         if self.active_command.get("status") != "running":
             return
 
-        for marker in _DONE_MARKER_RE.finditer(self.buffer):
+        # Only scan buffer appended since the last pass (with a small overlap
+        # for markers split across chunks) — a whole-buffer rescan per append
+        # is O(n^2) on chatty processes.
+        scan_start = max(self.scan_pos - 80, 0)
+        self.scan_pos = len(self.buffer)
+        for marker in _DONE_MARKER_RE.finditer(self.buffer, scan_start):
             command_id = marker.group(1)
             if command_id != self.active_command.get("id"):
                 continue
@@ -361,6 +390,24 @@ class ProcessManager:
         if not resolved_cwd.is_dir():
             return {"error": f"path is not a directory: {resolved_cwd}"}
 
+        # Prune dead sessions, then enforce the concurrency cap so leaked
+        # sessions can't accumulate forever in a long-lived server process.
+        stale: list[ProcessSession] = []
+        with self._lock:
+            for session_id, existing in list(self._sessions.items()):
+                if not existing.is_alive() and time.time() - existing.last_activity_at > 60:
+                    stale.append(self._sessions.pop(session_id))
+            active_count = len(self._sessions)
+        for existing in stale:
+            existing.close()
+        if active_count >= _MAX_SESSIONS:
+            with self._lock:
+                session_ids = ", ".join(self._sessions)
+            return {
+                "error": f"too many process sessions ({active_count}/{_MAX_SESSIONS}). "
+                f"Kill one first with process_kill. Active: {session_ids}"
+            }
+
         try:
             session = ProcessSession(
                 cwd=str(resolved_cwd),
@@ -396,10 +443,22 @@ class ProcessManager:
             return session.send_command(command)
         return session.send_input(input_text)
 
-    def poll(self, process_id: str | None, cursor: int = 0) -> dict[str, object]:
+    def poll(self, process_id: str | None, cursor: int = 0, wait: float = 0) -> dict[str, object]:
         session = self.get(process_id)
         if isinstance(session, dict):
             return session
+        # Optional blocking wait: return early when the active command
+        # completes (or the shell dies), so callers don't have to spam poll.
+        wait = min(max(float(wait or 0), 0.0), _MAX_POLL_WAIT)
+        if wait > 0:
+            deadline = time.monotonic() + wait
+            while time.monotonic() < deadline:
+                with session.lock:
+                    command = session.active_command
+                    running = bool(command and command.get("status") == "running")
+                if not running or not session.is_alive():
+                    break
+                time.sleep(0.15)
         return session.poll(cursor=cursor)
 
     def kill(self, process_id: str | None, signal_name: str = "SIGTERM") -> dict[str, object]:
@@ -428,6 +487,12 @@ class ProcessManager:
 _process_manager = ProcessManager()
 
 
+def close_all_processes():
+    """Terminate every PTY session. Called from runtime shutdown so spawned
+    shells (own process groups) don't outlive the server as orphans."""
+    _process_manager.close_all()
+
+
 def process_spawn(
     cwd: str = None,
     env: dict[str, str] = None,
@@ -451,8 +516,17 @@ def process_send(
 def process_poll(
     process_id: str,
     cursor: int = 0,
+    wait: float = 0,
 ):
-    return _process_manager.poll(process_id=process_id, cursor=cursor)
+    """Read incremental output from a PTY session.
+
+    Args:
+        process_id: Session id from process_spawn.
+        cursor: Resume position from the previous poll's next_cursor.
+        wait: Block up to this many seconds (max 30) until the active
+            command completes, instead of returning immediately.
+    """
+    return _process_manager.poll(process_id=process_id, cursor=cursor, wait=wait)
 
 
 def process_kill(
@@ -471,6 +545,7 @@ def processes(
     command: str = None,
     input: str = None,
     cursor: int = 0,
+    wait: float = 0,
     signal: str = "SIGTERM",
 ):
     if action == "spawn":
@@ -480,7 +555,7 @@ def processes(
     if action == "send":
         return process_send(process_id=process_id, command=command, input=input)
     if action == "poll":
-        return process_poll(process_id=process_id, cursor=cursor)
+        return process_poll(process_id=process_id, cursor=cursor, wait=wait)
     if action == "kill":
         return process_kill(process_id=process_id, signal=signal)
     return {
