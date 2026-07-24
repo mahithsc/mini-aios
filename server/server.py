@@ -3,19 +3,19 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from aios_core.initialize import register_runtime_shutdown, shutdown_runtime, start_runtime
 from aios_core.sessions import get_chat_artifacts_dir
-from server.routes.billing import router as billing_router
-from server.execution.heartbeat import shutdown_heartbeat_scheduler, start_heartbeat_scheduler
+from server.gateway.routes import router as gateway_router
 from server.notifications.runtime import shutdown_notification_service, start_notification_service
+from server.routes.billing import router as billing_router
 from server.execution.runtime import shutdown_runs_service, start_runs_service
 from server.lights import lights
+from server.transcriptions import TranscriptionResponse, transcribe_upload
 from server.uploads import save_uploads
-from server.ws.connection import handle_websocket_connection
 
 register_runtime_shutdown()
 
@@ -26,12 +26,10 @@ async def lifespan(_: FastAPI):
     await lights.start()
     await start_notification_service()
     await start_runs_service()
-    await start_heartbeat_scheduler()
     try:
         yield
     finally:
         await lights.shutdown()
-        await shutdown_heartbeat_scheduler()
         await shutdown_notification_service()
         await shutdown_runs_service()
         shutdown_runtime()
@@ -47,6 +45,7 @@ app.add_middleware(
 )
 
 app.include_router(billing_router)
+app.include_router(gateway_router)
 
 
 @app.get("/health")
@@ -63,9 +62,19 @@ async def upload_attachments(
     return {"attachments": [attachment.model_dump(mode="json") for attachment in attachments]}
 
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket) -> None:
-    await handle_websocket_connection(websocket)
+@app.post("/transcriptions", response_model=TranscriptionResponse)
+async def create_transcription(
+    file: UploadFile = File(...),
+    startedAt: int | None = Form(None),
+    endedAt: int | None = Form(None),
+    mimeType: str | None = Form(None),
+) -> TranscriptionResponse:
+    return await transcribe_upload(
+        file,
+        started_at=startedAt,
+        ended_at=endedAt,
+        mime_type=mimeType,
+    )
 
 
 @app.get("/session-artifacts/{chat_id}/{artifact_path:path}")

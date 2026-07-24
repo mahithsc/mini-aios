@@ -3,7 +3,6 @@ from __future__ import annotations
 from contextvars import ContextVar
 from pathlib import Path
 
-from .assistants import get_assistant_artifacts_dir, get_assistant_files_dir
 from .sessions import get_chat_artifacts_dir, get_chat_files_dir
 from .workspace import ensure_workspace_dir, resolve_workspace_path
 
@@ -15,9 +14,7 @@ _CURRENT_CHAT_ARTIFACTS_DIR: ContextVar[str | None] = ContextVar(
     "aios_current_chat_artifacts_dir", default=None
 )
 _WORKSPACE_ROOT_SENTINELS = {
-    "assistants",
     "cron_logs",
-    "heartbeat_logs",
     "runs",
     "session",
     "skills",
@@ -29,14 +26,6 @@ def push_chat_runtime_context(chat_id: str) -> tuple[object, object, object]:
         _CURRENT_CHAT_ID.set(chat_id),
         _CURRENT_CHAT_FILES_DIR.set(str(get_chat_files_dir(chat_id))),
         _CURRENT_CHAT_ARTIFACTS_DIR.set(str(get_chat_artifacts_dir(chat_id))),
-    )
-
-
-def push_assistant_runtime_context(assistant_id: str) -> tuple[object, object, object]:
-    return (
-        _CURRENT_CHAT_ID.set(assistant_id),
-        _CURRENT_CHAT_FILES_DIR.set(str(get_assistant_files_dir(assistant_id))),
-        _CURRENT_CHAT_ARTIFACTS_DIR.set(str(get_assistant_artifacts_dir(assistant_id))),
     )
 
 

@@ -30,10 +30,11 @@ def get_db_connection(db_path: str = DB_PATH) -> sqlite3.Connection:
 
 def initialize_app_db(db_path: str = DB_PATH) -> None:
     with get_db_connection(db_path) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS notifications (
                 id              TEXT PRIMARY KEY,
-                source          TEXT NOT NULL CHECK (source IN ('chat', 'cron', 'heartbeat', 'system')),
+                source          TEXT NOT NULL CHECK (source IN ('chat', 'cron', 'system')),
                 source_id       TEXT,
                 run_id          TEXT,
                 chat_id         TEXT,
@@ -56,4 +57,15 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_notifications_source
                 ON notifications(source, source_id);
+
+            CREATE TABLE IF NOT EXISTS gateway_events (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id      TEXT NOT NULL,
+                type            TEXT NOT NULL,
+                payload_json    TEXT NOT NULL,
+                created_at      TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_gateway_events_session_id_id
+                ON gateway_events(session_id, id);
         """)

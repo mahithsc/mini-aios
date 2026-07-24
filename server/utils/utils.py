@@ -8,9 +8,8 @@ from agno.models.message import Message
 from aios_core.workspace import resolve_workspace_path
 from pydantic import TypeAdapter
 
-from server.types.chat import AssistantMessage, Chat, ChatMessage, MessageAttachment, UserMessage
+from server.types.chat import AssistantMessage, ChatMessage, MessageAttachment, UserMessage
 from server.uploads import AUDIO_FILE_EXTENSIONS, AUDIO_MIME_TYPES, TEXT_FILE_EXTENSIONS, TEXT_MIME_TYPES
-from server.types.ws import WSEnvelope
 
 CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
 
@@ -245,8 +244,3 @@ def _truncate_message_history(messages: list[Message]) -> list[Message]:
 def format_chat_messages_to_model_messages(messages: list[ChatMessage]) -> list[Message]:
     model_messages = [_to_model_message(CHAT_MESSAGE_ADAPTER.validate_python(message)) for message in messages]
     return _truncate_message_history(model_messages)
-
-
-def format_from_envelope_to_messages(envelope: WSEnvelope) -> list[Message]:
-    chat_data = envelope.data if isinstance(envelope.data, Chat) else Chat.model_validate(envelope.data)
-    return format_chat_messages_to_model_messages(chat_data.messages)

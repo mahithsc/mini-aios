@@ -5,14 +5,12 @@ import json
 
 from agno.agent import RunEvent as AgentRunEvent
 
-from aios_core.assistants import load_assistant_session
 from aios_core.agent import create_agent
 from aios_core.runtime_context import (
     pop_chat_runtime_context,
-    push_assistant_runtime_context,
     push_chat_runtime_context,
 )
-from server.chats import get_chat
+from aios_core.sessions import load_chat_session
 from server.execution.service import RunsService, build_run_event
 from server.lights import lights
 from server.types.run import Run
@@ -39,72 +37,34 @@ class ChatRunner:
 
     async def execute(self, run: Run, runs_service: RunsService) -> None:
         chat_id = run.chatId
-        assistant_id = run.assistantId
-        if not chat_id and not assistant_id:
+        if not chat_id:
             await runs_service.emit_event(
                 run.id,
                 build_run_event(
                     run_id=run.id,
                     event_type="error",
                     chat_id=None,
-                    assistant_id=None,
                     data={"error": "Chat run is missing chatId."},
                 ),
             )
             return
 
-        if assistant_id:
-            chat_messages = load_assistant_session(assistant_id)
-        else:
-            if run.userId is None or chat_id is None:
-                await runs_service.emit_event(
-                    run.id,
-                    build_run_event(
-                        run_id=run.id,
-                        event_type="error",
-                        chat_id=chat_id,
-                        assistant_id=assistant_id,
-                        data={"error": "Chat run is missing userId."},
-                    ),
-                )
-                return
-
-            chat = get_chat(run.userId, chat_id)
-            if chat is None:
-                await runs_service.emit_event(
-                    run.id,
-                    build_run_event(
-                        run_id=run.id,
-                        event_type="error",
-                        chat_id=chat_id,
-                        assistant_id=assistant_id,
-                        data={"error": "Chat history was not found."},
-                    ),
-                )
-                return
-            chat_messages = chat.messages
-
-        messages = format_chat_messages_to_model_messages(chat_messages)
+        messages = format_chat_messages_to_model_messages(load_chat_session(chat_id))
         await runs_service.emit_event(
             run.id,
             build_run_event(
                 run_id=run.id,
                 event_type="started",
                 chat_id=chat_id,
-                assistant_id=assistant_id,
             ),
         )
 
         produced_output = False
-        runtime_context_tokens = (
-            push_assistant_runtime_context(assistant_id)
-            if assistant_id
-            else push_chat_runtime_context(chat_id or "")
-        )
+        runtime_context_tokens = push_chat_runtime_context(chat_id)
 
         try:
             await lights.set_mode("thinking")
-            agent = create_agent(chat_id=chat_id, assistant_id=assistant_id)
+            agent = create_agent(chat_id=chat_id)
             async for event in agent.arun(messages, stream=True, stream_events=True):
                 if event.event == AgentRunEvent.run_content and event.content is not None:
                     produced_output = True
@@ -113,9 +73,7 @@ class ChatRunner:
                         build_run_event(
                             run_id=run.id,
                             event_type="token",
-                            chat_id=chat_id,
-                            assistant_id=assistant_id,
-                            data={"value": event.content},
+                            chat_id=chat_id,                            data={"value": event.content},
                         ),
                     )
                 elif event.event == AgentRunEvent.run_error:
@@ -124,9 +82,7 @@ class ChatRunner:
                         build_run_event(
                             run_id=run.id,
                             event_type="error",
-                            chat_id=chat_id,
-                            assistant_id=assistant_id,
-                            data={"error": event.content or "Agent run failed."},
+                            chat_id=chat_id,                            data={"error": event.content or "Agent run failed."},
                         ),
                     )
                     return
@@ -138,9 +94,7 @@ class ChatRunner:
                         build_run_event(
                             run_id=run.id,
                             event_type="tool_call_start",
-                            chat_id=chat_id,
-                            assistant_id=assistant_id,
-                            data={
+                            chat_id=chat_id,                            data={
                                 "toolCallId": str(getattr(tool, "tool_call_id", None) or id(tool)),
                                 "toolName": tool.tool_name,
                                 "input": tool.tool_args,
@@ -156,9 +110,7 @@ class ChatRunner:
                         build_run_event(
                             run_id=run.id,
                             event_type="tool_call_end",
-                            chat_id=chat_id,
-                            assistant_id=assistant_id,
-                            data={
+                            chat_id=chat_id,                            data={
                                 "toolCallId": str(getattr(tool, "tool_call_id", None) or id(tool)),
                                 "toolName": tool.tool_name,
                                 "output": normalized_result,
@@ -176,9 +128,7 @@ class ChatRunner:
                         build_run_event(
                             run_id=run.id,
                             event_type="subagent_tool_event",
-                            chat_id=chat_id,
-                            assistant_id=assistant_id,
-                            data={
+                            chat_id=chat_id,                            data={
                                 "parentToolCallId": getattr(event, "parent_tool_call_id", None),
                                 "childRunId": getattr(event, "child_run_id", None),
                                 "childEventType": getattr(event, "child_event_type", None),
@@ -199,9 +149,7 @@ class ChatRunner:
                 build_run_event(
                     run_id=run.id,
                     event_type="error",
-                    chat_id=chat_id,
-                    assistant_id=assistant_id,
-                    data={"error": str(exc)},
+                    chat_id=chat_id,                    data={"error": str(exc)},
                 ),
             )
             return
@@ -215,9 +163,7 @@ class ChatRunner:
                 build_run_event(
                     run_id=run.id,
                     event_type="error",
-                    chat_id=chat_id,
-                    assistant_id=assistant_id,
-                    data={"error": "Agent run ended without producing any output."},
+                    chat_id=chat_id,                    data={"error": "Agent run ended without producing any output."},
                 ),
             )
             return
@@ -227,7 +173,5 @@ class ChatRunner:
             build_run_event(
                 run_id=run.id,
                 event_type="completed",
-                chat_id=chat_id,
-                assistant_id=assistant_id,
-            ),
+                chat_id=chat_id,            ),
         )

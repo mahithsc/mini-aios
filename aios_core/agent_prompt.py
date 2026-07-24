@@ -6,17 +6,21 @@ from zoneinfo import ZoneInfo
 
 _BASE_TOOLS_BLOCK = """
 "read": (
-    "Read file with line numbers (file path, not directory)",
+    "Read a text file with line numbers. Paginated: offset is the 0-based "
+    "start line, limit defaults to 2000 lines. Truncated reads say which "
+    "offset to continue from. Suggests similar paths when the file is missing.",
     {"path": "string", "offset": "number?", "limit": "number?"},
     read,
 ),
 "write": (
-    "Write content to file",
+    "Write content to a file (atomic temp-file + rename). Warns when "
+    "overwriting a file that was modified since you last read it.",
     {"path": "string", "content": "string"},
     write,
 ),
 "edit": (
-    "Replace old with new in file (old must be unique unless all=true)",
+    "Replace old with new in file (old must match exactly and be unique "
+    "unless all=true). File line endings are preserved automatically.",
     {"path": "string", "old": "string", "new": "string", "all": "boolean?"},
     edit,
 ),
@@ -28,18 +32,24 @@ _BASE_TOOLS_BLOCK = """
     show_canvas,
 ),
 "glob": (
-    "Find files by pattern, sorted by mtime",
+    "Find files by pattern, newest first (dependency/VCS dirs are skipped "
+    "unless the pattern names them)",
     {"pat": "string", "path": "string?"},
     glob,
 ),
 "grep": (
-    "Search files for regex pattern",
-    {"pat": "string", "path": "string?"},
+    "Search file contents for a regex pattern (ripgrep-backed when available). "
+    "Returns file:line:content lines; page with limit/offset when truncated.",
+    {"pat": "string", "path": "string?", "glob": "string? (filename filter, e.g. '*.py')",
+     "context": "number? (context lines around matches)",
+     "limit": "number?", "offset": "number?"},
     grep,
 ),
 "bash": (
-    "Run shell command",
-    {"cmd": "string", "timeout": "number?"},
+    "Run a non-interactive shell command. On timeout the whole process group "
+    "is killed; output is capped and exit codes are reported. Use "
+    "process_spawn for long-running or interactive commands.",
+    {"cmd": "string", "timeout": "number? (seconds)", "cwd": "string?"},
     bash,
 ),
 "process_spawn": (
@@ -58,8 +68,10 @@ _BASE_TOOLS_BLOCK = """
     process_send,
 ),
 "process_poll": (
-    "Read incremental output and status from an existing PTY session.",
-    {"process_id": "string", "cursor": "number?"},
+    "Read incremental output and status from an existing PTY session. "
+    "Pass wait (seconds, max 30) to block until the active command finishes "
+    "instead of polling repeatedly.",
+    {"process_id": "string", "cursor": "number?", "wait": "number?"},
     process_poll,
 ),
 "process_kill": (
@@ -83,17 +95,10 @@ _BASE_TOOLS_BLOCK = """
      "cron_id": "string? (first 8 chars suffice)"},
     cron,
 ),
-"assistant": (
-    "Manage the current chat as a persistent assistant (actions: init, get, list). "
-    "Use init when the user wants ongoing ownership, monitoring, or long-running responsibility.",
-    {"action": "string", "title": "string?", "identity": "string?",
-     "heartbeat": "string?", "memory": "string?"},
-    assistant,
-),
 "notify": (
     "Create a user notification shown in the app inbox/toasts.",
     {"title": "string", "body": "string", "level": "string? (info|success|warning|error)",
-     "source": "string? (chat|cron|heartbeat|system)", "source_id": "string?",
+     "source": "string? (chat|cron|system)", "source_id": "string?",
      "run_id": "string?", "chat_id": "string?"},
     notify,
 ),
@@ -149,14 +154,10 @@ def build_agent_prompt(
     include_subagent_tool: bool,
     default_cron_timezone: str,
     workspace_dir: str,
-    is_assistant: bool = False,
     current_chat_id: str | None = None,
     current_chat_files_dir: str | None = None,
     current_chat_artifacts_dir: str | None = None,
     current_chat_artifact_url_template: str | None = None,
-    assistant_title: str | None = None,
-    assistant_identity: str | None = None,
-    assistant_memory: str | None = None,
     skills: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     scheduler_now = datetime.now(ZoneInfo(default_cron_timezone)).strftime(
@@ -183,7 +184,6 @@ def build_agent_prompt(
             Prefer inspect-first behavior. For non-trivial work, gather a small amount of context before committing to a plan.
             Ask follow-up questions when the task is ambiguous, risky, or long-horizon enough that clarification will materially improve the result.
             Before creating a new project or folder, inspect the workspace for existing relevant work and extend it when possible instead of creating a duplicate.
-            When the user wants ongoing ownership over a domain or task, convert the current chat into an assistant with the `assistant` tool instead of requiring a separate setup flow.
             """,
         ),
         _section(
@@ -292,71 +292,6 @@ def build_agent_prompt(
                 """,
             )
         )
-
-    if is_assistant:
-        assistant_name = assistant_title or current_chat_id or "assistant"
-        sections.append(
-            _section(
-    "assistant",
-    f"""
-    You are a special kind of agent called an assistant. Your job is to help the user with long-running tasks, goals, and missions. Think about what they are trying to achieve, stay engaged over time, and help them make real progress.
-
-    Don’t overload the user with questions. Ask focused questions one at a time when clarification is actually needed.
-
-    Here’s how:
-    - You are an excellent researcher. Research the internet deeply and thoroughly when research will help the mission.
-    - Make scripts, websites, dashboards, trackers, and other tools for the user when they would reduce effort, improve clarity, or help the user stay consistent.
-    - Don’t assume too much. When the user says they want to do something, treat it like a mission and clarify the important unknowns.
-    - But do not stay stuck in clarification mode. Once you know enough to make a useful first version, build it.
-
-    Artifact strategy:
-    - Create artifacts iteratively, not all at once.
-    - Prefer small, useful, single-purpose artifacts over waiting to make one big perfect system.
-    - If one concrete subproblem is clear, build a simple artifact for that subproblem right away.
-    - Examples: calorie tracker, weight tracker, workout logger, check-in sheet, progress dashboard.
-    - Build early, then refine, extend, or connect artifacts over time.
-
-    Planning:
-    - Planning is important. Use subagents when they would help you think through next steps, evaluate options, or decide what to build next.
-    - Planning should help you decide what artifact, workflow, or strategy would be most useful now.
-    - Do not overplan when a useful v1 artifact can already be created.
-
-    Research:
-    - When doing research, keep clarifying the mission and improving your understanding.
-    - But research should serve execution. Do not research endlessly without turning what you learn into something useful for the user.
-
-    Remember: you are not just a chatbot. You are a real assistant. Do not over-index on long text responses. Focus on creating artifacts, tools, workflows, and systems that help the user achieve their goals.
-
-    Consult the user before major builds or when direction is unclear. This is collaborative work and you should stay aligned with the user.
-    But brief alignment is enough — do not stall. If the user’s goal is clear and a small operational artifact would obviously help, create the v1 artifact and refine it later.
-
-    MAKING TOOLS IS EXTREMELY IMPORTANT. YOU SHOULD BE CREATING TOOLS THE USER CAN ACTUALLY USE. THIS IS A CORE PART OF YOUR JOB. YOU ARE A LONG-RUNNING ASSISTANT, NOT JUST A CHATBOT.
-    """,
-)
-        )
-
-        if assistant_identity:
-            sections.append(
-                _section(
-                    "assistant_identity",
-                    f"""
-                    Assistant identity file:
-
-                    {assistant_identity}
-                    """,
-                )
-            )
-        if assistant_memory:
-            sections.append(
-                _section(
-                    "assistant_memory",
-                    f"""
-                    Assistant memory file:
-
-                    {assistant_memory}
-                    """,
-                )
-            )
 
     if include_subagent_tool:
         sections.append(

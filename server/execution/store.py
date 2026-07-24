@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from pathlib import Path
 
-from aios_core.assistants import load_assistant_session, save_assistant_session
 from aios_core.initialize import RUNS_EVENTS_DIR, RUNS_METADATA_DIR, RUNS_SNAPSHOTS_DIR
-from pydantic import TypeAdapter
+from aios_core.sessions import load_chat_session, save_chat_session, update_chat_status
+from pydantic import TypeAdapter, ValidationError
 
-from server.chats import get_chat, save_chat
 from server.types.chat import AssistantMessage, ChatMessage, LLMEvent, MessageStatus
 from server.types.run import Run, RunCreateRequest, RunEvent, RunKind, RunSnapshot, RunStatus
 
 LLM_EVENT_ADAPTER = TypeAdapter(LLMEvent)
+log = logging.getLogger(__name__)
 
 
 class RunStore:
@@ -64,9 +65,6 @@ class RunStore:
     def project_chat_state(self, run_id: str, chat_id: str, event: RunEvent) -> None:
         raise NotImplementedError
 
-    def project_assistant_state(self, run_id: str, assistant_id: str, event: RunEvent) -> None:
-        raise NotImplementedError
-
 
 class FileRunStore(RunStore):
     def __init__(
@@ -90,7 +88,6 @@ class FileRunStore(RunStore):
             createdAt=now,
             updatedAt=now,
             chatId=request.chatId,
-            assistantId=request.assistantId,
             sourceId=request.sourceId,
             turnId=request.turnId,
         )
@@ -145,7 +142,6 @@ class FileRunStore(RunStore):
             status=status,
             updatedAt=updated_at,
             chatId=run.chatId,
-            assistantId=run.assistantId,
             lastSequence=last_sequence,
             preview=preview,
             activeStep=active_step,
@@ -175,7 +171,11 @@ class FileRunStore(RunStore):
         snapshots: list[RunSnapshot] = []
 
         for path in self._snapshots_dir.glob("*.json"):
-            snapshot = RunSnapshot.model_validate(json.loads(path.read_text(encoding="utf-8")))
+            try:
+                snapshot = RunSnapshot.model_validate(json.loads(path.read_text(encoding="utf-8")))
+            except (ValidationError, json.JSONDecodeError, OSError):
+                log.warning("Skipping unreadable run snapshot at %s", path)
+                continue
             if user_id is not None and snapshot.userId != user_id:
                 continue
             if allowed_statuses and snapshot.status not in allowed_statuses:
@@ -214,66 +214,17 @@ class FileRunStore(RunStore):
 
     def project_chat_state(self, run_id: str, chat_id: str, event: RunEvent) -> None:
         llm_event = _run_event_to_chat_event(event)
-        if llm_event is None or event.userId is None:
-            return
-
-        parsed_event = LLM_EVENT_ADAPTER.validate_python(llm_event)
-        if not _is_terminal_chat_event(parsed_event):
-            return
-
-        self._project_completed_chat_run(run_id, chat_id, event.userId)
-
-    def project_assistant_state(self, run_id: str, assistant_id: str, event: RunEvent) -> None:
-        llm_event = _run_event_to_chat_event(event)
         if llm_event is None:
             return
 
-        messages = load_assistant_session(assistant_id)
-        save_assistant_session(
-            assistant_id,
-            _apply_chat_event(messages, run_id, llm_event),
-            updated_at=event.createdAt,
-        )
+        messages = load_chat_session(chat_id)
+        save_chat_session(chat_id, _apply_chat_event(messages, run_id, llm_event))
+        update_chat_status(chat_id, _chat_status_for_event(LLM_EVENT_ADAPTER.validate_python(llm_event)))
 
     def _ensure_directories(self) -> None:
         self._metadata_dir.mkdir(parents=True, exist_ok=True)
         self._snapshots_dir.mkdir(parents=True, exist_ok=True)
         self._events_dir.mkdir(parents=True, exist_ok=True)
-
-    def _project_completed_chat_run(self, run_id: str, chat_id: str, user_id: str) -> None:
-        chat = get_chat(user_id, chat_id)
-        if chat is None:
-            return
-
-        messages = [
-            message
-            for message in chat.messages
-            if not (isinstance(message, AssistantMessage) and message.runId == run_id)
-        ]
-        last_event: LLMEvent | None = None
-
-        for run_event in self.list_events_after(run_id, 0, user_id=user_id):
-            chat_event = _run_event_to_chat_event(run_event)
-            if chat_event is None:
-                continue
-
-            parsed_event = LLM_EVENT_ADAPTER.validate_python(chat_event)
-            messages = _apply_chat_event(messages, run_id, chat_event)
-            last_event = parsed_event
-
-        if last_event is None:
-            return
-
-        save_chat(
-            user_id,
-            chat.model_copy(
-                update={
-                    "updatedAt": last_event.createdAt,
-                    "status": _chat_status_for_event(last_event),
-                    "messages": messages,
-                }
-            ),
-        )
 
     def _metadata_path(self, run_id: str) -> Path:
         return self._metadata_dir / f"{run_id}.json"
@@ -473,10 +424,6 @@ def _assistant_status_for_event(event: LLMEvent) -> MessageStatus:
     if event_type == "stream_end":
         return "complete"
     return "streaming"
-
-
-def _is_terminal_chat_event(event: LLMEvent) -> bool:
-    return event.type in {"stream_end", "stream_error", "stream_cancelled"}
 
 
 def _chat_status_for_event(event: LLMEvent) -> str:

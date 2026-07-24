@@ -180,6 +180,18 @@ def start_runtime(start_crons: bool = True):
 
 def shutdown_runtime(stop_crons: bool = True):
     global _RUNTIME_STARTED
+
+    # PTY sessions run in their own process groups (start_new_session), so
+    # anything the agent spawned would survive this process as an orphan
+    # unless closed here. Runs even when the runtime never started — tool
+    # calls can create sessions without start_runtime.
+    try:
+        from .tools.processes import close_all_processes
+
+        close_all_processes()
+    except Exception:
+        pass
+
     if not _RUNTIME_STARTED:
         return
 

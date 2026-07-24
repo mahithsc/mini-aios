@@ -148,9 +148,6 @@ class RunsService:
                     "kind": run.kind,
                     "userId": event.userId if event.userId is not None else run.userId,
                     "chatId": event.chatId if event.chatId is not None else run.chatId,
-                    "assistantId": (
-                        event.assistantId if event.assistantId is not None else run.assistantId
-                    ),
                 }
             ),
         )
@@ -163,8 +160,6 @@ class RunsService:
         )
         if run is not None and run.chatId:
             self._store.project_chat_state(run_id, run.chatId, persisted_event)
-        if run is not None and run.assistantId:
-            self._store.project_assistant_state(run_id, run.assistantId, persisted_event)
 
         self._sync_active_run(snapshot)
         await self._broadcaster.broadcast_run_event(persisted_event)
@@ -384,14 +379,12 @@ def build_run_event(
     event_type: RunEventType,
     data: dict[str, object] | None = None,
     chat_id: str | None = None,
-    assistant_id: str | None = None,
 ) -> RunEvent:
     return RunEvent(
         runId=run_id,
         sequence=0,
         createdAt=int(time.time() * 1000),
         chatId=chat_id,
-        assistantId=assistant_id,
         event={
             "type": event_type,
             "data": data,

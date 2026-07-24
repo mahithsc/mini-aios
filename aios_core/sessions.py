@@ -454,6 +454,39 @@ def list_chat_history() -> list[ChatMetadata]:
     return history
 
 
+def update_chat_title(chat_id: str, title: str | None) -> None:
+    manifest = load_manifest()
+    session_entry = next((entry for entry in manifest if entry.get("id") == chat_id), None)
+
+    if session_entry is None:
+        return
+
+    if title:
+        session_entry["title"] = title
+    else:
+        session_entry.pop("title", None)
+
+    save_manifest(manifest)
+
+
+def get_chat_metadata(chat_id: str) -> ChatMetadata | None:
+    entry = _get_session_entry(chat_id)
+    if entry is None:
+        return None
+
+    messages = load_chat_session(chat_id)
+    fallback_timestamp = _get_manifest_timestamp_ms(entry.get("addedAt"))
+    status = entry.get("status")
+
+    return ChatMetadata(
+        id=chat_id,
+        title=_get_chat_title(messages) or entry.get("title"),
+        createdAt=messages[0].createdAt if messages else fallback_timestamp,
+        updatedAt=messages[-1].updatedAt if messages else fallback_timestamp,
+        status=status if status in VALID_CHAT_STATUSES else None,
+    )
+
+
 def update_chat_status(chat_id: str, status: str | None) -> None:
     manifest = load_manifest()
     session_entry = next((entry for entry in manifest if entry.get("id") == chat_id), None)
