@@ -12,15 +12,52 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 
-from aios_core.sessions import save_chat_session, update_chat_status
+from aios_core.sessions import load_chat_session, save_chat_session, update_chat_status
 from server.execution.runtime import get_runs_service
-from server.types.chat import Chat
+from server.types.chat import Chat, ChatMessage, UserMessage
 from server.types.run import RunCreateRequest
-from server.ws.router import _conversation_messages_for_turn
 
 _POLL_INTERVAL = 0.15
 _MAX_DURATION_SECONDS = 600.0
 _TERMINAL = {"completed", "error"}
+
+
+def _get_latest_user_message(chat: Chat) -> UserMessage:
+    for message in reversed(chat.messages):
+        if isinstance(message, UserMessage):
+            return message
+
+    raise ValueError("Chat payload does not contain a user message.")
+
+
+def _append_user_message(
+    messages: list[ChatMessage], user_message: UserMessage
+) -> list[ChatMessage]:
+    if messages and isinstance(messages[-1], UserMessage) and messages[-1].id == user_message.id:
+        return messages
+
+    return [*messages, user_message]
+
+
+def _conversation_messages_for_turn(chat: Chat) -> list[ChatMessage]:
+    """History + latest user turn to send to the model.
+
+    The desktop client sends the full in-memory transcript (including assistant
+    tool_call_* events). Older code only re-read disk + appended the latest user
+    message, which dropped everything the client had for assistant turns.
+
+    Prefer the client payload when it is at least as long as the persisted
+    session so tool results and ordering stay aligned with the UI. If the
+    client is shorter (e.g. not yet hydrated), fall back to disk + latest user.
+    """
+    persisted_messages = load_chat_session(chat.id)
+    latest_user_message = _get_latest_user_message(chat)
+    client_messages = list(chat.messages)
+
+    if len(client_messages) >= len(persisted_messages):
+        return client_messages
+
+    return _append_user_message(persisted_messages, latest_user_message)
 
 
 def _sse(payload: dict) -> str:

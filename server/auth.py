@@ -39,9 +39,3 @@ async def require_local_token(authorization: str | None = Header(default=None)) 
 
     if not _matches(provided, expected):
         raise HTTPException(status_code=401, detail="Invalid or missing device token")
-
-
-def is_valid_ws_token(token: str | None) -> bool:
-    """Token check for the WebSocket handshake (token arrives as a query param,
-    since the browser WebSocket API can't set headers)."""
-    return _matches(token, _expected_local_token())

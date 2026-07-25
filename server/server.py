@@ -4,7 +4,7 @@ import os
 import socket
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, WebSocket
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from aios_core.db import clear_device_link, get_device_link, get_or_create_device_id
 from aios_core.initialize import register_runtime_shutdown, shutdown_runtime, start_runtime
 from aios_core.sessions import list_chat_history, load_chat_session
-from server.auth import is_valid_ws_token, require_local_token
+from server.auth import require_local_token
 from server.commands import handle_device_command
 from server.discovery import AiosDiscovery
 from server.message import stream_message
@@ -24,7 +24,6 @@ from server.tunnel import start_if_paired, stop_cloudflared
 from server.notifications.runtime import shutdown_notification_service, start_notification_service
 from server.execution.runtime import shutdown_runs_service, start_runs_service
 from server.uploads import save_uploads
-from server.ws.connection import handle_websocket_connection
 
 register_runtime_shutdown()
 
@@ -227,13 +226,3 @@ async def upload_attachments(
 ) -> dict[str, object]:
     attachments = await save_uploads(chatId, files)
     return {"attachments": [attachment.model_dump(mode="json") for attachment in attachments]}
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket) -> None:
-    # Token arrives as a query param (?token=) since the WebSocket API can't
-    # set headers. Reject before accepting the socket if it's missing/invalid.
-    if not is_valid_ws_token(websocket.query_params.get("token")):
-        await websocket.close(code=1008)
-        return
-    await handle_websocket_connection(websocket)

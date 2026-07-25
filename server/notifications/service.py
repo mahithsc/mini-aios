@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import time
 import uuid
 
 from aios_core.db import DB_PATH, get_db_connection
-from server.notifications.broadcaster import NotificationBroadcaster
 from server.types.notification import Notification, NotificationListResponse, NotificationSource
 
 DEFAULT_NOTIFICATION_LOOKBACK_DAYS = 7
@@ -16,10 +14,8 @@ class NotificationService:
         self,
         *,
         db_path: str = DB_PATH,
-        broadcaster: NotificationBroadcaster,
     ) -> None:
         self._db_path = db_path
-        self._broadcaster = broadcaster
 
     async def start(self) -> None:
         return
@@ -76,7 +72,8 @@ class NotificationService:
                 ),
             )
 
-        self._broadcast(self._broadcaster.broadcast_created(notification))
+        # The desktop learns about new notifications by polling
+        # `GET /notifications`; nothing is pushed here.
         return notification
 
     def list_notifications(
@@ -124,7 +121,6 @@ class NotificationService:
                 (updated.updatedAt, updated.dismissedAt, notification_id),
             )
 
-        self._broadcast(self._broadcaster.broadcast_dismissed(updated))
         return updated
 
     def get_notification(self, notification_id: str) -> Notification | None:
@@ -159,13 +155,3 @@ class NotificationService:
             updatedAt=int(row[9]),
             dismissedAt=int(row[10]) if row[10] is not None else None,
         )
-
-    @staticmethod
-    def _broadcast(coroutine) -> None:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            asyncio.run(coroutine)
-            return
-
-        loop.create_task(coroutine)

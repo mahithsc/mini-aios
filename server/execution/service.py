@@ -5,7 +5,6 @@ import time
 from dataclasses import dataclass
 from typing import Protocol
 
-from server.execution.broadcaster import RunBroadcaster
 from server.execution.store import RunStore
 from server.types.run import Run, RunCreateRequest, RunEvent, RunEventType, RunSnapshot
 
@@ -26,12 +25,10 @@ class RunsService:
     def __init__(
         self,
         store: RunStore,
-        broadcaster: RunBroadcaster,
         *,
         worker_count: int = 1,
     ) -> None:
         self._store = store
-        self._broadcaster = broadcaster
         self._worker_count = max(1, worker_count)
         self._active_runs: dict[str, ActiveRun] = {}
         self._queue: asyncio.Queue[str] = asyncio.Queue()
@@ -106,7 +103,8 @@ class RunsService:
             self._store.project_chat_state(run_id, run.chatId, persisted_event)
 
         self._sync_active_run(snapshot)
-        await self._broadcaster.broadcast_run_event(persisted_event)
+        # Run events are read back by the desktop over `/message` SSE (which
+        # polls the store by sequence); nothing is pushed here.
         return persisted_event
 
     def mark_completed(self, run_id: str) -> RunSnapshot:

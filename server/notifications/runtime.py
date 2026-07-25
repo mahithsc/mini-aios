@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from server.notifications.broadcaster import NotificationBroadcaster
 from server.notifications.service import NotificationService
 
 _notification_service: NotificationService | None = None
@@ -9,9 +8,7 @@ _notification_service: NotificationService | None = None
 def initialize_notification_service() -> NotificationService:
     global _notification_service
     if _notification_service is None:
-        _notification_service = NotificationService(
-            broadcaster=NotificationBroadcaster(),
-        )
+        _notification_service = NotificationService()
     return _notification_service
 
 
