@@ -15,6 +15,7 @@ import time
 import httpx
 
 from aios_core.db import get_or_create_device_id, save_device_link
+from server.tunnel import start_cloudflared
 
 
 class PairingError(Exception):
@@ -52,6 +53,8 @@ async def complete_pairing(pairing_code: str) -> dict[str, object]:
 
     data = resp.json()
     local_token = secrets.token_urlsafe(32)
+    connector_token = data.get("connector_token")
+    hostname = data.get("hostname")
 
     save_device_link(
         device_token=data["device_token"],
@@ -60,7 +63,13 @@ async def complete_pairing(pairing_code: str) -> dict[str, object]:
         owner_email=data["user"]["email"],
         slug=data["slug"],
         paired_at=int(time.time()),
+        connector_token=connector_token,
+        hostname=hostname,
     )
+
+    # Bring up the box's public tunnel now that we have its connector token.
+    if connector_token:
+        start_cloudflared(connector_token)
 
     return {
         "status": "paired",
@@ -68,4 +77,5 @@ async def complete_pairing(pairing_code: str) -> dict[str, object]:
         "local_token": local_token,
         "owner_email": data["user"]["email"],
         "slug": data["slug"],
+        "hostname": hostname,
     }

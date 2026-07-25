@@ -15,7 +15,7 @@ from server.commands import handle_device_command
 from server.discovery import AiosDiscovery
 from server.pairing import PairingError, complete_pairing
 from server.relay_client import relay_client
-from server.tunnel import start_tunnel, stop_tunnel
+from server.tunnel import start_if_paired, stop_cloudflared
 from server.notifications.runtime import shutdown_notification_service, start_notification_service
 from server.execution.runtime import shutdown_runs_service, start_runs_service
 from server.uploads import save_uploads
@@ -45,12 +45,13 @@ async def lifespan(app: FastAPI):
         except Exception as exc:  # advertising is best-effort; never block startup
             print(f"[discovery] mDNS advertise failed: {exc}")
 
-    # Public tunnel so the desktop can reach this box directly when off-LAN.
+    # Public Cloudflare Tunnel so the desktop can reach this box when off-LAN.
+    # Starts only if already paired (has a connector token); otherwise it's
+    # started right after pairing. Best-effort — never blocks startup.
     if os.getenv("AIOS_DISABLE_TUNNEL", "").strip().lower() not in _TRUTHY:
-        port = int(os.getenv("AIOS_SERVER_PORT", "8765"))
         try:
-            await start_tunnel(port)
-        except Exception as exc:  # tunnel is best-effort; never block startup
+            start_if_paired()
+        except Exception as exc:
             print(f"[tunnel] failed to start: {exc}")
 
     # Outbound relay to the cloud. Self-activates once paired, so it's safe to
@@ -61,7 +62,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await relay_client.stop()
-        stop_tunnel()
+        stop_cloudflared()
         if app.state.discovery is not None:
             await app.state.discovery.stop()
         await shutdown_notification_service()
@@ -135,6 +136,7 @@ async def unpair() -> dict[str, object]:
     """Forget this box's account binding. Clears the local link and restarts the
     relay client so its held socket drops and it goes idle until re-paired."""
     clear_device_link()
+    stop_cloudflared()
     await relay_client.stop()
     relay_client.start()
     return {"status": "unpaired"}

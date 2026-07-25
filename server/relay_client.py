@@ -21,7 +21,6 @@ import websockets
 
 from aios_core.db import get_device_link
 from server.commands import handle_device_command
-from server.tunnel import get_public_url
 
 _RECONNECT_DELAY = 3.0
 _UNPAIRED_POLL = 2.0
@@ -84,7 +83,7 @@ class RelayClient:
                 await asyncio.sleep(_RECONNECT_DELAY)
 
     def _heartbeat_payload(self) -> str:
-        return json.dumps({"type": "heartbeat", "public_url": get_public_url()})
+        return json.dumps({"type": "heartbeat"})
 
     async def _session(self, ws) -> None:
         # Report our public tunnel URL immediately so the cloud can hand it to

@@ -40,13 +40,15 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
             );
 
             CREATE TABLE IF NOT EXISTS device_link (
-                id             INTEGER PRIMARY KEY CHECK (id = 1),
-                device_token   TEXT NOT NULL,
-                local_token    TEXT NOT NULL,
-                owner_user_id  TEXT NOT NULL,
-                owner_email    TEXT,
-                slug           TEXT,
-                paired_at      INTEGER NOT NULL
+                id               INTEGER PRIMARY KEY CHECK (id = 1),
+                device_token     TEXT NOT NULL,
+                local_token      TEXT NOT NULL,
+                owner_user_id    TEXT NOT NULL,
+                owner_email      TEXT,
+                slug             TEXT,
+                paired_at        INTEGER NOT NULL,
+                connector_token  TEXT,
+                hostname         TEXT
             );
 
             CREATE TABLE IF NOT EXISTS notifications (
@@ -75,6 +77,12 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS idx_notifications_source
                 ON notifications(source, source_id);
         """)
+        # Upgrade older device_link tables (columns added after first release).
+        for column in ("connector_token TEXT", "hostname TEXT"):
+            try:
+                conn.execute(f"ALTER TABLE device_link ADD COLUMN {column}")
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
 
 def get_or_create_device_id(db_path: str = DB_PATH) -> str:
@@ -106,6 +114,8 @@ def save_device_link(
     owner_email: str | None,
     slug: str | None,
     paired_at: int,
+    connector_token: str | None = None,
+    hostname: str | None = None,
     db_path: str = DB_PATH,
 ) -> None:
     """Persist the result of a successful pairing (single-row `device_link`)."""
@@ -114,33 +124,43 @@ def save_device_link(
         conn.execute(
             """
             INSERT INTO device_link
-                (id, device_token, local_token, owner_user_id, owner_email, slug, paired_at)
-            VALUES (1, ?, ?, ?, ?, ?, ?)
+                (id, device_token, local_token, owner_user_id, owner_email, slug,
+                 paired_at, connector_token, hostname)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 device_token = excluded.device_token,
                 local_token = excluded.local_token,
                 owner_user_id = excluded.owner_user_id,
                 owner_email = excluded.owner_email,
                 slug = excluded.slug,
-                paired_at = excluded.paired_at
+                paired_at = excluded.paired_at,
+                connector_token = excluded.connector_token,
+                hostname = excluded.hostname
             """,
-            (device_token, local_token, owner_user_id, owner_email, slug, paired_at),
+            (
+                device_token, local_token, owner_user_id, owner_email, slug,
+                paired_at, connector_token, hostname,
+            ),
         )
 
 
 def get_device_link(db_path: str = DB_PATH) -> dict | None:
-    """Return the current pairing (owner/tokens/slug), or None if unpaired."""
+    """Return the current pairing (owner/tokens/slug/tunnel), or None if unpaired."""
     initialize_app_db(db_path)
     with get_db_connection(db_path) as conn:
         row = conn.execute(
             """
-            SELECT device_token, local_token, owner_user_id, owner_email, slug, paired_at
+            SELECT device_token, local_token, owner_user_id, owner_email, slug,
+                   paired_at, connector_token, hostname
             FROM device_link WHERE id = 1
             """
         ).fetchone()
     if row is None:
         return None
-    keys = ("device_token", "local_token", "owner_user_id", "owner_email", "slug", "paired_at")
+    keys = (
+        "device_token", "local_token", "owner_user_id", "owner_email", "slug",
+        "paired_at", "connector_token", "hostname",
+    )
     return dict(zip(keys, row))
 
 
