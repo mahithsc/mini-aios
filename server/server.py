@@ -11,10 +11,12 @@ from pydantic import BaseModel
 
 from aios_core.db import clear_device_link, get_device_link, get_or_create_device_id
 from aios_core.initialize import register_runtime_shutdown, shutdown_runtime, start_runtime
+from aios_core.sessions import list_chat_history, load_chat_session
 from server.auth import is_valid_ws_token, require_local_token
 from server.commands import handle_device_command
 from server.discovery import AiosDiscovery
 from server.message import stream_message
+from server.notifications.runtime import get_notification_service
 from server.types.chat import Chat
 from server.pairing import PairingError, complete_pairing
 from server.relay_client import relay_client
@@ -169,6 +171,53 @@ async def message(body: MessageRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/chats", dependencies=[Depends(require_local_token)])
+async def list_chats() -> list[dict[str, object]]:
+    """Chat-history list. HTTP equivalent of the `/ws` `chat-history` (no id)."""
+    return [chat.model_dump(mode="json") for chat in list_chat_history()]
+
+
+@app.get("/chats/{chat_id}", dependencies=[Depends(require_local_token)])
+async def get_chat(chat_id: str) -> dict[str, object]:
+    """A single chat with its messages. HTTP equivalent of `chat-history` by id."""
+    meta = next((chat for chat in list_chat_history() if chat.id == chat_id), None)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return Chat(
+        id=meta.id,
+        title=meta.title,
+        createdAt=meta.createdAt,
+        updatedAt=meta.updatedAt,
+        status=meta.status,
+        messages=load_chat_session(chat_id),
+    ).model_dump(mode="json")
+
+
+@app.get("/notifications", dependencies=[Depends(require_local_token)])
+async def list_notifications() -> dict[str, object]:
+    """Notification list. HTTP equivalent of the `/ws` `notification.list`.
+    The desktop polls this to surface new notifications (replaces the WS push)."""
+    return get_notification_service().list_notifications().model_dump(mode="json")
+
+
+@app.post("/notifications/{notification_id}/dismiss", dependencies=[Depends(require_local_token)])
+async def dismiss_notification(notification_id: str) -> dict[str, object]:
+    """Dismiss a notification and return it. HTTP equivalent of
+    `notification.dismiss`; the desktop uses the returned notification to remove
+    it from its store (mirrors the old `/ws` dismiss echo)."""
+    dismissed = get_notification_service().dismiss_notification(notification_id)
+    if dismissed is None:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return dismissed.model_dump(mode="json")
+
+
+@app.get("/crons/upcoming", dependencies=[Depends(require_local_token)])
+async def list_upcoming_crons() -> dict[str, object]:
+    """Upcoming crons. HTTP equivalent of the `/ws` `cron.upcoming.list`, which
+    was never handled server-side, so this preserves that (empty) behavior."""
+    return {"crons": []}
 
 
 @app.post("/attachments", dependencies=[Depends(require_local_token)])
