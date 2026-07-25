@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from aios_core.db import clear_device_link, get_device_link, get_or_create_device_id
@@ -13,6 +14,8 @@ from aios_core.initialize import register_runtime_shutdown, shutdown_runtime, st
 from server.auth import is_valid_ws_token, require_local_token
 from server.commands import handle_device_command
 from server.discovery import AiosDiscovery
+from server.message import stream_message
+from server.types.chat import Chat
 from server.pairing import PairingError, complete_pairing
 from server.relay_client import relay_client
 from server.tunnel import start_if_paired, stop_cloudflared
@@ -150,6 +153,22 @@ async def command(body: CommandRequest) -> dict[str, object]:
         return {"ok": True, "result": handle_device_command(body.type, body.payload or {})}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class MessageRequest(BaseModel):
+    chat: Chat
+    turnId: str | None = None
+
+
+@app.post("/message", dependencies=[Depends(require_local_token)])
+async def message(body: MessageRequest) -> StreamingResponse:
+    """Send a user turn and stream the agent's run events as SSE. HTTP
+    request/response equivalent of the `/ws` chat path."""
+    return StreamingResponse(
+        stream_message(body.chat, body.turnId),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/attachments", dependencies=[Depends(require_local_token)])
