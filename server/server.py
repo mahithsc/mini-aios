@@ -100,14 +100,14 @@ async def health() -> dict[str, str]:
 
 @app.get("/device/info")
 async def device_info() -> dict[str, object]:
-    """Identity + pairing status of this physical box. Used by the desktop app
-    to confirm which device it discovered and whether it's already claimed."""
+    """Identity + pairing status. Public (needed for LAN discovery before a
+    token exists) — so it deliberately omits owner PII, since once paired the
+    box is reachable on a public subdomain."""
     link = get_device_link()
     return {
         "device_id": app.state.device_id,
         "name": os.getenv("AIOS_DEVICE_NAME") or socket.gethostname(),
         "paired": link is not None,
-        "owner_email": link["owner_email"] if link else None,
         "slug": link["slug"] if link else None,
     }
 
