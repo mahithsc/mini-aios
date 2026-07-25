@@ -1,0 +1,19 @@
+# Runs the box on hardware. cloudflared is inside the image and is launched by
+# the box process once paired (with the connector token from pairing) — no
+# static tunnel token needed here.
+services:
+  box:
+    build: .
+    ports:
+      - "8765:8765"
+    env_file: .env
+    environment:
+      AIOS_CLOUD_URL: https://computer.trywink.io
+    # Persist the workspace (device_id, pairing/device_link, aios.db) so the box
+    # stays paired across restarts. AIOS_ENV=production -> ~/.mini-aios/workspace.
+    volumes:
+      - aios-data:/root/.mini-aios
+    restart: unless-stopped
+
+volumes:
+  aios-data:
