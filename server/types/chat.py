@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field
 
 UnixMs = int
 
-ChatStatus = Literal["idle", "streaming", "error"]
-MessageStatus = Literal["pending", "streaming", "complete", "error"]
+ChatStatus = Literal["idle", "streaming", "error", "cancelled"]
+MessageStatus = Literal["pending", "streaming", "complete", "error", "cancelled"]
 AttachmentKind = Literal["image", "file", "audio"]
 
 
@@ -80,6 +80,30 @@ class StreamErrorEvent(BaseLLMEvent):
     error: str
 
 
+class StreamCancelledEvent(BaseLLMEvent):
+    type: Literal["stream_cancelled"] = "stream_cancelled"
+    reason: str
+
+
+class SubagentToolEvent(BaseLLMEvent):
+    type: Literal["subagent_tool_event"] = "subagent_tool_event"
+    parentToolCallId: str
+    childRunId: str
+    childEventType: Literal[
+        "stream_start",
+        "tool_call_start",
+        "tool_call_end",
+        "tool_call_error",
+        "stream_end",
+        "stream_error",
+    ]
+    toolCallId: str | None = None
+    toolName: str | None = None
+    input: object | None = None
+    output: object | None = None
+    error: str | None = None
+
+
 LLMEvent = Annotated[
     StreamStartEvent
     | TokenEvent
@@ -87,7 +111,9 @@ LLMEvent = Annotated[
     | ToolCallEndEvent
     | ToolCallErrorEvent
     | StreamEndEvent
-    | StreamErrorEvent,
+    | StreamErrorEvent
+    | StreamCancelledEvent
+    | SubagentToolEvent,
     Field(discriminator="type"),
 ]
 
@@ -121,5 +147,3 @@ class OpenAIMessage(BaseModel):
 
 class OpenAIMessages(BaseModel):
     messages: list[OpenAIMessage]
-
-

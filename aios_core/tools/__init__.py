@@ -14,7 +14,9 @@ __all__ = [
     "cron",
     "notify",
     "codex",
+    "generative_widget",
     "tavily_search",
+    "fetch",
     "subagent",
 ]
 
@@ -69,10 +71,18 @@ def __getattr__(name: str):
         from .codex import codex
 
         return codex
+    if name == "generative_widget":
+        from .generative_widget import generative_widget
+
+        return generative_widget
     if name == "tavily_search":
         from .tavily import tavily_search
 
         return tavily_search
+    if name == "fetch":
+        from .fetch import fetch
+
+        return fetch
     if name == "subagent":
         from .subagent import subagent
 

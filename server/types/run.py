@@ -6,21 +6,24 @@ from pydantic import BaseModel, Field
 
 from .chat import UnixMs
 
-RunKind = Literal["chat", "cron", "heartbeat"]
-RunStatus = Literal["queued", "running", "completed", "error"]
+RunKind = Literal["chat", "cron"]
+RunStatus = Literal["queued", "running", "completed", "error", "cancelled"]
 RunEventType = Literal[
     "started",
     "token",
     "tool_call_start",
     "tool_call_end",
+    "subagent_tool_event",
     "progress",
     "completed",
     "error",
+    "cancelled",
 ]
 
 
 class Run(BaseModel):
     id: str
+    userId: str | None = None
     kind: RunKind
     status: RunStatus
     createdAt: UnixMs
@@ -44,6 +47,8 @@ class RunEventPayload(BaseModel):
 
 class RunEvent(BaseModel):
     runId: str
+    userId: str | None = None
+    kind: RunKind | None = None
     sequence: int
     createdAt: UnixMs
     chatId: str | None = None
@@ -52,6 +57,7 @@ class RunEvent(BaseModel):
 
 class RunSnapshot(BaseModel):
     runId: str
+    userId: str | None = None
     kind: RunKind
     status: RunStatus
     updatedAt: UnixMs
@@ -63,8 +69,14 @@ class RunSnapshot(BaseModel):
 
 class ProcessSnapshotListRequest(BaseModel):
     statuses: list[RunStatus] = Field(default_factory=list)
+    kinds: list[RunKind] = Field(default_factory=list)
+    limit: int | None = Field(default=None, ge=1)
 
 
 class RunResumeRequest(BaseModel):
     runId: str
     afterSequence: int
+
+
+class RunStopRequest(BaseModel):
+    runId: str

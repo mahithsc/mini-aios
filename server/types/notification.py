@@ -5,9 +5,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from .chat import UnixMs
-from .run import RunKind
 
-NotificationSource = RunKind | Literal["system"]
+NotificationSource = Literal["chat", "cron", "system"]
 NotificationLevel = Literal["info", "success", "warning", "error"]
 
 

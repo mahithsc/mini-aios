@@ -76,6 +76,17 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_notifications_source
                 ON notifications(source, source_id);
+
+            CREATE TABLE IF NOT EXISTS gateway_events (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id      TEXT NOT NULL,
+                type            TEXT NOT NULL,
+                payload_json    TEXT NOT NULL,
+                created_at      TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_gateway_events_session_id_id
+                ON gateway_events(session_id, id);
         """)
         # Upgrade older device_link tables (columns added after first release).
         for column in ("connector_token TEXT", "hostname TEXT"):

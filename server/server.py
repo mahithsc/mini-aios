@@ -23,6 +23,7 @@ from server.relay_client import relay_client
 from server.tunnel import start_if_paired, stop_cloudflared
 from server.notifications.runtime import shutdown_notification_service, start_notification_service
 from server.execution.runtime import shutdown_runs_service, start_runs_service
+from server.gateway.routes import router as gateway_router
 from server.uploads import save_uploads
 
 register_runtime_shutdown()
@@ -32,7 +33,7 @@ _TRUTHY = {"1", "true", "yes", "on"}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    start_runtime(start_heartbeat=False)
+    start_runtime(start_crons=False)
     await start_notification_service()
     await start_runs_service()
 
@@ -95,6 +96,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# AIOS gateway (/sessions ...) — the session/agent-run API the mobile + desktop
+# chat clients speak. Auth is gated by AIOS_GATEWAY_TOKEN (open when unset).
+app.include_router(gateway_router)
 
 
 @app.get("/health")

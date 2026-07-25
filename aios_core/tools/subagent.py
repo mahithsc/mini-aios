@@ -1,36 +1,167 @@
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
-import os
+from time import monotonic
+from uuid import uuid4
+
+from agno.run.agent import CustomEvent, RunEvent as AgentRunEvent
 
 from ..prompt_loader import render_prompt
 
 
-_POOL = ThreadPoolExecutor(max_workers=max(4, (os.cpu_count() or 1) * 2))
+class SubagentStreamEvent(CustomEvent):
+    def __str__(self) -> str:
+        # Keep nested UI events out of the parent tool's textual result.
+        return ""
 
 
-def _run_single_task(task: str) -> str:
-    from aios_core.agent import create_subagent_worker
+def _build_subagent_stream_event(
+    *,
+    parent_tool_call_id: str,
+    child_run_id: str,
+    child_event_type: str,
+    tool_call_id: str | None = None,
+    tool_name: str | None = None,
+    input: object | None = None,
+    output: object | None = None,
+    error: str | None = None,
+) -> SubagentStreamEvent:
+    return SubagentStreamEvent(
+        event=AgentRunEvent.custom_event.value,
+        kind="subagent_tool_event",
+        parent_tool_call_id=parent_tool_call_id,
+        child_run_id=child_run_id,
+        child_event_type=child_event_type,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        input=input,
+        output=output,
+        error=error,
+    )
 
-    prompt = render_prompt("subagent.md", task=task)
-    agent = create_subagent_worker()
-    response = agent.run([{"role": "user", "content": prompt}])
-    return (response.content or "").strip() or "(empty)"
 
-
-def subagent(task: str = None, timeout: float = 60):
+def subagent(task: str | None = None, timeout: float = 60, fc=None):
     """
-    Run delegated subagent work synchronously.
-    Use one call per delegated task.
+    Run delegated subagent work and stream child tool events.
+    The tool still blocks until the subagent finishes and returns its final text.
     """
     if timeout is None or float(timeout) <= 0:
-        return "error: timeout must be > 0"
+        yield "error: timeout must be > 0"
+        return
 
     if not isinstance(task, str) or not task.strip():
-        return "error: task is required"
+        yield "error: task is required"
+        return
 
-    future = _POOL.submit(_run_single_task, task.strip())
+    from aios_core.agent import create_subagent_worker
+
+    child_run_id = str(uuid4())
+    parent_tool_call_id = str(getattr(fc, "call_id", None) or child_run_id)
+    prompt = render_prompt("subagent.md", task=task.strip())
+    agent = create_subagent_worker()
+    output_chunks: list[str] = []
+    received_text = False
+    deadline = monotonic() + float(timeout)
+
+    yield _build_subagent_stream_event(
+        parent_tool_call_id=parent_tool_call_id,
+        child_run_id=child_run_id,
+        child_event_type="stream_start",
+    )
+
     try:
-        return future.result(timeout=float(timeout))
+        for event in agent.run(
+            [{"role": "user", "content": prompt}],
+            stream=True,
+            stream_events=True,
+            run_id=child_run_id,
+        ):
+            if monotonic() > deadline:
+                raise TimeoutError
+
+            if event.event == AgentRunEvent.run_content and event.content is not None:
+                received_text = True
+                output_chunks.append(str(event.content))
+                continue
+
+            if event.event == AgentRunEvent.tool_call_started:
+                tool = event.tool
+                if tool is None:
+                    continue
+                yield _build_subagent_stream_event(
+                    parent_tool_call_id=parent_tool_call_id,
+                    child_run_id=child_run_id,
+                    child_event_type="tool_call_start",
+                    tool_call_id=str(getattr(tool, "tool_call_id", None) or id(tool)),
+                    tool_name=tool.tool_name,
+                    input=tool.tool_args,
+                )
+                continue
+
+            if event.event == AgentRunEvent.tool_call_completed:
+                tool = event.tool
+                if tool is None:
+                    continue
+                yield _build_subagent_stream_event(
+                    parent_tool_call_id=parent_tool_call_id,
+                    child_run_id=child_run_id,
+                    child_event_type="tool_call_end",
+                    tool_call_id=str(getattr(tool, "tool_call_id", None) or id(tool)),
+                    tool_name=tool.tool_name,
+                    output=tool.result,
+                )
+                continue
+
+            if event.event == AgentRunEvent.tool_call_error:
+                tool = event.tool
+                yield _build_subagent_stream_event(
+                    parent_tool_call_id=parent_tool_call_id,
+                    child_run_id=child_run_id,
+                    child_event_type="tool_call_error",
+                    tool_call_id=(
+                        str(getattr(tool, "tool_call_id", None) or id(tool))
+                        if tool is not None
+                        else None
+                    ),
+                    tool_name=tool.tool_name if tool is not None else None,
+                    error=str(getattr(event, "error", None) or "Subagent tool call failed."),
+                )
+                continue
+
+            if event.event == AgentRunEvent.run_error:
+                error = str(event.content or "Subagent run failed.")
+                yield _build_subagent_stream_event(
+                    parent_tool_call_id=parent_tool_call_id,
+                    child_run_id=child_run_id,
+                    child_event_type="stream_error",
+                    error=error,
+                )
+                yield f"error: subagent failed -- {error}"
+                return
+
+            if event.event == AgentRunEvent.run_completed and not received_text:
+                if event.content is not None:
+                    output_chunks.append(str(event.content))
+                continue
     except TimeoutError:
-        return f"error: subagent timed out after {float(timeout):g}s"
-    except Exception as e:
-        return f"error: subagent failed -- {e}"
+        yield _build_subagent_stream_event(
+            parent_tool_call_id=parent_tool_call_id,
+            child_run_id=child_run_id,
+            child_event_type="stream_error",
+            error=f"Subagent timed out after {float(timeout):g}s.",
+        )
+        yield f"error: subagent timed out after {float(timeout):g}s"
+        return
+    except Exception as exc:
+        yield _build_subagent_stream_event(
+            parent_tool_call_id=parent_tool_call_id,
+            child_run_id=child_run_id,
+            child_event_type="stream_error",
+            error=str(exc),
+        )
+        yield f"error: subagent failed -- {exc}"
+        return
+
+    yield _build_subagent_stream_event(
+        parent_tool_call_id=parent_tool_call_id,
+        child_run_id=child_run_id,
+        child_event_type="stream_end",
+    )
+    yield "".join(output_chunks).strip() or "(empty)"

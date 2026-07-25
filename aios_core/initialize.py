@@ -5,7 +5,6 @@ from datetime import datetime
 
 from .crons import cron_manager
 from .db import initialize_app_db
-from .heartbeat import heartbeat_service
 from .workspace import ensure_workspace_dir
 
 RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
@@ -15,14 +14,76 @@ RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
 SKILLS_DIR = "skills"
 SESSION_DIR = "session"
 RUNS_DIR = "runs"
+WORKSPACE_DIR = ensure_workspace_dir()
+SKILLS_DIR = str(WORKSPACE_DIR / SKILLS_DIR)
+SESSION_DIR = str(WORKSPACE_DIR / SESSION_DIR)
+RUNS_DIR = str(WORKSPACE_DIR / RUNS_DIR)
 RUNS_METADATA_DIR = f"{RUNS_DIR}/metadata"
 RUNS_SNAPSHOTS_DIR = f"{RUNS_DIR}/snapshots"
 RUNS_EVENTS_DIR = f"{RUNS_DIR}/events"
 SESSION_MANIFEST_PATH = f"{SESSION_DIR}/session_manifest.json"
 SKILLS_INDEX_PATH = f"{SKILLS_DIR}/skills_index.json"
-
-WORKSPACE_DIR = ensure_workspace_dir()
 _RUNTIME_STARTED = False
+_SKILLS_README_PATH = f"{SKILLS_DIR}/README.md"
+_SKILL_TEMPLATE_DIR = f"{SKILLS_DIR}/_template"
+_SKILL_TEMPLATE_PATH = f"{_SKILL_TEMPLATE_DIR}/SKILL.md"
+
+_SKILLS_README_CONTENT = """# Skills
+
+Skills are reusable instructions the agent can discover and load on demand.
+
+## Recommended structure
+
+```text
+skills/
+  skills_index.json
+  my-skill/
+    SKILL.md
+```
+
+## How discovery works
+
+- The agent is injected with a compact list of available skills.
+- Each skill should have a `name` and `description` in YAML frontmatter.
+- Full skill contents are read only when a request matches the description.
+
+## Minimal SKILL.md
+
+```markdown
+---
+name: my-skill
+description: Describe what the skill does and when to use it.
+---
+
+# My Skill
+
+## Instructions
+- Put the reusable workflow here.
+```
+
+## Optional manifest
+
+`skills_index.json` is optional. Use it when you want curated ordering, metadata
+overrides, or to disable a skill without deleting it.
+"""
+
+_SKILL_TEMPLATE_CONTENT = """---
+name: my-skill
+description: Describe what the skill does and when to use it.
+---
+
+# My Skill
+
+## Quick Start
+- Replace this template with concise, reusable instructions.
+
+## Workflow
+1. Explain the default sequence of steps.
+2. Call out important constraints or validation points.
+
+## Additional Resources
+- Link one level deep to `reference.md` or `examples.md` if needed.
+"""
 
 
 def initialize_files():
@@ -31,17 +92,28 @@ def initialize_files():
     os.makedirs(RUNS_METADATA_DIR, exist_ok=True)
     os.makedirs(RUNS_SNAPSHOTS_DIR, exist_ok=True)
     os.makedirs(RUNS_EVENTS_DIR, exist_ok=True)
+    os.makedirs(_SKILL_TEMPLATE_DIR, exist_ok=True)
     initialize_app_db()
 
     files_to_create = {
         SESSION_MANIFEST_PATH: [],
-        SKILLS_INDEX_PATH: [],
+        SKILLS_INDEX_PATH: {"version": 1, "skills": []},
     }
 
     for path, default_content in files_to_create.items():
         if not os.path.exists(path):
             with open(path, "w") as f:
                 json.dump(default_content, f, indent=2)
+
+    text_files_to_create = {
+        _SKILLS_README_PATH: _SKILLS_README_CONTENT,
+        _SKILL_TEMPLATE_PATH: _SKILL_TEMPLATE_CONTENT,
+    }
+
+    for path, content in text_files_to_create.items():
+        if not os.path.exists(path):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
 
 
 def _create_manifest_timestamp() -> str:
@@ -94,7 +166,7 @@ def save_manifest(manifest):
         json.dump(manifest, f, indent=2)
 
 
-def start_runtime(start_crons: bool = True, start_heartbeat: bool = True):
+def start_runtime(start_crons: bool = True):
     global _RUNTIME_STARTED
     if _RUNTIME_STARTED:
         return
@@ -103,27 +175,34 @@ def start_runtime(start_crons: bool = True, start_heartbeat: bool = True):
     initialize_files()
     if start_crons:
         cron_manager.start()
-    if start_heartbeat:
-        heartbeat_service.start()
     _RUNTIME_STARTED = True
 
 
-def shutdown_runtime(stop_crons: bool = True, stop_heartbeat: bool = True):
+def shutdown_runtime(stop_crons: bool = True):
     global _RUNTIME_STARTED
+
+    # PTY sessions run in their own process groups (start_new_session), so
+    # anything the agent spawned would survive this process as an orphan
+    # unless closed here. Runs even when the runtime never started — tool
+    # calls can create sessions without start_runtime.
+    try:
+        from .tools.processes import close_all_processes
+
+        close_all_processes()
+    except Exception:
+        pass
+
     if not _RUNTIME_STARTED:
         return
 
     if stop_crons:
         cron_manager.shutdown()
-    if stop_heartbeat:
-        heartbeat_service.shutdown()
     _RUNTIME_STARTED = False
 
 
-def register_runtime_shutdown(stop_crons: bool = True, stop_heartbeat: bool = True):
+def register_runtime_shutdown(stop_crons: bool = True):
     atexit.register(
         lambda: shutdown_runtime(
             stop_crons=stop_crons,
-            stop_heartbeat=stop_heartbeat,
         )
     )

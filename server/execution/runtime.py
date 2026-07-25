@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-
 from server.execution.runners.chat import ChatRunner
+from server.execution.broadcaster import RunBroadcaster
 from server.execution.service import RunsService
 from server.execution.store import FileRunStore
 
@@ -26,6 +26,7 @@ def initialize_runs_service() -> RunsService:
     if _runs_service is None:
         _runs_service = RunsService(
             store=FileRunStore(),
+            broadcaster=RunBroadcaster(),
             worker_count=_resolve_worker_count(),
         )
         _runs_service.register_runner(ChatRunner())
