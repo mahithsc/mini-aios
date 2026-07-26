@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import time
 import uuid
 from typing import Any, AsyncIterator
@@ -18,6 +19,7 @@ from aios_core.sessions import (
     update_chat_status,
     update_chat_title,
 )
+from server.auth import require_local_token
 from server.execution.runtime import get_runs_service
 from server.types.chat import AssistantMessage, ChatMetadata, UserMessage
 from server.types.run import RunCreateRequest
@@ -44,12 +46,24 @@ _MANIFEST_TO_GATEWAY_STATUS = {
 }
 
 
-def require_gateway_auth(authorization: str | None = Header(default=None)) -> None:
-    token = os.getenv("AIOS_GATEWAY_TOKEN")
-    if not token:
-        return
-    if authorization != f"Bearer {token}":
-        raise HTTPException(status_code=401, detail="Invalid or missing bearer token.")
+async def require_gateway_auth(authorization: str | None = Header(default=None)) -> None:
+    """Authenticate gateway callers.
+
+    Default posture: enforce the pairing `local_token` (the shared secret the
+    paired client sends as `Bearer <token>`), exactly like the box's other LAN
+    routes — so an unpaired or unauthenticated caller is rejected, on the LAN
+    and over the public tunnel alike. `AIOS_GATEWAY_TOKEN`, when set, is an
+    optional static override for unpaired/ops access (e.g. headless or relay).
+    """
+    override = os.getenv("AIOS_GATEWAY_TOKEN")
+    if override:
+        provided = authorization
+        if provided and provided.startswith("Bearer "):
+            provided = provided.split(" ", 1)[1]
+        if provided and secrets.compare_digest(provided, override):
+            return
+
+    await require_local_token(authorization)
 
 
 router = APIRouter(dependencies=[Depends(require_gateway_auth)])
