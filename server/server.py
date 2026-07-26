@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import socket
+import traceback
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
@@ -48,7 +49,10 @@ async def lifespan(app: FastAPI):
             await discovery.start()
             app.state.discovery = discovery
         except Exception as exc:  # advertising is best-effort; never block startup
-            print(f"[discovery] mDNS advertise failed: {exc}")
+            # Log the type + repr (some zeroconf errors have an empty str) plus a
+            # traceback, so a silent advertise failure is actually debuggable.
+            print(f"[discovery] mDNS advertise failed: {type(exc).__name__}: {exc!r}")
+            traceback.print_exc()
 
     # Public Cloudflare Tunnel so the desktop can reach this box when off-LAN.
     # Starts only if already paired (has a connector token); otherwise it's
