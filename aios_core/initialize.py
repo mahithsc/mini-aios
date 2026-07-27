@@ -115,6 +115,12 @@ def initialize_files():
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
 
+    # Import legacy JSON transcripts only after the current session directory
+    # exists. The importer is idempotent and keeps the JSON files untouched.
+    from .sessions import initialize_chat_storage
+
+    initialize_chat_storage()
+
 
 def _create_manifest_timestamp() -> str:
     return datetime.now().isoformat(timespec="seconds")

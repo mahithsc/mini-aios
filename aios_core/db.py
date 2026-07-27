@@ -25,13 +25,20 @@ def _migrate_legacy_db_if_needed(db_path: str) -> None:
 
 def get_db_connection(db_path: str = DB_PATH) -> sqlite3.Connection:
     _migrate_legacy_db_if_needed(db_path)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=5.0)
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
 def initialize_app_db(db_path: str = DB_PATH) -> None:
     with get_db_connection(db_path) as conn:
+        # WAL lets readers continue while a chat/run event is being persisted.
+        # SQLite still serializes writers, so chat mutations use short
+        # transactions and a busy timeout rather than holding a connection
+        # open for the duration of a model response.
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS device_identity (
                 id          INTEGER PRIMARY KEY CHECK (id = 1),
@@ -87,6 +94,105 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_gateway_events_session_id_id
                 ON gateway_events(session_id, id);
+
+            CREATE TABLE IF NOT EXISTS chats (
+                id          TEXT PRIMARY KEY,
+                title       TEXT,
+                status      TEXT NOT NULL DEFAULT 'idle'
+                            CHECK (status IN ('idle', 'streaming', 'error', 'cancelled')),
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chats_updated_at
+                ON chats(updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id          TEXT PRIMARY KEY,
+                chat_id     TEXT NOT NULL,
+                position    INTEGER NOT NULL,
+                role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                content     TEXT,
+                run_id      TEXT,
+                status      TEXT NOT NULL
+                            CHECK (status IN (
+                                'pending', 'streaming', 'complete', 'error', 'cancelled'
+                            )),
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL,
+                FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
+                UNIQUE (chat_id, position)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_position
+                ON chat_messages(chat_id, position);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_run_id
+                ON chat_messages(run_id)
+                WHERE run_id IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS message_attachments (
+                id           TEXT PRIMARY KEY,
+                message_id   TEXT NOT NULL,
+                position     INTEGER NOT NULL,
+                kind         TEXT NOT NULL CHECK (kind IN ('image', 'file', 'audio')),
+                name         TEXT NOT NULL,
+                file_path    TEXT NOT NULL,
+                mime_type    TEXT,
+                size_bytes   INTEGER,
+                content_hash TEXT,
+                uploaded_at  INTEGER,
+                FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
+                UNIQUE (message_id, position)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_message_attachments_message_position
+                ON message_attachments(message_id, position);
+
+            CREATE TABLE IF NOT EXISTS attachment_representations (
+                id            TEXT PRIMARY KEY,
+                attachment_id TEXT NOT NULL,
+                position      INTEGER NOT NULL DEFAULT 0,
+                kind          TEXT NOT NULL,
+                status        TEXT NOT NULL DEFAULT 'ready'
+                              CHECK (status IN ('pending', 'ready', 'error')),
+                text_content  TEXT,
+                file_path     TEXT,
+                mime_type     TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at    INTEGER NOT NULL,
+                updated_at    INTEGER NOT NULL,
+                FOREIGN KEY (attachment_id)
+                    REFERENCES message_attachments(id) ON DELETE CASCADE,
+                UNIQUE (attachment_id, kind, position)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_attachment_representations_attachment
+                ON attachment_representations(attachment_id, kind, position);
+
+            CREATE TABLE IF NOT EXISTS assistant_events (
+                id            TEXT PRIMARY KEY,
+                message_id    TEXT NOT NULL,
+                sequence      INTEGER NOT NULL,
+                type          TEXT NOT NULL,
+                payload_json  TEXT NOT NULL DEFAULT '{}',
+                created_at    INTEGER NOT NULL,
+                FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
+                UNIQUE (message_id, sequence)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_assistant_events_message_sequence
+                ON assistant_events(message_id, sequence);
+
+            CREATE TABLE IF NOT EXISTS chat_imports (
+                source_path       TEXT PRIMARY KEY,
+                imported_at       INTEGER NOT NULL,
+                chat_count        INTEGER NOT NULL,
+                message_count     INTEGER NOT NULL,
+                event_count       INTEGER NOT NULL,
+                attachment_count  INTEGER NOT NULL,
+                skipped_count     INTEGER NOT NULL
+            );
         """)
         # Upgrade older device_link tables (columns added after first release).
         for column in ("connector_token TEXT", "hostname TEXT"):
@@ -94,6 +200,11 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
                 conn.execute(f"ALTER TABLE device_link ADD COLUMN {column}")
             except sqlite3.OperationalError:
                 pass  # column already exists
+
+        try:
+            conn.execute("ALTER TABLE message_attachments ADD COLUMN content_hash TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 def get_or_create_device_id(db_path: str = DB_PATH) -> str:
