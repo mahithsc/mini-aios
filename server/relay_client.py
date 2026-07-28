@@ -21,6 +21,7 @@ import websockets
 
 from aios_core.db import get_device_link
 from server.commands import handle_device_command
+from server.discovery import _primary_lan_ip
 
 _RECONNECT_DELAY = 3.0
 _UNPAIRED_POLL = 2.0
@@ -83,7 +84,9 @@ class RelayClient:
                 await asyncio.sleep(_RECONNECT_DELAY)
 
     def _heartbeat_payload(self) -> str:
-        return json.dumps({"type": "heartbeat"})
+        # Report our current LAN IP so the cloud can offer it for LAN-only
+        # pairing on networks where mDNS is blocked (guest/corporate Wi-Fi).
+        return json.dumps({"type": "heartbeat", "lan_ip": _primary_lan_ip()})
 
     async def _session(self, ws) -> None:
         # Report our public tunnel URL immediately so the cloud can hand it to
