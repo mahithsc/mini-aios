@@ -16,6 +16,15 @@ dependencies = [
     "httpx>=0.27.0",
     "websockets>=12.0",
     "python-multipart>=0.0.22",
+    "bless>=0.3.0",
+]
+
+[tool.uv]
+# Only resolve for the platforms we actually run on (the Linux box + macOS dev).
+# Avoids a Windows-only winrt dependency conflict pulled in by bless/bleak.
+environments = [
+    "sys_platform == 'linux'",
+    "sys_platform == 'darwin'",
 ]
 
 [tool.uv.workspace]
