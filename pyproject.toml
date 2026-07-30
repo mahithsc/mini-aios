@@ -17,6 +17,7 @@ dependencies = [
     "websockets>=12.0",
     "python-multipart>=0.0.22",
     "bless>=0.3.0",
+    "cryptography>=42.0.0",
 ]
 
 [tool.uv]
