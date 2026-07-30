@@ -87,6 +87,12 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_gateway_events_session_id_id
                 ON gateway_events(session_id, id);
+
+            CREATE TABLE IF NOT EXISTS provisioning_secret (
+                id                INTEGER PRIMARY KEY CHECK (id = 1),
+                provisioning_key  TEXT NOT NULL,
+                created_at        INTEGER NOT NULL
+            );
         """)
         # Upgrade older device_link tables (columns added after first release).
         for column in ("connector_token TEXT", "hostname TEXT"):
@@ -179,3 +185,38 @@ def clear_device_link(db_path: str = DB_PATH) -> None:
     initialize_app_db(db_path)
     with get_db_connection(db_path) as conn:
         conn.execute("DELETE FROM device_link WHERE id = 1")
+
+
+def get_provisioning_key(db_path: str = DB_PATH) -> bytes | None:
+    """The persistent per-box BLE provisioning key (bytes), or None if unclaimed.
+
+    Established once at first BLE claim and reused to encrypt later re-provisioning
+    (moving the box to a new network). Stored hex-encoded in a single row.
+    """
+    initialize_app_db(db_path)
+    with get_db_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT provisioning_key FROM provisioning_secret WHERE id = 1"
+        ).fetchone()
+    return bytes.fromhex(row[0]) if row is not None else None
+
+
+def save_provisioning_key(key: bytes, db_path: str = DB_PATH) -> None:
+    initialize_app_db(db_path)
+    with get_db_connection(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO provisioning_secret (id, provisioning_key, created_at)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                provisioning_key = excluded.provisioning_key,
+                created_at = excluded.created_at
+            """,
+            (key.hex(), int(time.time())),
+        )
+
+
+def clear_provisioning_key(db_path: str = DB_PATH) -> None:
+    initialize_app_db(db_path)
+    with get_db_connection(db_path) as conn:
+        conn.execute("DELETE FROM provisioning_secret WHERE id = 1")

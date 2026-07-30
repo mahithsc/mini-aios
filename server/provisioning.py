@@ -1,28 +1,35 @@
-"""BLE WiFi provisioning for a fresh, off-network box ("true boot").
+"""BLE WiFi provisioning v2 for a fresh/off-network box ("true boot").
 
-On boot, if the box has no network, `main.py` runs this so a phone can hand it
-WiFi credentials over Bluetooth Low Energy. The box advertises a GATT service
-(BlueZ, via `bless`), receives the credentials, joins WiFi with `nmcli`, and
-returns — after which the normal server starts and the box becomes discoverable
-and pairable exactly as an always-on-WiFi box would.
+On boot with no network, `main.py` runs this so a phone can hand the box WiFi
+credentials over Bluetooth. The BLE transport is PLAIN (no OS bonding — that
+proved too finicky on headless BlueZ↔iOS); security is app-layer:
 
-GATT contract — MUST stay in sync with the mobile app
-(aios-mobile `src/constants/provisioning.ts`):
+- **Re-provision** (box already claimed, e.g. moved to a new network): the phone
+  proves it's the owner by encrypting the creds with the shared `provisioning_key`
+  established at first claim (AES-256-GCM, AAD = a per-connection challenge → no
+  replay). Only the key-holder can provision the box.
+- **First claim** (no key yet): phone + box do an ephemeral X25519 ECDH → session
+  key (protects the creds from passive sniffing). On success the box mints the
+  persistent `provisioning_key`, returns it to the phone encrypted under the
+  session key (KEYOUT), and both store it for future re-provisioning.
 
-    Service 7A71E000-1111-2222-3333-123456789ABC
-      CREDS  7A71E001-...  write   <- phone writes {"ssid","password"} (JSON/utf-8)
-      STATUS 7A71E002-...  notify  -> box pushes status lines:
-                 credentials_received -> connecting -> connected
-                                                     | failed:<reason>
+See aios-mobile/docs/ble-provisioning-v2.md. Crypto lives in provisioning_crypto.py
+and is byte-for-byte interoperable with the phone's @noble implementation.
 
-`bless` picks the BlueZ backend on Linux automatically. Running the GATT server
-needs BlueZ access, and `nmcli` needs privilege to change the network — on the
-box this process runs as root (the Docker image / a root service), so both work.
+GATT (all plain; security is in the payload):
+    Service 7A71E100-0000-1000-8000-00805F9B34FB
+      DEVICE_INFO 7A71E101 read   -> {"device_id","claimed":bool,"slug"}
+      PUBKEY      7A71E102 read   -> box ephemeral X25519 pubkey (hex) [claim]
+      CHALLENGE   7A71E103 read   -> fresh 16-byte nonce (hex), regenerated per read
+      CREDS       7A71E104 write  <- {"mode","phonePub"?,"blob"} (JSON; blob is sealed)
+      STATUS      7A71E105 notify -> credentials_received|connecting|connected|failed:<reason>
+      KEYOUT      7A71E107 read   -> provisioning_key sealed under session key (base64) [claim]
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 
 from bless import (  # type: ignore
@@ -32,27 +39,22 @@ from bless import (  # type: ignore
     GATTAttributePermissions,
 )
 
-SERVICE_UUID = "7A71E000-1111-2222-3333-123456789ABC"
-CREDS_UUID = "7A71E001-1111-2222-3333-123456789ABC"
-STATUS_UUID = "7A71E002-1111-2222-3333-123456789ABC"
+from aios_core.db import get_device_link, get_provisioning_key, save_provisioning_key
+from server.provisioning_crypto import (
+    derive_session_key,
+    generate_ephemeral,
+    new_provisioning_key,
+    open_credentials,
+    seal,
+)
 
-
-async def _make_adapter_pairable() -> None:
-    """Ensure the BLE adapter accepts bonding.
-
-    Our characteristics require an encrypted link, so iOS bonds before writing
-    credentials. If the adapter is `Pairable: no` (a common default) that bond is
-    refused and the encrypted write fails. Best-effort — never blocks provisioning.
-    """
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "bluetoothctl", "pairable", "on",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        await proc.communicate()
-    except Exception as exc:  # noqa: BLE001 - best-effort
-        print(f"[provisioning] could not set adapter pairable: {exc}")
+SERVICE_UUID = "7A71E100-0000-1000-8000-00805F9B34FB"
+DEVICE_INFO_UUID = "7A71E101-0000-1000-8000-00805F9B34FB"
+PUBKEY_UUID = "7A71E102-0000-1000-8000-00805F9B34FB"
+CHALLENGE_UUID = "7A71E103-0000-1000-8000-00805F9B34FB"
+CREDS_UUID = "7A71E104-0000-1000-8000-00805F9B34FB"
+STATUS_UUID = "7A71E105-0000-1000-8000-00805F9B34FB"
+KEYOUT_UUID = "7A71E107-0000-1000-8000-00805F9B34FB"
 
 
 async def _nmcli_connect(ssid: str, password: str) -> None:
@@ -82,82 +84,124 @@ async def run_provisioning(device_id: str, name: str | None = None) -> bool:
     """Advertise over BLE and block until the box is handed working WiFi
     credentials and joins the network. Returns True once online.
 
-    Repeated/failed attempts keep the server advertising so the user can retry
-    (e.g. after a wrong password) without a reboot.
+    Failed attempts keep the server advertising so the user can retry.
     """
     done = asyncio.Event()
     loop = asyncio.get_running_loop()
     server = BlessServer(name=name or f"aios-{device_id[:8]}", loop=loop)
 
+    provisioning_key = get_provisioning_key()  # bytes or None
+    link = get_device_link()
+    slug = link.get("slug") if link else None
+    box_priv, box_pub = generate_ephemeral()  # ephemeral X25519 for first-claim
+    state = {"challenge": os.urandom(16)}  # current per-connection nonce (AAD)
+
+    def set_value(uuid: str, data: bytes) -> None:
+        server.get_characteristic(uuid).value = data
+
     def push(text: str) -> None:
-        char = server.get_characteristic(STATUS_UUID)
-        char.value = text.encode("utf-8")
+        set_value(STATUS_UUID, text.encode("utf-8"))
         server.update_value(SERVICE_UUID, STATUS_UUID)
         print(f"[provisioning] status -> {text}")
 
     async def handle_credentials(raw: bytes) -> None:
+        challenge = state["challenge"]
         try:
-            creds = json.loads(bytes(raw))
-            ssid = creds["ssid"]
-            password = creds.get("password", "")
-        except Exception as exc:  # malformed payload from the phone
-            print(f"[provisioning] bad payload: {exc!r}")
+            env = json.loads(bytes(raw))
+            mode = env["mode"]
+            blob = env["blob"]
+        except Exception as exc:  # malformed envelope
+            print(f"[provisioning] bad envelope: {exc!r}")
             push("failed:bad_payload")
             return
-        print(f"[provisioning] received SSID {ssid!r} (password hidden)")
+
+        # Decrypt the credentials with the right key for the mode.
+        try:
+            if mode == "reprovision":
+                if provisioning_key is None:
+                    push("failed:not_claimed")
+                    return
+                session_key = provisioning_key
+            elif mode == "claim":
+                phone_pub = bytes.fromhex(env["phonePub"])
+                session_key = derive_session_key(box_priv, phone_pub)
+            else:
+                push("failed:bad_mode")
+                return
+            creds = open_credentials(session_key, blob, challenge)
+            ssid, password = creds["ssid"], creds.get("password", "")
+        except Exception as exc:  # wrong key / tampered / stale challenge
+            print(f"[provisioning] decrypt failed: {exc!r}")
+            push("failed:auth")
+            return
+
+        print(f"[provisioning] received SSID {ssid!r} (mode={mode}, password hidden)")
         push("credentials_received")
         push("connecting")
         try:
             await _nmcli_connect(ssid, password)
-            push("connected")
-            done.set()
         except Exception as exc:
             push(f"failed:{_classify_failure(str(exc))}")
+            return
+
+        # First claim: mint the persistent key + hand it back encrypted so the
+        # phone can re-provision this box later without another ECDH.
+        if mode == "claim":
+            minted = new_provisioning_key()
+            set_value(KEYOUT_UUID, seal(session_key, minted, challenge).encode("utf-8"))
+            save_provisioning_key(minted)
+            print("[provisioning] minted + stored provisioning_key; KEYOUT ready")
+
+        push("connected")
+        done.set()
 
     def on_write(characteristic: BlessGATTCharacteristic, value, **kwargs) -> None:
         if characteristic.uuid.lower() == CREDS_UUID.lower():
             asyncio.run_coroutine_threadsafe(handle_credentials(bytes(value)), loop)
 
     def on_read(characteristic: BlessGATTCharacteristic, **kwargs):
+        # Fresh challenge on every read → binds the next write to this session.
+        if characteristic.uuid.lower() == CHALLENGE_UUID.lower():
+            state["challenge"] = os.urandom(16)
+            characteristic.value = state["challenge"].hex().encode("utf-8")
         return characteristic.value
 
     server.read_request_func = on_read
     server.write_request_func = on_write
 
     await server.add_new_service(SERVICE_UUID)
-    # NOTE: link encryption (bonding) is temporarily reverted. Requiring encrypted
-    # characteristics works, but needs three things together: adapter pairable + a
-    # registered NoInputNoOutput pairing agent + the PHONE retrying the first write
-    # (which triggers the bond and fails once) without tearing down the connection.
-    # Re-enable by switching these back to *_encryption_required once the phone
-    # ships the write-retry and the box registers the agent in-process. See
-    # _make_adapter_pairable() (kept) and the memory note.
+
+    read = GATTCharacteristicProperties.read
+    write = GATTCharacteristicProperties.write
+    notify = GATTCharacteristicProperties.notify
+    readable = GATTAttributePermissions.readable
+    writeable = GATTAttributePermissions.writeable
+
+    device_info = json.dumps(
+        {"device_id": device_id, "claimed": provisioning_key is not None, "slug": slug}
+    ).encode("utf-8")
+    await server.add_new_characteristic(SERVICE_UUID, DEVICE_INFO_UUID, read, device_info, readable)
     await server.add_new_characteristic(
-        SERVICE_UUID,
-        CREDS_UUID,
-        GATTCharacteristicProperties.write,
-        None,
-        GATTAttributePermissions.writeable,
+        SERVICE_UUID, PUBKEY_UUID, read, box_pub.hex().encode("utf-8"), readable
     )
-    # STATUS is notify+read, so it must start with no cached value.
     await server.add_new_characteristic(
-        SERVICE_UUID,
-        STATUS_UUID,
-        GATTCharacteristicProperties.read | GATTCharacteristicProperties.notify,
-        None,
-        GATTAttributePermissions.readable,
+        SERVICE_UUID, CHALLENGE_UUID, read, state["challenge"].hex().encode("utf-8"), readable
     )
+    await server.add_new_characteristic(SERVICE_UUID, CREDS_UUID, write, None, writeable)
+    await server.add_new_characteristic(SERVICE_UUID, STATUS_UUID, read | notify, None, readable)
+    await server.add_new_characteristic(SERVICE_UUID, KEYOUT_UUID, read, None, readable)
 
     await server.start()
-    await _make_adapter_pairable()
-    print(f"[provisioning] advertising {SERVICE_UUID} as {server.name!r}; awaiting WiFi")
+    claimed = provisioning_key is not None
+    print(
+        f"[provisioning] advertising {SERVICE_UUID} as {server.name!r} "
+        f"(claimed={claimed}); awaiting WiFi"
+    )
     try:
         await done.wait()
-        # Let the phone receive the terminal "connected" status before we tear
-        # down the BLE server. Stopping it disconnects the phone, which otherwise
-        # races ahead of the final notification and shows a false failure even
-        # though the box joined WiFi fine.
-        await asyncio.sleep(1.5)
+        # Let the phone read KEYOUT (first claim) and the terminal status before
+        # we tear down the BLE server (stopping it disconnects the phone).
+        await asyncio.sleep(2.5)
     finally:
         try:
             await server.stop()
