@@ -59,6 +59,41 @@ CHALLENGE_UUID = "7A71E004-1111-2222-3333-123456789ABC"
 DEVICE_INFO_UUID = "7A71E005-1111-2222-3333-123456789ABC"
 KEYOUT_UUID = "7A71E006-1111-2222-3333-123456789ABC"
 LANIP_UUID = "7A71E007-1111-2222-3333-123456789ABC"
+NETWORKS_UUID = "7A71E008-1111-2222-3333-123456789ABC"
+
+
+async def _scan_networks() -> list[dict]:
+    """Scan visible WiFi networks so the phone can show a picker.
+
+    Returns [{ssid, signal, secure}], de-duplicated by SSID (strongest kept),
+    strongest first. Best-effort — an empty list on failure just means the user
+    types the SSID manually.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list", "--rescan", "yes",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        out, _ = await proc.communicate()
+    except Exception as exc:  # noqa: BLE001 - best-effort
+        print(f"[provisioning] wifi scan failed: {exc}")
+        return []
+
+    nets: dict[str, dict] = {}
+    for line in (out or b"").decode(errors="replace").splitlines():
+        # Terse output: SSID:SIGNAL:SECURITY, with ':' inside fields escaped as '\:'.
+        parts = line.rsplit(":", 2)
+        if len(parts) != 3:
+            continue
+        ssid = parts[0].replace("\\:", ":").replace("\\\\", "\\").strip()
+        if not ssid:
+            continue
+        signal = int(parts[1]) if parts[1].isdigit() else 0
+        secure = parts[2].strip() not in ("", "--")
+        if ssid not in nets or signal > nets[ssid]["signal"]:
+            nets[ssid] = {"ssid": ssid, "signal": signal, "secure": secure}
+    return sorted(nets.values(), key=lambda n: -n["signal"])
 
 
 async def _nmcli_connect(ssid: str, password: str) -> None:
@@ -180,6 +215,7 @@ async def run_provisioning(device_id: str, name: str | None = None) -> bool:
     device_info = json.dumps(
         {"device_id": device_id, "claimed": provisioning_key is not None, "slug": slug}
     ).encode("utf-8")
+    networks = json.dumps(await _scan_networks()).encode("utf-8")
 
     await server.add_new_service(SERVICE_UUID)
     await server.add_new_characteristic(SERVICE_UUID, CREDS_UUID, write, None, writeable)
@@ -193,6 +229,7 @@ async def run_provisioning(device_id: str, name: str | None = None) -> bool:
     await server.add_new_characteristic(SERVICE_UUID, DEVICE_INFO_UUID, read, device_info, readable)
     await server.add_new_characteristic(SERVICE_UUID, KEYOUT_UUID, read, None, readable)
     await server.add_new_characteristic(SERVICE_UUID, LANIP_UUID, read, None, readable)
+    await server.add_new_characteristic(SERVICE_UUID, NETWORKS_UUID, read, networks, readable)
 
     await server.start()
     claimed = provisioning_key is not None
