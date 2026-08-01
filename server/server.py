@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
+import sys
 import traceback
 from contextlib import asynccontextmanager
 
@@ -10,7 +12,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from aios_core.db import clear_device_link, get_device_link, get_or_create_device_id
+from aios_core.db import (
+    clear_device_link,
+    clear_provisioning_key,
+    get_device_link,
+    get_or_create_device_id,
+)
 from aios_core.initialize import register_runtime_shutdown, shutdown_runtime, start_runtime
 from aios_core.sessions import list_chat_history, load_chat_session
 from server.auth import require_local_token
@@ -153,6 +160,39 @@ async def unpair() -> dict[str, object]:
     await relay_client.stop()
     relay_client.start()
     return {"status": "unpaired"}
+
+
+@app.post("/factory-reset", dependencies=[Depends(require_local_token)])
+async def factory_reset() -> dict[str, object]:
+    """Full reset (distinct from /unpair): wipe this box's whole pairing identity
+    — the account link AND the persistent provisioning key — then relaunch into
+    BLE setup so it can be claimed from scratch. This is the "go through Bluetooth
+    + WiFi again" path; /unpair only drops the binding (fast LAN re-pair)."""
+    clear_provisioning_key()
+    clear_device_link()
+    asyncio.create_task(_reset_relaunch())
+    return {"status": "resetting"}
+
+
+async def _reset_relaunch() -> None:
+    """Drop the cloud plumbing and re-exec into BLE provisioning. Runs after the
+    HTTP response has flushed so the phone learns the reset was accepted."""
+    await asyncio.sleep(1.5)
+    for stop in (stop_cloudflared, relay_client.stop):
+        try:
+            res = stop()
+            if asyncio.iscoroutine(res):
+                await res
+        except Exception:
+            pass
+    # Force BLE provisioning on relaunch (advertise for a fresh claim). We stay on
+    # the current WiFi so the box is still reachable if setup is abandoned; the
+    # user can pick a new network during provisioning.
+    os.environ["AIOS_FORCE_PROVISIONING"] = "1"
+    try:
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+    except Exception as exc:  # execv only returns on failure
+        print(f"[provisioning] reset re-exec failed: {exc!r} (argv={sys.argv})")
 
 
 @app.post("/command", dependencies=[Depends(require_local_token)])
