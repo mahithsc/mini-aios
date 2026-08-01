@@ -42,7 +42,6 @@ from bluez_peripheral.gatt.characteristic import (
     CharacteristicFlags as CharFlags,
 )
 from bluez_peripheral.advert import Advertisement
-from bluez_peripheral.agent import NoIoAgent
 from bluez_peripheral.util import Adapter, get_message_bus
 
 from aios_core.db import get_device_link, get_provisioning_key, save_provisioning_key
@@ -157,6 +156,51 @@ def _classify_failure(message: str) -> str:
     if "no network with ssid" in low or "not found" in low:
         return "network_not_found"
     return message.splitlines()[0][:120] if message else "unknown"
+
+
+def _run(args: list[str]) -> None:
+    try:
+        subprocess.run(args, capture_output=True, timeout=5)
+    except Exception as exc:  # noqa: BLE001 - best-effort
+        print(f"[provisioning] {args[0]} failed: {exc!r}")
+
+
+def _disable_bonding(adapter_mac: str) -> None:
+    """Make provisioning pairing-free (our security is app-layer, not OS bonding).
+
+    Sets the adapter non-bondable/non-pairable AND wipes any stored bond. This
+    prevents the failure where iOS "Forget this device" deletes its half of the
+    bond but leaves the box's half — a one-sided bond makes iOS terminate every
+    reconnect (HCI reason 0x13 Remote User Terminated). Best-effort shell-out.
+    """
+    try:
+        out = subprocess.run(["hciconfig"], capture_output=True, text=True, timeout=5).stdout
+    except Exception as exc:  # noqa: BLE001
+        print(f"[provisioning] hciconfig failed in _disable_bonding: {exc!r}")
+        return
+    hci = cur = None
+    for line in out.splitlines():
+        if line[:3] == "hci" and ":" in line[:6]:
+            cur = line.split(":", 1)[0]
+        elif "BD Address:" in line and cur:
+            addr = line.split("BD Address:", 1)[1].strip().split()[0].lower()
+            if addr == adapter_mac.lower():
+                hci = cur
+                break
+    if not hci:
+        return
+    idx = hci[3:]
+    _run(["btmgmt", "--index", idx, "bondable", "off"])
+    _run(["busctl", "set-property", "org.bluez", f"/org/bluez/{hci}",
+          "org.bluez.Adapter1", "Pairable", "b", "false"])
+    ctrl_dir = f"/var/lib/bluetooth/{adapter_mac.upper()}"
+    try:
+        for entry in os.listdir(ctrl_dir):
+            if entry.count(":") == 5 and os.path.isdir(os.path.join(ctrl_dir, entry)):
+                _run(["btmgmt", "--index", idx, "unpair", entry])
+                print(f"[provisioning] cleared stale bond {entry}")
+    except FileNotFoundError:
+        pass
 
 
 class ProvisioningService(Service):
@@ -292,16 +336,19 @@ async def run_provisioning(device_id: str, name: str | None = None) -> bool:
     bus = await get_message_bus()
     adapter = await _select_adapter(bus)
 
+    # Pairing-free: no OS bond ever forms (we encrypt at the app layer), so an iOS
+    # "Forget this device" can't leave a one-sided bond that kills every reconnect.
+    try:
+        _disable_bonding(await adapter.get_address())
+    except Exception as exc:  # noqa: BLE001 - non-fatal
+        print(f"[provisioning] disable_bonding skipped: {exc!r}")
+
     service = ProvisioningService(device_id, provisioning_key, slug, networks, done)
     await service.register(bus, adapter=adapter)
 
-    # No-IO agent so any incidental pairing "just works" without a prompt (our
-    # characteristics aren't encrypted, so pairing shouldn't be requested at all).
-    try:
-        agent = NoIoAgent()
-        await agent.register(bus)
-    except Exception as exc:  # noqa: BLE001 - non-fatal
-        print(f"[provisioning] agent register skipped: {exc!r}")
+    # No pairing agent on purpose — without one, BlueZ rejects any pairing attempt,
+    # keeping the box pairing-free. iOS connects plain (our characteristics carry no
+    # encryption flags), which is all the provisioning handshake needs.
 
     advert = Advertisement(
         name or f"aios-{device_id[:8]}", [SERVICE_UUID], appearance=0, timeout=0
