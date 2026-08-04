@@ -215,6 +215,9 @@ class ProvisioningService(Service):
         ).encode("utf-8")
         self._networks = networks
         self._keyout = b""
+        # Set when the phone reads a populated KEYOUT — the handoff waits on this
+        # before joining WiFi so the key is delivered while BLE is still healthy.
+        self._keyout_read = asyncio.Event()
         self._lanip = b""
         self._status = b""
 
@@ -238,6 +241,10 @@ class ProvisioningService(Service):
 
     @characteristic(KEYOUT_UUID, CharFlags.READ)
     def keyout(self, _options):
+        # A read of a populated KEYOUT is the phone's ACK that it has the key;
+        # _handle_credentials waits on this before joining WiFi.
+        if self._keyout:
+            self._keyout_read.set()
         return self._keyout
 
     @characteristic(LANIP_UUID, CharFlags.READ)
@@ -297,6 +304,25 @@ class ProvisioningService(Service):
 
         print(f"[provisioning] received SSID {ssid!r} (mode={mode}, encrypted)")
         self._push("credentials_received")
+
+        # First claim: mint the persistent key + publish it on KEYOUT NOW, BEFORE
+        # joining WiFi. Joining drops the BLE link on the onboard combo radio
+        # (WiFi/BT coexistence); handing the key back AFTER the join (as before)
+        # meant the phone usually couldn't read it and could never re-provision
+        # later (it dead-ended at "set up with another device"). Signal key_ready,
+        # wait for the phone to read it, then join.
+        if mode == "claim":
+            minted = new_provisioning_key()
+            self._keyout = seal(session_key, minted, challenge).encode("utf-8")
+            save_provisioning_key(minted)
+            print("[provisioning] minted + stored provisioning_key; KEYOUT ready")
+            self._push("key_ready")
+            try:
+                await asyncio.wait_for(self._keyout_read.wait(), timeout=8.0)
+                print("[provisioning] phone read KEYOUT — joining WiFi")
+            except asyncio.TimeoutError:
+                print("[provisioning] KEYOUT not read in time — joining WiFi anyway")
+
         self._push("connecting")
         try:
             await _nmcli_connect(ssid, password)
@@ -306,14 +332,6 @@ class ProvisioningService(Service):
 
         # Report our new LAN IP so the phone can pair directly to us (no mDNS).
         self._lanip = _primary_lan_ip().encode("utf-8")
-
-        # First claim: mint the persistent key + hand it back (encrypted) so the
-        # phone can re-provision this box later without another ECDH.
-        if mode == "claim":
-            minted = new_provisioning_key()
-            self._keyout = seal(session_key, minted, challenge).encode("utf-8")
-            save_provisioning_key(minted)
-            print("[provisioning] minted + stored provisioning_key; KEYOUT ready")
 
         self._push("connected")
         self._done.set()
