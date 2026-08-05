@@ -37,6 +37,8 @@ import os
 import subprocess
 import time
 
+import httpx
+
 from bluez_peripheral.gatt.service import Service
 from bluez_peripheral.gatt.characteristic import (
     characteristic,
@@ -48,6 +50,7 @@ from bluez_peripheral.util import Adapter, get_message_bus
 
 from aios_core.db import get_device_link, get_provisioning_key, save_provisioning_key
 from server.discovery import _primary_lan_ip
+from server.pairing import cloud_url, complete_pairing
 from server.provisioning_crypto import (
     derive_session_key,
     generate_ephemeral,
@@ -297,6 +300,11 @@ class ProvisioningService(Service):
                 return
             creds = open_credentials(session_key, blob, challenge)
             ssid, password = creds["ssid"], creds.get("password", "")
+            # Off-LAN pairing: the phone may include the cloud pairing code in the
+            # (encrypted) creds blob so WE redeem it ourselves after joining WiFi and
+            # relay the result — no LAN round-trip to the phone required. Absent for
+            # the legacy LAN-only flow (phone POSTs /pair itself).
+            pairing_code = creds.get("pairing_code")
         except Exception as exc:  # wrong key / tampered / stale challenge
             print(f"[provisioning] decrypt failed: {exc!r}")
             self._push("failed:auth")
@@ -311,10 +319,16 @@ class ProvisioningService(Service):
         # meant the phone usually couldn't read it and could never re-provision
         # later (it dead-ended at "set up with another device"). Signal key_ready,
         # wait for the phone to read it, then join.
+        # The persistent per-box key the phone holds (from KEYOUT on first claim, or
+        # stored from a prior claim on reprovision) — used to seal the pairing result
+        # we relay back. Distinct from `session_key`, which on first claim is the
+        # ephemeral ECDH key the phone can't reuse.
+        prov_key = self._provisioning_key
         if mode == "claim":
             minted = new_provisioning_key()
             self._keyout = seal(session_key, minted, challenge).encode("utf-8")
             save_provisioning_key(minted)
+            prov_key = minted
             print("[provisioning] minted + stored provisioning_key; KEYOUT ready")
             self._push("key_ready")
             try:
@@ -334,7 +348,65 @@ class ProvisioningService(Service):
         self._lanip = _primary_lan_ip().encode("utf-8")
 
         self._push("connected")
+
+        # Off-LAN pairing: if the phone handed us a pairing code, redeem it and
+        # relay the sealed result via the cloud before we finish (the box is online
+        # now, so this works regardless of the phone's network). Best-effort — the
+        # box stays online either way and the phone can retry.
+        if pairing_code:
+            await self._relay_pairing_result(pairing_code, prov_key)
+
         self._done.set()
+
+    async def _relay_pairing_result(self, pairing_code: str, prov_key: bytes) -> None:
+        """Off-LAN pairing: redeem the phone's pairing code ourselves (we're online
+        now), then relay the SEALED {local_token, hostname, ...} to the cloud for the
+        phone to fetch. The phone can't reach us directly (different network, and no
+        public tunnel exists until this very claim completes), so this is how it
+        learns the local_token. Sealed under the persistent provisioning_key the
+        phone already holds — the cloud only ever relays ciphertext."""
+        try:
+            result = await complete_pairing(pairing_code)
+        except Exception as exc:  # noqa: BLE001 - box stays online; phone can retry
+            print(f"[provisioning] self-complete pairing failed: {exc!r}")
+            self._push("failed:pairing")
+            return
+
+        link = get_device_link()
+        device_token = link.get("device_token") if link else None
+        if not device_token:
+            print("[provisioning] no device_token after pairing; cannot relay result")
+            return
+
+        payload = json.dumps(
+            {
+                "local_token": result["local_token"],
+                "slug": result.get("slug"),
+                "hostname": result.get("hostname"),
+                "device_id": self._device_id,
+            }
+        ).encode("utf-8")
+        # AAD = device_id (there's no live BLE challenge at this point); the phone
+        # opens with the same provisioning_key + AAD.
+        sealed = seal(prov_key, payload, self._device_id.encode("utf-8"))
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{cloud_url()}/device/pairing-result",
+                    headers={"Authorization": f"Bearer {device_token}"},
+                    json={"sealed": sealed},
+                )
+        except httpx.HTTPError as exc:
+            print(f"[provisioning] relay pairing-result failed: {exc!r}")
+            self._push("failed:relay")
+            return
+        if resp.status_code not in (200, 204):
+            print(f"[provisioning] relay pairing-result HTTP {resp.status_code}: {resp.text}")
+            self._push("failed:relay")
+            return
+        print("[provisioning] pairing result relayed to cloud")
+        self._push("paired")
 
 
 async def run_provisioning(device_id: str, name: str | None = None) -> bool:
