@@ -206,6 +206,17 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
         except sqlite3.OperationalError:
             pass  # column already exists
 
+        from .chat_search import (
+            ensure_chat_search_schema,
+            rebuild_fts_index,
+            sync_missing_search_documents,
+        )
+
+        fts_available, fts_created = ensure_chat_search_schema(conn)
+        sync_missing_search_documents(conn)
+        if fts_available and fts_created:
+            rebuild_fts_index(conn)
+
 
 def get_or_create_device_id(db_path: str = DB_PATH) -> str:
     """Return this box's stable device id, generating and persisting one on

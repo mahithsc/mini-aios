@@ -14,8 +14,6 @@ from typing import Any
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from .db import DB_PATH, get_db_connection, initialize_app_db
-from .workspace import get_workspace_dir, is_production, resolve_workspace_path
 from server.types.chat import (
     AssistantMessage,
     ChatMessage,
@@ -24,6 +22,13 @@ from server.types.chat import (
     MessageAttachment,
     UserMessage,
 )
+
+from .chat_search import (
+    refresh_assistant_search_document,
+    upsert_search_document,
+)
+from .db import DB_PATH, get_db_connection, initialize_app_db
+from .workspace import get_workspace_dir, is_production, resolve_workspace_path
 
 CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
 LLM_EVENT_ADAPTER = TypeAdapter(LLMEvent)
@@ -477,6 +482,14 @@ def _insert_message_rows(
         )
 
         if isinstance(message, UserMessage):
+            upsert_search_document(
+                conn,
+                message_id=message.id,
+                chat_id=chat_id,
+                role="user",
+                content=message.content,
+                created_at=message.createdAt,
+            )
             for attachment_position, attachment in enumerate(message.attachments):
                 conn.execute(
                     """
@@ -517,6 +530,8 @@ def _insert_message_rows(
                 ),
             )
             event_count += 1
+
+        refresh_assistant_search_document(conn, message.id)
 
     return len(messages), event_count, attachment_count
 
@@ -1046,6 +1061,14 @@ def append_user_message(
                 parsed.updatedAt,
             ),
         )
+        upsert_search_document(
+            conn,
+            message_id=parsed.id,
+            chat_id=chat_id,
+            role="user",
+            content=parsed.content,
+            created_at=parsed.createdAt,
+        )
         for attachment_position, attachment in enumerate(parsed.attachments):
             conn.execute(
                 """
@@ -1213,6 +1236,8 @@ def append_assistant_event(
                 chat_id,
             ),
         )
+        if parsed_event.type in {"token", "stream_end"}:
+            refresh_assistant_search_document(conn, message_id)
     return True
 
 

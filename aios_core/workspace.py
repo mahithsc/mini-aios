@@ -17,6 +17,11 @@ def get_environment() -> str:
 def is_production() -> bool:
     return get_environment() in _PROD_ENV_VALUES
 
+def get_memories_dir() -> Path:
+    if is_production():
+        return Path("~/.mini-aios/memories").expanduser()
+    return _PROJECT_ROOT / "memories"
+
 def get_workspace_dir() -> Path:
     if is_production():
         return Path("~/.mini-aios/workspace").expanduser()

@@ -5,7 +5,7 @@ from datetime import datetime
 
 from .crons import cron_manager
 from .db import initialize_app_db
-from .workspace import ensure_workspace_dir
+from .workspace import ensure_workspace_dir, get_memories_dir
 
 RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
     "\033[0m", "\033[1m", "\033[2m", "\033[36m", "\033[32m", "\033[33m"
@@ -87,6 +87,7 @@ description: Describe what the skill does and when to use it.
 
 
 def initialize_files():
+    os.makedirs(get_memories_dir(), exist_ok=True)
     os.makedirs(SKILLS_DIR, exist_ok=True)
     os.makedirs(SESSION_DIR, exist_ok=True)
     os.makedirs(RUNS_METADATA_DIR, exist_ok=True)
