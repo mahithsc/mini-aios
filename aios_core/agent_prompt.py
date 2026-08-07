@@ -45,6 +45,13 @@ _BASE_TOOLS_BLOCK = """
      "limit": "number?", "offset": "number?"},
     grep,
 ),
+"read_skill": (
+    "List the available skills when name is omitted, or read one skill's "
+    "instructions by name. Skills live outside the workspace; use this tool "
+    "instead of globbing the workspace to discover them.",
+    {"name": "string?"},
+    read_skill,
+),
 "bash": (
     "Run a non-interactive shell command. On timeout the whole process group "
     "is killed; output is capped and exit codes are reported. Use "
@@ -134,7 +141,7 @@ def _section(name: str, body: str) -> str:
 def _format_skills(skills: Sequence[Mapping[str, Any]]) -> str:
     lines = [
         "You have access to the following reusable skills.",
-        "If a skill is relevant, read the referenced skill file before using it.",
+        "Use read_skill to list or read skills; do not search the workspace for them.",
         "",
     ]
     for skill in skills:
@@ -154,10 +161,11 @@ def build_agent_prompt(
     include_subagent_tool: bool,
     default_cron_timezone: str,
     workspace_dir: str,
+    applications_dir: str,
+    uploads_dir: str,
+    downloads_dir: str,
+    skills_dir: str,
     current_chat_id: str | None = None,
-    current_chat_files_dir: str | None = None,
-    current_chat_artifacts_dir: str | None = None,
-    current_chat_artifact_url_template: str | None = None,
     skills: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     scheduler_now = datetime.now(ZoneInfo(default_cron_timezone)).strftime(
@@ -205,6 +213,14 @@ def build_agent_prompt(
             f"""
             All work for the user must happen inside the workspace.
             Workspace path: {workspace_dir}
+            applications path: {applications_dir}
+            uploads path: {uploads_dir}
+            downloads path: {downloads_dir}
+            skills path: {skills_dir}
+
+            Relative file paths start in applications. Chats, scheduled tasks, and subagents all share this same directory.
+            applications is the only writable area. You may read and copy files from uploads and downloads, but never modify, rename, move, or delete the originals there.
+            skills is read-only and outside the workspace. Internal databases, run records, schedules, and logs are not part of the agent filesystem.
             If you create a new project folder, create a `WORKSPACE.md` file in that folder and keep it updated with project-specific documentation.
             For longer-horizon work, it is encouraged to keep a `TICKETS.md` task board so progress and decisions remain visible.
             """,
@@ -230,7 +246,7 @@ def build_agent_prompt(
             """
             When the user asks to show something in the canvas, display something in the canvas, or put files, images, or videos in the canvas, call `show_canvas` instead of only describing the result in plain text.
             Prefer `show_canvas` whenever the user explicitly mentions the canvas.
-            For generated HTML previews, use `show_canvas(kind="html", ...)` with a served URL and the workspace path to the generated `index.html`.
+            For generated HTML previews, create the file inside applications and use `show_canvas(kind="html", file_path=...)`.
             """,
         ),
         _section(
@@ -259,39 +275,31 @@ def build_agent_prompt(
         ),
     ]
 
-    if current_chat_id and current_chat_files_dir and current_chat_artifacts_dir:
-        artifact_url_line = (
-            f"Served artifact URL template: {current_chat_artifact_url_template}"
-            if current_chat_artifact_url_template
-            else ""
-        )
+    if current_chat_id:
         sections.append(
             _section(
                 "current_chat",
                 f"""
                 Current chat id: {current_chat_id}
-                Default chat files directory: {current_chat_files_dir}
-                Default chat artifacts directory: {current_chat_artifacts_dir}
-                {artifact_url_line}
-                Relative paths for file tools, search tools, shell commands, PTY sessions, and Codex default to the chat files directory.
-                Use explicit workspace-relative paths like `session/...` or `runs/...` only when you intentionally want to work outside the chat files directory.
+                The chat id is conversation metadata only. It does not own a directory or limit which shared workspace files are visible.
                 """,
             )
         )
-        sections.append(
-            _section(
-                "generative_ui",
-                f"""
-                You may create generative UI when a visual explanation or interactive artifact would materially help the user.
-                Use `generative_widget` for generative UI.
-                Call `generative_widget(function="documentation")` first when you need the widget guidelines.
-                Then call `generative_widget(function="generate", widget=...)` with the actual widget markup.
-                For this MVP, the widget should be a single self-contained HTML or SVG fragment with inline styling and any inline JavaScript needed.
-                Do not wrap the widget markup in markdown fences.
-                Keep a short normal text response alongside the generated widget so the artifact complements the answer.
-                """,
-            )
+
+    sections.append(
+        _section(
+            "generative_ui",
+            """
+            You may create generative UI when a visual explanation or interactive artifact would materially help the user.
+            Use `generative_widget` for generative UI.
+            Call `generative_widget(function="documentation")` first when you need the widget guidelines.
+            Then call `generative_widget(function="generate", widget=...)` with the actual widget markup.
+            For this MVP, the widget should be a single self-contained HTML or SVG fragment with inline styling and any inline JavaScript needed.
+            Do not wrap the widget markup in markdown fences.
+            Keep a short normal text response alongside the generated widget so the artifact complements the answer.
+            """,
         )
+    )
 
     if include_subagent_tool:
         sections.append(

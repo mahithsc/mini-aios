@@ -11,10 +11,9 @@ from apscheduler.triggers.cron import CronTrigger
 from .agent import create_agent
 from .db import DB_PATH, get_db_connection, initialize_app_db
 from .prompt_loader import render_prompt
-from .workspace import ensure_workspace_dir
+from .workspace import get_runtime_paths
 
-_WORKSPACE_DIR = ensure_workspace_dir()
-CRON_LOG_DIR = str(_WORKSPACE_DIR / "cron_logs")
+CRON_LOG_DIR = str(get_runtime_paths().cron_logs)
 DEFAULT_CRON_TIMEZONE = os.getenv("AIOS_DEFAULT_TIMEZONE", "America/New_York")
 log = logging.getLogger(__name__)
 

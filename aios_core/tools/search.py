@@ -9,6 +9,7 @@ import glob as globlib
 from pathlib import Path
 
 from ..runtime_context import resolve_chat_files_path
+from ..workspace import PathAccessError
 from .toolcore import (
     looks_binary,
     repeat_notice,
@@ -44,9 +45,12 @@ def glob(pat: str, path: str = "."):
 
     Args:
         pat: Glob pattern, e.g. "**/*.py" (recursive) or "*.md".
-        path: Directory to search (default: chat files dir).
+        path: Directory to search (default: shared applications dir).
     """
-    resolved_path = resolve_chat_files_path(path)
+    try:
+        resolved_path = resolve_chat_files_path(path)
+    except PathAccessError as exc:
+        return f"error: {exc}"
     if not resolved_path.exists():
         return f"error: path does not exist: {resolved_path}"
     pattern = (str(resolved_path) + "/" + pat).replace("//", "/")
@@ -155,7 +159,7 @@ def grep(
 
     Args:
         pat: Regex pattern to search for.
-        path: File or directory to search (default: chat files dir).
+        path: File or directory to search (default: shared applications dir).
         glob: Optional filename filter, e.g. "*.py".
         context: Lines of context around each match (default 0).
         limit: Max output lines to return (default 50, max 200).
@@ -166,7 +170,10 @@ def grep(
     except re.error as exc:
         return f"error: invalid regex pattern: {exc}"
 
-    resolved = resolve_chat_files_path(path)
+    try:
+        resolved = resolve_chat_files_path(path)
+    except PathAccessError as exc:
+        return f"error: {exc}"
     if not resolved.exists():
         return f"error: path does not exist: {resolved}"
 

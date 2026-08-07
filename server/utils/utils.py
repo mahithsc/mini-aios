@@ -5,7 +5,7 @@ from pathlib import Path
 
 from agno.media import File, Image
 from agno.models.message import Message
-from aios_core.workspace import resolve_workspace_path
+from aios_core.workspace import PathAccessError, resolve_workspace_path
 from pydantic import TypeAdapter
 
 from server.types.chat import AssistantMessage, ChatMessage, MessageAttachment, UserMessage
@@ -77,8 +77,11 @@ def _assistant_events_to_openai_content(message: AssistantMessage) -> str:
     )
 
 
-def _resolve_attachment_path(attachment: MessageAttachment) -> Path:
-    return resolve_workspace_path(attachment.filePath)
+def _resolve_attachment_path(attachment: MessageAttachment) -> Path | None:
+    try:
+        return resolve_workspace_path(attachment.filePath)
+    except PathAccessError:
+        return None
 
 
 def _is_text_attachment(attachment: MessageAttachment) -> bool:
@@ -141,7 +144,7 @@ def _message_content_with_attachments(
     for attachment in message.attachments:
         attachment_path = _resolve_attachment_path(attachment)
 
-        if not attachment_path.exists():
+        if attachment_path is None or not attachment_path.exists():
             content_parts.append(f"[Attachment unavailable: {attachment.name}]")
             continue
 

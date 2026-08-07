@@ -1,0 +1,35 @@
+{
+  "id": "com.ambilabs.gmail",
+  "name": "Gmail",
+  "version": "0.1.0",
+  "runtime": {
+    "type": "python-module",
+    "module": "aios_core.mcp_servers.gmail.server",
+    "transport": "stdio"
+  },
+  "credentials": {
+    "owner": "mini-aios",
+    "provider": "google",
+    "delivery": "short-lived-access-token",
+    "broker": "in-process-first-party-adapter",
+    "scopes": [
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.send"
+    ]
+  },
+  "network": {
+    "hosts": [
+      "gmail.googleapis.com"
+    ]
+  },
+  "capabilities": {
+    "readOnly": false,
+    "tools": [
+      "search_messages",
+      "get_message",
+      "get_thread",
+      "list_labels",
+      "send_email"
+    ]
+  }
+}

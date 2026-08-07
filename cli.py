@@ -25,7 +25,7 @@ def new_chat():
     print(f"Chat saved: {chat_id}")
 
 messages = []
-start_runtime(start_heartbeat=False)
+start_runtime(start_crons=False)
 register_runtime_shutdown()
 
 while True:

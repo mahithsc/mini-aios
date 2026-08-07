@@ -1,26 +1,247 @@
 from __future__ import annotations
 
-import shutil
+import os
 import sqlite3
+import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
 
-from .workspace import ensure_workspace_dir
+from .workspace import get_runtime_paths
 
-_WORKSPACE_DIR = ensure_workspace_dir()
-DB_PATH = str(_WORKSPACE_DIR / "aios.db")
-LEGACY_DB_PATH = str(_WORKSPACE_DIR / "crons.db")
+DB_PATH = str(get_runtime_paths().database)
+_LEGACY_DB_MIGRATION_READY: set[str] = set()
+_LEGACY_DB_MIGRATION_LOCK = threading.Lock()
+
+
+def _legacy_db_candidates() -> list[Path]:
+    paths = get_runtime_paths()
+    legacy_archive = paths.state / "legacy_workspace"
+    roots = (paths.root, paths.workspace, legacy_archive)
+    candidates = [
+        *(root / "aios.db" for root in roots),
+        *(root / "crons.db" for root in roots),
+    ]
+    return list(dict.fromkeys(path.expanduser().resolve() for path in candidates))
+
+
+def _backup_database(source: Path, target: Path) -> None:
+    """Create the initial state database without leaving a partial target."""
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=".aios-db-migrate.",
+        suffix=".db",
+        dir=str(target.parent),
+    )
+    os.close(fd)
+    temporary = Path(temporary_name)
+    temporary.unlink(missing_ok=True)
+    try:
+        source_uri = f"file:{source.resolve()}?mode=ro"
+        with sqlite3.connect(source_uri, uri=True, timeout=5.0) as source_connection:
+            with sqlite3.connect(temporary, timeout=5.0) as destination:
+                source_connection.backup(destination)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {
+        row[1]
+        for row in connection.execute(f"PRAGMA table_info({table})")
+    }
+
+
+def _ensure_cron_tables(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS crons (
+            id                TEXT PRIMARY KEY,
+            name              TEXT NOT NULL,
+            description       TEXT NOT NULL,
+            instructions      TEXT NOT NULL,
+            schedule          TEXT NOT NULL,
+            status            TEXT NOT NULL DEFAULT 'active',
+            created_at        TEXT NOT NULL,
+            last_run_at       TEXT,
+            schedule_timezone TEXT,
+            run_at_utc        TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS cron_runs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            cron_id     TEXT NOT NULL REFERENCES crons(id),
+            started_at  TEXT NOT NULL,
+            finished_at TEXT,
+            output      TEXT,
+            status      TEXT NOT NULL
+        );
+        """
+    )
+    cron_columns = _table_columns(connection, "crons")
+    if "schedule_timezone" not in cron_columns:
+        connection.execute("ALTER TABLE crons ADD COLUMN schedule_timezone TEXT")
+    if "run_at_utc" not in cron_columns:
+        connection.execute("ALTER TABLE crons ADD COLUMN run_at_utc TEXT")
+
+
+def _source_rows(
+    connection: sqlite3.Connection,
+    table: str,
+) -> list[dict[str, object]]:
+    columns = [row[1] for row in connection.execute(f"PRAGMA table_info({table})")]
+    if not columns:
+        return []
+    connection.row_factory = sqlite3.Row
+    return [
+        dict(row)
+        for row in connection.execute(f"SELECT * FROM {table}")
+    ]
+
+
+def _merge_legacy_crons(
+    source_path: Path,
+    destination: sqlite3.Connection,
+) -> None:
+    source_uri = f"file:{source_path.resolve()}?mode=ro"
+    with sqlite3.connect(source_uri, uri=True, timeout=5.0) as source:
+        source_tables = {
+            row[0]
+            for row in source.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if "crons" not in source_tables:
+            return
+
+        _ensure_cron_tables(destination)
+        default_timezone = os.getenv(
+            "AIOS_DEFAULT_TIMEZONE",
+            "America/New_York",
+        )
+        for cron in _source_rows(source, "crons"):
+            cron_id = cron.get("id")
+            if not isinstance(cron_id, str) or not cron_id:
+                continue
+            schedule = str(cron.get("schedule") or "")
+            schedule_timezone = cron.get("schedule_timezone")
+            if not schedule_timezone and schedule:
+                schedule_timezone = default_timezone
+            destination.execute(
+                """
+                INSERT INTO crons (
+                    id, name, description, instructions, schedule, status,
+                    created_at, last_run_at, schedule_timezone, run_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO NOTHING
+                """,
+                (
+                    cron_id,
+                    str(cron.get("name") or ""),
+                    str(cron.get("description") or ""),
+                    str(cron.get("instructions") or ""),
+                    schedule,
+                    str(cron.get("status") or "active"),
+                    str(cron.get("created_at") or ""),
+                    cron.get("last_run_at"),
+                    schedule_timezone,
+                    cron.get("run_at_utc"),
+                ),
+            )
+
+        if "cron_runs" not in source_tables:
+            return
+
+        known_crons = {
+            row[0] for row in destination.execute("SELECT id FROM crons")
+        }
+        existing_runs = {
+            tuple(row)
+            for row in destination.execute(
+                """
+                SELECT cron_id, started_at, finished_at, output, status
+                FROM cron_runs
+                """
+            )
+        }
+        for run in _source_rows(source, "cron_runs"):
+            values = (
+                run.get("cron_id"),
+                run.get("started_at"),
+                run.get("finished_at"),
+                run.get("output"),
+                run.get("status"),
+            )
+            if values[0] not in known_crons or values in existing_runs:
+                continue
+            destination.execute(
+                """
+                INSERT INTO cron_runs (
+                    cron_id, started_at, finished_at, output, status
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                values,
+            )
+            existing_runs.add(values)
 
 
 def _migrate_legacy_db_if_needed(db_path: str) -> None:
-    target = Path(db_path)
-    legacy = Path(LEGACY_DB_PATH)
-
-    if target.exists() or not legacy.exists() or target == legacy:
+    target = Path(db_path).expanduser().resolve()
+    if target != Path(DB_PATH).expanduser().resolve():
         return
 
-    shutil.copy2(legacy, target)
+    target_key = str(target)
+    if target_key in _LEGACY_DB_MIGRATION_READY:
+        return
+
+    with _LEGACY_DB_MIGRATION_LOCK:
+        if target_key in _LEGACY_DB_MIGRATION_READY:
+            return
+
+        candidates = [
+            candidate
+            for candidate in _legacy_db_candidates()
+            if candidate.exists() and candidate != target
+        ]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists() and candidates:
+            _backup_database(candidates[0], target)
+
+        if target.exists():
+            with sqlite3.connect(target, timeout=5.0) as destination:
+                destination.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS legacy_database_imports (
+                        source_path TEXT PRIMARY KEY,
+                        imported_at INTEGER NOT NULL
+                    )
+                    """
+                )
+                imported_sources = {
+                    row[0]
+                    for row in destination.execute(
+                        "SELECT source_path FROM legacy_database_imports"
+                    )
+                }
+                for source in candidates:
+                    source_key = str(source)
+                    if source_key in imported_sources:
+                        continue
+                    _merge_legacy_crons(source, destination)
+                    destination.execute(
+                        """
+                        INSERT INTO legacy_database_imports (
+                            source_path, imported_at
+                        )
+                        VALUES (?, ?)
+                        """,
+                        (source_key, int(time.time() * 1000)),
+                    )
+
+        _LEGACY_DB_MIGRATION_READY.add(target_key)
 
 
 def get_db_connection(db_path: str = DB_PATH) -> sqlite3.Connection:

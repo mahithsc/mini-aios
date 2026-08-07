@@ -6,12 +6,11 @@ from datetime import datetime, timezone
 
 from .agent import create_agent
 from .prompt_loader import load_prompt
-from .workspace import ensure_workspace_dir
+from .workspace import get_runtime_paths
 
 
 log = logging.getLogger(__name__)
-_WORKSPACE_DIR = ensure_workspace_dir()
-HEARTBEAT_LOG_DIR = str(_WORKSPACE_DIR / "heartbeat_logs")
+HEARTBEAT_LOG_DIR = str(get_runtime_paths().heartbeat_logs)
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 120
 
 

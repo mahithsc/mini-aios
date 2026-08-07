@@ -1,0 +1,27 @@
+{
+  "id": "com.ambilabs.doordash",
+  "name": "DoorDash",
+  "version": "0.1.0",
+  "runtime": {
+    "type": "python-module",
+    "module": "aios_core.mcp_servers.doordash.server",
+    "transport": "stdio"
+  },
+  "implementation": {
+    "type": "cli-adapter",
+    "executable": "dd-cli",
+    "pathEnvironmentVariable": "AIOS_DOORDASH_CLI_PATH"
+  },
+  "credentials": {
+    "owner": "dd-cli",
+    "provider": "doordash",
+    "delivery": "operating-system-keychain",
+    "broker": "installed-cli"
+  },
+  "capabilities": {
+    "readOnly": false,
+    "tools": [
+      "run_cli"
+    ]
+  }
+}

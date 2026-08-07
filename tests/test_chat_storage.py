@@ -21,11 +21,6 @@ def isolated_chat_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(sessions, "SESSION_DIR", session_dir)
     monkeypatch.setattr(
         sessions,
-        "SESSION_MANIFEST_PATH",
-        session_dir / "session_manifest.json",
-    )
-    monkeypatch.setattr(
-        sessions,
         "_LEGACY_DEV_SESSION_DIR",
         tmp_path / "missing-legacy-session",
     )

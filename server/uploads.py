@@ -5,6 +5,7 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import BinaryIO
 
 from fastapi import HTTPException, UploadFile, status
 
@@ -93,20 +94,30 @@ def _sanitize_filename(filename: str | None) -> str:
     return f"{stem}{suffix}" if suffix else stem
 
 
-def _get_relative_upload_dir(chat_id: str) -> Path:
-    return Path(UPLOAD_ROOT) / _sanitize_path_segment(chat_id, "chat")
+def _candidate_relative_paths(filename: str):
+    relative_dir = Path(UPLOAD_ROOT)
+    source_name = Path(filename)
+    yield relative_dir / filename
+    number = 2
+    while True:
+        candidate_name = (
+            f"{source_name.stem} {number}{source_name.suffix}"
+            if source_name.suffix
+            else f"{source_name.name} {number}"
+        )
+        yield relative_dir / candidate_name
+        number += 1
 
 
-def _get_unique_relative_path(chat_id: str, filename: str) -> Path:
-    relative_dir = _get_relative_upload_dir(chat_id)
-    candidate = relative_dir / filename
-    target_path = resolve_workspace_path(candidate)
-
-    if not target_path.exists():
-        return candidate
-
-    unique_prefix = uuid.uuid4().hex[:8]
-    return relative_dir / f"{unique_prefix}-{filename}"
+def _reserve_unique_upload(filename: str) -> tuple[Path, Path, BinaryIO]:
+    for relative_path in _candidate_relative_paths(filename):
+        absolute_path = resolve_workspace_path(relative_path)
+        absolute_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            return relative_path, absolute_path, absolute_path.open("xb")
+        except FileExistsError:
+            continue
+    raise RuntimeError("could not reserve an upload path")
 
 
 def _infer_mime_type(upload: UploadFile, filename: str) -> str | None:
@@ -161,13 +172,11 @@ async def save_uploads(chat_id: str, files: list[UploadFile]) -> list[MessageAtt
                 detail=f"Unsupported attachment type for {safe_filename}.",
             )
 
-        relative_path = _get_unique_relative_path(chat_id, safe_filename)
-        absolute_path = resolve_workspace_path(relative_path)
-        absolute_path.parent.mkdir(parents=True, exist_ok=True)
+        relative_path, absolute_path, target = _reserve_unique_upload(safe_filename)
 
         size_bytes = 0
         try:
-            with absolute_path.open("wb") as target:
+            with target:
                 while True:
                     chunk = await upload.read(CHUNK_SIZE)
                     if not chunk:

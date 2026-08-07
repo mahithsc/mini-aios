@@ -25,6 +25,9 @@ from server.tunnel import start_if_paired, stop_cloudflared
 from server.notifications.runtime import shutdown_notification_service, start_notification_service
 from server.execution.runtime import shutdown_runs_service, start_runs_service
 from server.gateway.routes import router as gateway_router
+from server.integrations.doordash import router as doordash_integration_router
+from server.integrations.gmail import router as gmail_integration_router
+from server.integrations.google import router as google_integration_router
 from server.uploads import save_uploads
 
 register_runtime_shutdown()
@@ -104,6 +107,9 @@ app.add_middleware(
 # AIOS gateway (/sessions ...) — the session/agent-run API the mobile + desktop
 # chat clients speak. Auth is gated by AIOS_GATEWAY_TOKEN (open when unset).
 app.include_router(gateway_router)
+app.include_router(doordash_integration_router)
+app.include_router(gmail_integration_router)
+app.include_router(google_integration_router)
 
 
 @app.get("/health")
