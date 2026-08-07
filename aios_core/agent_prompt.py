@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Mapping, Sequence
+from typing import Any
 from zoneinfo import ZoneInfo
 
 _BASE_TOOLS_BLOCK = """
@@ -124,7 +125,17 @@ _BASE_TOOLS_BLOCK = """
 ),
 """.strip()
 
-_SUBAGENT_TOOLS_BLOCK = """
+_MAIN_TOOLS_BLOCK = """
+"app": (
+    "Manage isolated Apps. Use create before writing a new App, then edit its "
+    "files with file tools and use validate -> prepare -> enable. Run declared "
+    "executables only with this tool. Never run App source through bash/process/Codex. "
+    "Network approval and reset_data actions require the user's explicit approval.",
+    {"action": "string", "app_id": "string?", "slug": "string?", "name": "string?",
+     "description": "string?", "version": "string?", "executable": "string?",
+     "args": "array?", "approve_network": "boolean?"},
+    app,
+),
 "subagent": (
     "Delegate one focused task to a synchronous subagent. "
     "For parallel work, call this tool multiple times.",
@@ -221,6 +232,10 @@ def build_agent_prompt(
             Relative file paths start in applications. Chats, scheduled tasks, and subagents all share this same directory.
             applications is the only writable area. You may read and copy files from uploads and downloads, but never modify, rename, move, or delete the originals there.
             skills is read-only and outside the workspace. Internal databases, run records, schedules, and logs are not part of the agent filesystem.
+            A direct child of applications containing app.json is a managed App. You may inspect and edit
+            its source with file tools, but never execute App source with bash, process tools, or Codex.
+            Validate, prepare, enable, and run managed Apps only through the app tool so executable code
+            and MCP servers stay inside the isolated App runtime.
             If you create a new project folder, create a `WORKSPACE.md` file in that folder and keep it updated with project-specific documentation.
             For longer-horizon work, it is encouraged to keep a `TICKETS.md` task board so progress and decisions remain visible.
             """,
@@ -319,7 +334,7 @@ def build_agent_prompt(
 
     tools_block = _BASE_TOOLS_BLOCK
     if include_subagent_tool:
-        tools_block = f"{tools_block}\n{_SUBAGENT_TOOLS_BLOCK}"
+        tools_block = f"{tools_block}\n{_MAIN_TOOLS_BLOCK}"
     sections.append(_section("tools", tools_block))
 
     return "\n\n".join(sections)

@@ -3,23 +3,12 @@ from __future__ import annotations
 from difflib import get_close_matches
 from pathlib import Path
 
-from ..skills import load_skills
-from ..workspace import get_skills_dir
-
-_MAX_SKILL_CHARS = 100_000
+from ..skill_limits import MAX_SKILL_INSTRUCTION_CHARS
+from ..skills import load_skills, resolve_skill_file
 
 
 def _skill_path(file_path: str) -> Path | None:
-    skills_dir = get_skills_dir().resolve()
-    relative_path = file_path.replace("\\", "/")
-    if relative_path.startswith("skills/"):
-        relative_path = relative_path[len("skills/") :]
-    candidate = (skills_dir / relative_path).resolve()
-    try:
-        candidate.relative_to(skills_dir)
-    except ValueError:
-        return None
-    return candidate
+    return resolve_skill_file(file_path)
 
 
 def read_skill(name: str | None = None):
@@ -71,10 +60,16 @@ def read_skill(name: str | None = None):
             "skill": selected,
         }
 
-    instructions = path.read_text(encoding="utf-8")
-    truncated = len(instructions) > _MAX_SKILL_CHARS
-    if truncated:
-        instructions = instructions[:_MAX_SKILL_CHARS]
+    try:
+        with path.open(encoding="utf-8") as file:
+            instructions = file.read(MAX_SKILL_INSTRUCTION_CHARS + 1)
+    except (OSError, UnicodeError):
+        return {
+            "error": f"skill file could not be read: {selected['file']}",
+            "skill": selected,
+        }
+    truncated = len(instructions) > MAX_SKILL_INSTRUCTION_CHARS
+    instructions = instructions[:MAX_SKILL_INSTRUCTION_CHARS]
     return {
         "skill": selected,
         "instructions": instructions,

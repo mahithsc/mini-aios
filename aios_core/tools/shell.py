@@ -8,6 +8,7 @@ import signal
 import subprocess
 import time
 
+from ..apps.paths import AppHostExecutionDenied, ensure_host_execution_allowed
 from ..runtime_context import default_chat_files_cwd, resolve_chat_files_path
 from ..workspace import PathAccessError
 from .execution_sandbox import ExecutionSandboxUnavailable, sandboxed_command
@@ -89,7 +90,7 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
             pass
 
 
-def bash(cmd: str, timeout: float = 30, cwd: str = None):
+def bash(cmd: str, timeout: float = 30, cwd: str | None = None):
     """Run a non-interactive shell command and return its combined output.
 
     On timeout the whole process group is killed (including children), so
@@ -110,6 +111,11 @@ def bash(cmd: str, timeout: float = 30, cwd: str = None):
             return f"error: {exc}"
         if not workdir.is_dir():
             return f"error: cwd is not a directory: {workdir}"
+
+    try:
+        ensure_host_execution_allowed(workdir)
+    except AppHostExecutionDenied as exc:
+        return f"error: {exc}"
 
     try:
         proc = subprocess.Popen(

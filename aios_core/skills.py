@@ -4,6 +4,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .skill_limits import (
+    MAX_SKILL_FILE_BYTES,
+    MAX_SKILL_NAME_CHARS,
+    MAX_SKILL_SUMMARY_CHARS,
+    MAX_SKILL_TITLE_CHARS,
+)
 from .workspace import get_skills_dir
 
 _SKILL_FILE_NAME = "SKILL.md"
@@ -68,21 +74,35 @@ def _skill_name_from_path(path: Path, skills_dir: Path) -> str:
 
 
 def _load_skill_from_file(
-    path: Path, skills_dir: Path, overrides: dict[str, Any] | None = None
+    path: Path,
+    skills_dir: Path,
+    overrides: dict[str, Any] | None = None,
+    *,
+    agent_file: str | None = None,
 ) -> dict[str, str] | None:
     if not path.exists() or not path.is_file():
         return None
     if _is_ignored_path(path, skills_dir):
         return None
 
-    text = path.read_text(encoding="utf-8")
+    try:
+        if path.stat().st_size > MAX_SKILL_FILE_BYTES:
+            return None
+        with path.open(encoding="utf-8") as file:
+            text = file.read(MAX_SKILL_FILE_BYTES + 1)
+    except (OSError, UnicodeError):
+        return None
+    if len(text.encode("utf-8")) > MAX_SKILL_FILE_BYTES:
+        return None
     metadata, body = _parse_frontmatter(text)
     overrides = overrides or {}
 
     name = str(
-        overrides.get("name") or metadata.get("name") or _skill_name_from_path(path, skills_dir)
+        overrides.get("name")
+        or metadata.get("name")
+        or _skill_name_from_path(path, skills_dir)
     ).strip()
-    if not name:
+    if not name or len(name) > MAX_SKILL_NAME_CHARS:
         return None
 
     title = str(
@@ -94,12 +114,14 @@ def _load_skill_from_file(
         or metadata.get("description")
         or ""
     ).strip()
+    title = title[:MAX_SKILL_TITLE_CHARS]
+    description = description[:MAX_SKILL_SUMMARY_CHARS]
 
     return {
         "name": name,
         "title": title or name,
         "summary": description,
-        "file": _agent_skill_path(path, skills_dir),
+        "file": agent_file or _agent_skill_path(path, skills_dir),
     }
 
 
@@ -109,8 +131,7 @@ def _normalize_manifest_path(raw_path: str, skills_dir: Path) -> Path:
         return candidate
 
     relative_path = raw_path.strip().replace("\\", "/")
-    if relative_path.startswith("skills/"):
-        relative_path = relative_path[len("skills/") :]
+    relative_path = relative_path.removeprefix("skills/")
     return skills_dir / relative_path
 
 
@@ -185,7 +206,7 @@ def _load_manifest_entries(skills_dir: Path) -> list[str | dict[str, Any]]:
     return raw_manifest
 
 
-def load_skills() -> list[dict[str, str]]:
+def _load_global_skills() -> list[dict[str, str]]:
     skills_dir = get_skills_dir()
     skills: list[dict[str, str]] = []
     seen_files: set[str] = set()
@@ -211,3 +232,81 @@ def load_skills() -> list[dict[str, str]]:
         skills.append(skill)
 
     return skills
+
+
+def _load_app_skills() -> list[dict[str, str]]:
+    """Load enabled App skills strictly from immutable active snapshots."""
+
+    try:
+        from .apps.manifest import load_manifest
+        from .apps.service import AppService
+
+        service = AppService()
+        apps = service.registry.list(enabled=True)
+    except Exception as exc:  # noqa: BLE001 - Apps remain optional at startup
+        print(f"[apps] skills could not be loaded: {exc}")
+        return []
+
+    skills: list[dict[str, str]] = []
+    for app in apps:
+        if not app.active_hash:
+            continue
+        try:
+            snapshot_root = service.verify_snapshot(app, app.active_hash).path
+            manifest = load_manifest(snapshot_root / "app.json")
+        except Exception as exc:  # noqa: BLE001 - isolate one broken App
+            print(f"[apps] skills for {app.slug} could not be loaded: {exc}")
+            continue
+        for spec in manifest.skills:
+            namespace = f"{app.slug}/{spec.id}"
+            skill = _load_skill_from_file(
+                snapshot_root / spec.path,
+                snapshot_root,
+                {"name": namespace},
+                agent_file=f"app://{namespace}",
+            )
+            if skill is None:
+                continue
+            skill["title"] = f"{app.name}: {skill['title']}"
+            skills.append(skill)
+    return skills
+
+
+def resolve_skill_file(file_path: str) -> Path | None:
+    if not file_path.startswith("app://"):
+        skills_dir = get_skills_dir().resolve()
+        relative_path = file_path.replace("\\", "/")
+        relative_path = relative_path.removeprefix("skills/")
+        candidate = (skills_dir / relative_path).resolve()
+        try:
+            candidate.relative_to(skills_dir)
+        except ValueError:
+            return None
+        return candidate
+
+    namespace = file_path[len("app://") :]
+    slug, separator, skill_id = namespace.partition("/")
+    if not separator or not slug or not skill_id or "/" in skill_id:
+        return None
+    try:
+        from .apps.manifest import load_manifest
+        from .apps.service import AppService
+
+        service = AppService()
+        app = service.registry.require(slug)
+        if not app.enabled or not app.active_hash:
+            return None
+        snapshot_root = service.verify_snapshot(app, app.active_hash).path.resolve()
+        manifest = load_manifest(snapshot_root / "app.json")
+        spec = next((skill for skill in manifest.skills if skill.id == skill_id), None)
+        if spec is None:
+            return None
+        candidate = (snapshot_root / spec.path).resolve()
+        candidate.relative_to(snapshot_root)
+        return candidate
+    except Exception:  # noqa: BLE001 - unavailable/disabled App skill
+        return None
+
+
+def load_skills() -> list[dict[str, str]]:
+    return [*_load_global_skills(), *_load_app_skills()]

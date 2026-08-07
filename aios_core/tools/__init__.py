@@ -1,24 +1,25 @@
 __all__ = [
-    "read",
-    "write",
+    "app",
+    "bash",
+    "codex",
+    "cron",
     "edit",
+    "fetch",
+    "generative_widget",
     "glob",
     "grep",
-    "processes",
-    "process_spawn",
-    "process_list",
-    "process_send",
-    "process_poll",
-    "process_kill",
-    "bash",
-    "cron",
     "notify",
-    "codex",
-    "generative_widget",
-    "tavily_search",
-    "fetch",
+    "process_kill",
+    "process_list",
+    "process_poll",
+    "process_send",
+    "process_spawn",
+    "processes",
+    "read",
     "read_skill",
     "subagent",
+    "tavily_search",
+    "write",
 ]
 
 
@@ -88,6 +89,10 @@ def __getattr__(name: str):
         from .skill import read_skill
 
         return read_skill
+    if name == "app":
+        from .app import app
+
+        return app
     if name == "subagent":
         from .subagent import subagent
 

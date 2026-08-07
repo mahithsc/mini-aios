@@ -414,6 +414,35 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
                 attachment_count  INTEGER NOT NULL,
                 skipped_count     INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS apps (
+                id                  TEXT PRIMARY KEY,
+                slug                TEXT NOT NULL UNIQUE,
+                name                TEXT NOT NULL,
+                description         TEXT NOT NULL DEFAULT '',
+                version             TEXT NOT NULL,
+                origin              TEXT NOT NULL
+                                    CHECK (origin IN (
+                                        'builtin', 'user', 'agent', 'imported'
+                                    )),
+                root_path           TEXT NOT NULL UNIQUE,
+                manifest_json       TEXT,
+                validated_hash      TEXT,
+                prepared_hash       TEXT,
+                active_hash         TEXT,
+                enabled             INTEGER NOT NULL DEFAULT 0
+                                    CHECK (enabled IN (0, 1)),
+                network_approved    INTEGER NOT NULL DEFAULT 0
+                                    CHECK (network_approved IN (0, 1)),
+                created_by_chat_id  TEXT,
+                created_by_run_id   TEXT,
+                created_at          INTEGER NOT NULL,
+                updated_at          INTEGER NOT NULL,
+                last_error          TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_apps_enabled
+                ON apps(enabled, slug);
         """)
         # Upgrade older device_link tables (columns added after first release).
         for column in ("connector_token TEXT", "hostname TEXT"):
@@ -426,6 +455,15 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
             conn.execute("ALTER TABLE message_attachments ADD COLUMN content_hash TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
+
+        if "network_approved" not in _table_columns(conn, "apps"):
+            conn.execute(
+                """
+                ALTER TABLE apps
+                ADD COLUMN network_approved INTEGER NOT NULL DEFAULT 0
+                CHECK (network_approved IN (0, 1))
+                """
+            )
 
 
 def get_or_create_device_id(db_path: str = DB_PATH) -> str:

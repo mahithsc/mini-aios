@@ -11,6 +11,13 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from ..apps.paths import (
+    AppHostExecutionDenied,
+    ensure_host_execution_allowed,
+    protected_app_roots,
+)
 from ..runtime_context import default_chat_files_cwd, resolve_chat_files_path
 from ..workspace import PathAccessError
 from .ansi_strip import strip_ansi
@@ -70,13 +77,17 @@ class ProcessSession:
     lock: threading.Lock = field(default_factory=threading.Lock)
     active_command: dict[str, object] | None = None
     scan_pos: int = 0
+    protected_roots: tuple[str, ...] = ()
 
-    def start(self) -> "ProcessSession":
+    def start(self) -> ProcessSession:
         master_fd, slave_fd = pty.openpty()
         proc = None
         try:
             proc = subprocess.Popen(
-                sandboxed_command([self.shell, "--noprofile", "--norc"]),
+                sandboxed_command(
+                    [self.shell, "--noprofile", "--norc"],
+                    protected_roots=tuple(Path(root) for root in self.protected_roots),
+                ),
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
@@ -394,6 +405,10 @@ class ProcessManager:
             return {"error": f"path does not exist: {resolved_cwd}"}
         if not resolved_cwd.is_dir():
             return {"error": f"path is not a directory: {resolved_cwd}"}
+        try:
+            ensure_host_execution_allowed(resolved_cwd)
+        except AppHostExecutionDenied as exc:
+            return {"error": str(exc)}
 
         # Prune dead sessions, then enforce the concurrency cap so leaked
         # sessions can't accumulate forever in a long-lived server process.
@@ -418,6 +433,7 @@ class ProcessManager:
                 cwd=str(resolved_cwd),
                 env=_normalize_env(env),
                 shell=(shell or _DEFAULT_SHELL).strip() or _DEFAULT_SHELL,
+                protected_roots=tuple(str(path) for path in protected_app_roots()),
             ).start()
         except FileNotFoundError:
             return {"error": f"shell not found: {(shell or _DEFAULT_SHELL).strip() or _DEFAULT_SHELL}"}
@@ -440,6 +456,17 @@ class ProcessManager:
         session = self.get(process_id)
         if isinstance(session, dict):
             return session
+        current_roots = tuple(str(path) for path in protected_app_roots())
+        if current_roots != session.protected_roots:
+            session.close()
+            with self._lock:
+                self._sessions.pop(session.id, None)
+            return {
+                "error": (
+                    "managed Apps changed after this process session started; "
+                    "the stale session was closed to preserve App isolation"
+                )
+            }
         if command is not None and input_text is not None:
             return {"error": "send accepts either command or input, not both"}
         if command is None and input_text is None:

@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from ..runtime_context import resolve_chat_files_path
-from ..workspace import PathAccessError
+from ..workspace import PathAccessError, get_applications_dir
 from . import file_state
 from .binary_extensions import has_binary_extension
 from .toolcore import (
@@ -27,6 +27,18 @@ from .toolcore import (
 )
 
 _BOM = "﻿"
+
+
+def _quiesce_for_app_manifest(path: Path) -> None:
+    try:
+        relative = path.resolve().relative_to(get_applications_dir().resolve())
+    except (OSError, RuntimeError, ValueError):
+        return
+    if len(relative.parts) != 2 or relative.name != "app.json":
+        return
+    from .processes import close_all_processes
+
+    close_all_processes()
 
 
 def _guard_path(resolved: Path, *, for_read: bool) -> str | None:
@@ -233,6 +245,7 @@ def write(path: str, content: str):
 
     with file_state.lock_path(str(resolved)):
         try:
+            _quiesce_for_app_manifest(resolved)
             _atomic_write(resolved, content)
         except OSError as exc:
             return f"error: cannot write {resolved}: {exc}"
@@ -309,6 +322,7 @@ def edit(path: str, old: str, new: str, all: bool = False):
         if had_bom:
             replacement = _BOM + replacement
         try:
+            _quiesce_for_app_manifest(resolved)
             _atomic_write(resolved, replacement)
         except OSError as exc:
             return f"error: cannot write {resolved}: {exc}"

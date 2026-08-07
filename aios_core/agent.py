@@ -7,6 +7,7 @@ from .agent_prompt import build_agent_prompt
 from .openai_chat import AiosOpenAIChat
 from .skills import load_skills
 from .tools import (
+    app,
     bash,
     edit,
     glob,
@@ -57,7 +58,7 @@ BASE_TOOLS = [
     tavily_search,
     fetch,
 ]
-MAIN_TOOLS = [*BASE_TOOLS, subagent]
+MAIN_TOOLS = [*BASE_TOOLS, app, subagent]
 
 
 def _load_main_integration_tools() -> list:
@@ -84,6 +85,16 @@ def _load_main_integration_tools() -> list:
                 toolkits.append(doordash)
         except Exception as exc:  # noqa: BLE001 - optional integration
             print(f"[integrations] DoorDash MCP could not be loaded: {exc}")
+
+    try:
+        from .apps.mcp import get_enabled_app_mcp_toolkits
+    except ImportError as exc:
+        print(f"[apps] App MCP support unavailable: {exc}")
+    else:
+        try:
+            toolkits.extend(get_enabled_app_mcp_toolkits())
+        except Exception as exc:  # noqa: BLE001 - optional App toolkits
+            print(f"[apps] App MCP toolkits could not be loaded: {exc}")
 
     return toolkits
 

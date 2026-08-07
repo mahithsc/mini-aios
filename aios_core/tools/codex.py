@@ -1,14 +1,15 @@
 import subprocess
 
+from ..apps.paths import AppHostExecutionDenied, ensure_host_execution_allowed
 from ..runtime_context import resolve_chat_files_path
 from ..workspace import PathAccessError
-from .execution_sandbox import sandboxed_command
+from .execution_sandbox import ExecutionSandboxUnavailable, sandboxed_command
 
 
 def codex(
-    task: str = None,
+    task: str | None = None,
     timeout: float = 180,
-    model: str = None,
+    model: str | None = None,
     path: str = ".",
 ):
     """
@@ -34,6 +35,10 @@ def codex(
         return f"error: path does not exist: {workdir}"
     if not workdir.is_dir():
         return f"error: path is not a directory: {workdir}"
+    try:
+        ensure_host_execution_allowed(workdir)
+    except AppHostExecutionDenied as exc:
+        return f"error: {exc}"
 
     cmd = [
         "codex",
@@ -51,11 +56,12 @@ def codex(
         result = subprocess.run(
             # Codex applies its own workspace-write sandbox. The native wrapper
             # is defense in depth when macOS permits nested sandboxing.
-            sandboxed_command(cmd, allow_unwrapped=True),
+            sandboxed_command(cmd),
             capture_output=True,
             text=True,
             timeout=timeout_value,
             cwd=str(workdir),
+            check=False,
         )
     except FileNotFoundError:
         return "error: codex CLI is not installed or not on PATH"
@@ -71,7 +77,7 @@ def codex(
         if partial:
             return f"{partial}\n(error: codex timed out after {timeout_value:g}s)"
         return f"error: codex timed out after {timeout_value:g}s"
-    except Exception as e:
+    except (OSError, ExecutionSandboxUnavailable) as e:
         return f"error: codex failed -- {e}"
 
     out = (result.stdout + result.stderr).strip()
