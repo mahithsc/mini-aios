@@ -37,6 +37,7 @@ from server.relay_client import relay_client
 from server.tunnel import start_if_paired, stop_cloudflared
 from server.types.chat import Chat
 from server.uploads import save_uploads
+from server.updater import require_accepting_work, router as updater_router
 
 register_runtime_shutdown()
 
@@ -119,6 +120,7 @@ app.include_router(apps_router)
 app.include_router(doordash_integration_router)
 app.include_router(gmail_integration_router)
 app.include_router(google_integration_router)
+app.include_router(updater_router)
 
 
 @app.get("/health")
@@ -189,6 +191,7 @@ class MessageRequest(BaseModel):
 async def message(body: MessageRequest) -> StreamingResponse:
     """Send a user turn and stream the agent's run events as SSE. HTTP
     request/response equivalent of the `/ws` chat path."""
+    await require_accepting_work()
     return StreamingResponse(
         stream_message(body.chat, body.turnId),
         media_type="text/event-stream",

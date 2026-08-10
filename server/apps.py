@@ -15,6 +15,7 @@ from aios_core.apps.registry import (
 from aios_core.apps.runtime import AppRuntimeError, DockerUnavailableError
 from aios_core.apps.service import AppSourceError, SnapshotError
 from server.auth import require_local_token
+from server.updater import require_accepting_work
 
 router = APIRouter(
     prefix="/apps",
@@ -81,7 +82,7 @@ async def list_apps() -> dict[str, object]:
         raise _http_error(exc) from exc
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_accepting_work)])
 async def create_app(body: CreateAppRequest) -> dict[str, object]:
     try:
         return _coordinator().create(
@@ -103,7 +104,7 @@ async def inspect_app(app_id: str) -> dict[str, object]:
         raise _http_error(exc) from exc
 
 
-@router.post("/{app_id}/validate")
+@router.post("/{app_id}/validate", dependencies=[Depends(require_accepting_work)])
 async def validate_app(app_id: str) -> dict[str, object]:
     try:
         return _coordinator().validate(app_id)
@@ -111,7 +112,7 @@ async def validate_app(app_id: str) -> dict[str, object]:
         raise _http_error(exc) from exc
 
 
-@router.post("/{app_id}/prepare")
+@router.post("/{app_id}/prepare", dependencies=[Depends(require_accepting_work)])
 async def prepare_app(
     app_id: str,
     body: PrepareAppRequest | None = None,
@@ -135,7 +136,7 @@ async def prepare_app(
         raise _http_error(exc) from exc
 
 
-@router.post("/{app_id}/enable")
+@router.post("/{app_id}/enable", dependencies=[Depends(require_accepting_work)])
 async def enable_app(app_id: str) -> dict[str, object]:
     try:
         return _coordinator().enable(app_id)["app"]
@@ -143,7 +144,7 @@ async def enable_app(app_id: str) -> dict[str, object]:
         raise _http_error(exc) from exc
 
 
-@router.post("/{app_id}/disable")
+@router.post("/{app_id}/disable", dependencies=[Depends(require_accepting_work)])
 async def disable_app(app_id: str) -> dict[str, object]:
     try:
         return _coordinator().disable(app_id)["app"]
@@ -151,7 +152,7 @@ async def disable_app(app_id: str) -> dict[str, object]:
         raise _http_error(exc) from exc
 
 
-@router.post("/{app_id}/network")
+@router.post("/{app_id}/network", dependencies=[Depends(require_accepting_work)])
 async def set_app_network(
     app_id: str,
     body: NetworkApprovalRequest,
@@ -162,7 +163,10 @@ async def set_app_network(
         raise _http_error(exc) from exc
 
 
-@router.post("/{app_id}/executables/{executable_id}/run")
+@router.post(
+    "/{app_id}/executables/{executable_id}/run",
+    dependencies=[Depends(require_accepting_work)],
+)
 async def run_app_executable(
     app_id: str,
     executable_id: str,
@@ -178,7 +182,7 @@ async def run_app_executable(
         raise _http_error(exc) from exc
 
 
-@router.delete("/{app_id}")
+@router.delete("/{app_id}", dependencies=[Depends(require_accepting_work)])
 async def unregister_app(app_id: str) -> dict[str, object]:
     try:
         return _coordinator().unregister(app_id)
@@ -186,7 +190,7 @@ async def unregister_app(app_id: str) -> dict[str, object]:
         raise _http_error(exc) from exc
 
 
-@router.delete("/{app_id}/data")
+@router.delete("/{app_id}/data", dependencies=[Depends(require_accepting_work)])
 async def reset_app_data(app_id: str) -> dict[str, object]:
     try:
         return _coordinator().reset_data(app_id)

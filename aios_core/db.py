@@ -261,6 +261,14 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
         # open for the duration of a model response.
         conn.execute("PRAGMA journal_mode = WAL")
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version       INTEGER PRIMARY KEY,
+                name          TEXT NOT NULL,
+                checksum      TEXT NOT NULL,
+                applied_at    INTEGER NOT NULL,
+                app_release   TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS device_identity (
                 id          INTEGER PRIMARY KEY CHECK (id = 1),
                 device_id   TEXT NOT NULL,
@@ -444,6 +452,17 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS idx_apps_enabled
                 ON apps(enabled, slug);
         """)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO schema_migrations (
+                version, name, checksum, applied_at, app_release
+            ) VALUES (1, 'baseline', 'baseline-v1', ?, ?)
+            """,
+            (
+                int(time.time() * 1000),
+                os.getenv("AIOS_RELEASE_ID", "development"),
+            ),
+        )
         # Upgrade older device_link tables (columns added after first release).
         for column in ("connector_token TEXT", "hostname TEXT"):
             try:

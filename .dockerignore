@@ -6,6 +6,8 @@ __pycache__/
 *.db-shm
 .env
 .git/
+.dev/
+dist/
 debug-wav/
 runs/
 session/

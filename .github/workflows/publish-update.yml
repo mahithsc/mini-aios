@@ -1,0 +1,209 @@
+name: Publish signed Mini AIOS update
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic application version
+        required: true
+        type: string
+      release_id:
+        description: Unique release identifier
+        required: true
+        type: string
+      sequence:
+        description: Monotonically increasing release sequence
+        required: true
+        type: number
+      channel:
+        description: Release channel
+        required: true
+        default: stable
+        type: choice
+        options: [dev, beta, stable]
+      observation_seconds:
+        description: Device health observation period
+        required: true
+        default: "300"
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: updater/go.mod
+          cache-dependency-path: updater/go.sum
+      - name: Run Python tests
+        run: PYTHONPATH=. uv run --python 3.12 --with pytest pytest -q
+      - name: Run updater tests
+        working-directory: updater
+        run: go test ./...
+
+  build-image:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push immutable multi-platform image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:candidate-${{ inputs.release_id }}
+          build-args: |
+            AIOS_VERSION=${{ inputs.version }}
+            AIOS_RELEASE_ID=${{ inputs.release_id }}
+            AIOS_RELEASE_SEQUENCE=${{ inputs.sequence }}
+            AIOS_REVISION=${{ github.sha }}
+      - name: Attest container provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  publish-release:
+    needs: [test, build-image]
+    runs-on: ubuntu-latest
+    environment: stable-release
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+    env:
+      UPDATE_SIGNING_PRIVATE_KEY_B64: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_B64 }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT_URL: ${{ vars.R2_ENDPOINT_URL }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: updater/go.mod
+          cache-dependency-path: updater/go.sum
+      - name: Build updater binaries
+        working-directory: updater
+        env:
+          VERSION: ${{ inputs.version }}
+          REVISION: ${{ github.sha }}
+        run: |
+          mkdir -p ../dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            target_os="${target%/*}"
+            target_arch="${target#*/}"
+            output="../dist/mini-aios-updater_${VERSION}_${target_os}_${target_arch}"
+            CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build \
+              -trimpath \
+              -ldflags "-s -w -X github.com/mahithsc/mini-aios/updater/internal/update.Version=${VERSION} -X github.com/mahithsc/mini-aios/updater/internal/update.Revision=${REVISION}" \
+              -o "$output" ./cmd/mini-aios-updater
+          done
+          cd ../dist
+          sha256sum mini-aios-updater_* > SHA256SUMS
+      - name: Create signed channel feed
+        env:
+          IMAGE_DIGEST: ${{ needs.build-image.outputs.digest }}
+        run: |
+          test -n "$UPDATE_SIGNING_PRIVATE_KEY_B64"
+          printf '%s' "$UPDATE_SIGNING_PRIVATE_KEY_B64" | base64 --decode > "$RUNNER_TEMP/update-private.pem"
+          chmod 600 "$RUNNER_TEMP/update-private.pem"
+          published_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          expires_at="$(date -u -d '+30 days' +%Y-%m-%dT%H:%M:%SZ)"
+          image="${REGISTRY}/${IMAGE_NAME}@${IMAGE_DIGEST}:0"
+          uv run --python 3.12 python release/publish_update.py create-manifest \
+            --output dist/update-manifest.json \
+            --release-id "${{ inputs.release_id }}" \
+            --version "${{ inputs.version }}" \
+            --sequence "${{ inputs.sequence }}" \
+            --channel "${{ inputs.channel }}" \
+            --published-at "$published_at" \
+            --expires-at "$expires_at" \
+            --revision "${{ github.sha }}" \
+            --release-notes-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${{ inputs.version }}" \
+            --artifact "linux-amd64=${image}" \
+            --artifact "linux-arm64=${image}" \
+            --observation "${{ inputs.observation_seconds }}"
+          uv run --python 3.12 python release/publish_update.py sign \
+            --manifest dist/update-manifest.json \
+            --private-key "$RUNNER_TEMP/update-private.pem" \
+            --output "dist/${{ inputs.channel }}.json"
+          rm -f "$RUNNER_TEMP/update-private.pem"
+      - name: Validate signed feed
+        run: |
+          uv run --python 3.12 --with jsonschema python - <<'PY'
+          import base64, json
+          from pathlib import Path
+          import jsonschema
+          envelope = json.loads(Path("dist/${{ inputs.channel }}.json").read_text())
+          envelope_schema = json.loads(Path("docs/schemas/update-envelope.schema.json").read_text())
+          manifest_schema = json.loads(Path("docs/schemas/update-manifest.schema.json").read_text())
+          jsonschema.Draft202012Validator(envelope_schema).validate(envelope)
+          manifest = json.loads(base64.b64decode(envelope["payload"], validate=True))
+          jsonschema.Draft202012Validator(manifest_schema, format_checker=jsonschema.FormatChecker()).validate(manifest)
+          PY
+      - name: Attest updater binaries
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: dist/mini-aios-updater_*
+      - name: Upload release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mini-aios-${{ inputs.release_id }}
+          path: dist/
+          if-no-files-found: error
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="v${{ inputs.version }}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --target "$GITHUB_SHA" --title "Mini AIOS ${{ inputs.version }}" --notes "Signed release ${{ inputs.release_id }} (sequence ${{ inputs.sequence }})."
+          fi
+          gh release upload "$tag" dist/* --clobber
+      - name: Publish channel feed to R2
+        run: |
+          if [ -z "$R2_ENDPOINT_URL" ] || [ -z "$R2_BUCKET" ] || [ -z "$R2_ACCESS_KEY_ID" ] || [ -z "$R2_SECRET_ACCESS_KEY" ]; then
+            echo "R2 is not configured; signed feed remains in the GitHub release bundle."
+            exit 0
+          fi
+          export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+          export AWS_DEFAULT_REGION=auto
+          aws s3 cp "dist/${{ inputs.channel }}.json" \
+            "s3://${R2_BUCKET}/channels/${{ inputs.channel }}.json" \
+            --endpoint-url "$R2_ENDPOINT_URL" \
+            --content-type application/json \
+            --cache-control no-store

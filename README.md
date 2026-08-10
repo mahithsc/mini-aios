@@ -1,3 +1,15 @@
+# Mini AIOS
+
+## Signed updater
+
+The repository includes a signed release publisher and host updater for Linux appliances, plus a Docker Desktop test path for macOS:
+
+```bash
+make mac-updater-demo
+```
+
+See [the updater implementation guide](docs/updater-implementation.md) for publishing, Linux installation, security boundaries, and local testing.
+
 # TV Remote (React + FastAPI)
 
 This repo now includes a simple LAN TV remote aimed at **Samsung Tizen TVs** (many 2016+ models) using Samsung's websocket remote-control API.
