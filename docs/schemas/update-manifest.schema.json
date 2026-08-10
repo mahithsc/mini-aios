@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mini-aios.example/schemas/update-manifest.schema.json",
+  "title": "Mini AIOS signed update target metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "product",
+    "releaseId",
+    "version",
+    "sequence",
+    "channel",
+    "publishedAt",
+    "expiresAt",
+    "minimumUpdaterVersion",
+    "artifacts",
+    "database",
+    "policy"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "product": {
+      "const": "mini-aios"
+    },
+    "releaseId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "channel": {
+      "enum": ["dev", "beta", "stable", "pinned"]
+    },
+    "publishedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "minimumUpdaterVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "releaseNotesUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://"
+    },
+    "revision": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "artifacts": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "linux-amd64": {
+          "$ref": "#/$defs/artifact"
+        },
+        "linux-arm64": {
+          "$ref": "#/$defs/artifact"
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fromSchemaMinimum",
+        "fromSchemaMaximum",
+        "toSchema",
+        "previousAppCanReadToSchema",
+        "restoreBackupOnRollback",
+        "destructive"
+      ],
+      "properties": {
+        "fromSchemaMinimum": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fromSchemaMaximum": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "toSchema": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "previousAppCanReadToSchema": {
+          "type": "boolean"
+        },
+        "restoreBackupOnRollback": {
+          "type": "boolean"
+        },
+        "destructive": {
+          "type": "boolean"
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "critical",
+        "allowForcedDrain",
+        "drainTimeoutSeconds",
+        "startupTimeoutSeconds",
+        "observationSeconds",
+        "consecutiveHealthFailureLimit"
+      ],
+      "properties": {
+        "critical": {
+          "type": "boolean"
+        },
+        "allowForcedDrain": {
+          "type": "boolean"
+        },
+        "deadline": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "drainTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 3600
+        },
+        "startupTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 900
+        },
+        "observationSeconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 86400
+        },
+        "consecutiveHealthFailureLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        }
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest", "sizeBytes"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

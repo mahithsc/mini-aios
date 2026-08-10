@@ -1,0 +1,113 @@
+name: Updater build and integration test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: updater-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: updater/go.mod
+          cache-dependency-path: updater/go.sum
+      - name: Test Mini AIOS updater contract and publisher
+        run: PYTHONPATH=. uv run --python 3.12 --with pytest pytest -q --ignore=tests/test_tools.py
+      - name: Test and vet host updater
+        working-directory: updater
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Validate integration harness
+        run: bash -n scripts/mac-updater-demo.sh
+
+  build-updater-binaries:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: updater/go.mod
+          cache-dependency-path: updater/go.sum
+      - name: Cross-build Linux and macOS updater binaries
+        working-directory: updater
+        run: |
+          mkdir -p ../dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            target_os="${target%/*}"
+            target_arch="${target#*/}"
+            CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" go build \
+              -trimpath \
+              -o "../dist/mini-aios-updater_${target_os}_${target_arch}" \
+              ./cmd/mini-aios-updater
+          done
+          cd ../dist
+          sha256sum mini-aios-updater_* > SHA256SUMS
+      - name: Upload updater binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: updater-binaries-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  build-container:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build Linux AMD64 and ARM64 application images
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: |
+            AIOS_VERSION=0.0.0-ci
+            AIOS_RELEASE_ID=ci-${{ github.run_id }}
+            AIOS_RELEASE_SEQUENCE=${{ github.run_number }}
+            AIOS_REVISION=${{ github.sha }}
+
+  linux-end-to-end:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: updater/go.mod
+          cache-dependency-path: updater/go.sum
+      - name: Run signed update transaction
+        run: ./scripts/mac-updater-demo.sh
+      - name: Capture Docker diagnostics on failure
+        if: failure()
+        run: |
+          docker ps -a
+          docker logs --tail 300 mini-aios-local-registry || true
+          if [ -f .dev/mac-updater/release.env ]; then
+            docker compose \
+              --project-directory .dev/mac-updater \
+              --env-file .dev/mac-updater/release.env \
+              logs --tail 300 box || true
+          fi

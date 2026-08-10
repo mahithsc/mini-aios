@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "product": "mini-aios",
+  "releaseId": "2026.08.10.1",
+  "version": "0.2.0",
+  "sequence": 43,
+  "channel": "stable",
+  "publishedAt": "2026-08-10T18:00:00Z",
+  "expiresAt": "2026-09-09T18:00:00Z",
+  "minimumUpdaterVersion": "0.1.0",
+  "revision": "d006b0a",
+  "releaseNotesUrl": "https://github.com/mahithsc/mini-aios/releases/tag/v0.2.0",
+  "artifacts": {
+    "linux-amd64": {
+      "repository": "ghcr.io/mahithsc/mini-aios",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sizeBytes": 314572800
+    },
+    "linux-arm64": {
+      "repository": "ghcr.io/mahithsc/mini-aios",
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sizeBytes": 304087040
+    }
+  },
+  "database": {
+    "fromSchemaMinimum": 2,
+    "fromSchemaMaximum": 2,
+    "toSchema": 3,
+    "previousAppCanReadToSchema": false,
+    "restoreBackupOnRollback": true,
+    "destructive": false
+  },
+  "policy": {
+    "critical": false,
+    "allowForcedDrain": false,
+    "drainTimeoutSeconds": 300,
+    "startupTimeoutSeconds": 120,
+    "observationSeconds": 300,
+    "consecutiveHealthFailureLimit": 3
+  }
+}
