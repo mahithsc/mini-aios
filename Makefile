@@ -1,4 +1,4 @@
-.PHONY: test updater-test updater-build mac-updater-demo
+.PHONY: test updater-test updater-build mac-updater-demo mac-github-updater-test
 
 test:
 	PYTHONPATH=. uv run --python 3.12 --with pytest pytest -q --ignore=tests/test_tools.py
@@ -15,3 +15,6 @@ updater-build:
 
 mac-updater-demo:
 	./scripts/mac-updater-demo.sh
+
+mac-github-updater-test:
+	./scripts/mac-github-updater-test.sh
