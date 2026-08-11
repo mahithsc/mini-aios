@@ -6,7 +6,8 @@ The repository now contains both sides of the first working update system:
 - `release/publish_update.py`: manifest creation, Ed25519 signing, and verification;
 - `.github/workflows/publish-update.yml`: tests, multi-platform image build, provenance, signed feed, updater binaries, GitHub Release, and optional R2 publication;
 - `server/updater.py`: authenticated AIOS drain, liveness, readiness, and resume API; and
-- `scripts/mac-updater-demo.sh`: local end-to-end Docker Desktop demonstration.
+- `scripts/mac-updater-demo.sh`: local end-to-end Docker Desktop demonstration; and
+- `scripts/mac-github-updater-test.sh`: GitHub Releases/GHCR end-to-end macOS demonstration.
 
 ## Security level of this implementation
 
@@ -53,6 +54,8 @@ Generated files live in:
 ```
 
 The local private key is only a test key and is excluded by `.gitignore`. Never use it for production.
+
+To test the hosted dev feed instead, run `make mac-github-updater-test`. It bootstraps the first published dev image from GHCR and asks the native Mac updater to install the newest signed `dev.json` from GitHub Releases. The checked-in public key is for this pre-production dev channel; replace both the Actions signing secret and provisioned public key through a controlled key ceremony before shipping production devices.
 
 Useful commands after the demo:
 

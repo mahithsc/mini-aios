@@ -133,6 +133,7 @@ jobs:
           done
           cd ../dist
           sha256sum mini-aios-updater_* > SHA256SUMS
+          cp ../updater/packaging/update-signing-public.pem update-signing-public.pem
       - name: Create signed channel feed
         env:
           IMAGE_DIGEST: ${{ needs.build-image.outputs.digest }}
@@ -160,6 +161,9 @@ jobs:
             --manifest dist/update-manifest.json \
             --private-key "$RUNNER_TEMP/update-private.pem" \
             --output "dist/${{ inputs.channel }}.json"
+          uv run --python 3.12 python release/publish_update.py verify \
+            --envelope "dist/${{ inputs.channel }}.json" \
+            --public-key updater/packaging/update-signing-public.pem >/dev/null
           rm -f "$RUNNER_TEMP/update-private.pem"
       - name: Validate signed feed
         run: |

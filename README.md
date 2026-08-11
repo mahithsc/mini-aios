@@ -14,4 +14,10 @@ The repository includes a signed release publisher and host updater for Linux ap
 make mac-updater-demo
 ```
 
+To test the actual GitHub-hosted signed dev feed on a Mac (with Docker Desktop running and at least 5 GiB free):
+
+```bash
+make mac-github-updater-test
+```
+
 See [the updater implementation guide](docs/updater-implementation.md) for publishing, Linux installation, security boundaries, and local testing.
