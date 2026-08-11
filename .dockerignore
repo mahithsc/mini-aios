@@ -3,6 +3,8 @@
 .env.*
 .git
 .git-rewrite-tmp
+.dev/
+dist/
 .pytest_cache
 .ruff_cache
 .venv

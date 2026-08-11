@@ -8,6 +8,7 @@ from typing import Protocol
 from server.execution.broadcaster import RunBroadcaster
 from server.execution.store import RunStore
 from server.types.run import Run, RunCreateRequest, RunEvent, RunEventType, RunKind, RunSnapshot, RunStatus
+from aios_core.runtime_control import get_runtime_control
 
 _STALE_RUN_ERROR_MESSAGE = "Server restarted before run completed."
 
@@ -75,6 +76,7 @@ class RunsService:
         *,
         user_id: str | None = None,
     ) -> Run:
+        get_runtime_control().ensure_accepting_work()
         run = self._store.create_run(request, user_id=user_id)
 
         async with self._lock:

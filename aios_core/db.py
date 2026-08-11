@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
+import time
 from pathlib import Path
 
 from .workspace import ensure_workspace_dir
@@ -32,6 +34,14 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
     with get_db_connection(db_path) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version       INTEGER PRIMARY KEY,
+                name          TEXT NOT NULL,
+                checksum      TEXT NOT NULL,
+                applied_at    INTEGER NOT NULL,
+                app_release   TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS notifications (
                 id              TEXT PRIMARY KEY,
                 source          TEXT NOT NULL CHECK (source IN ('chat', 'cron', 'system')),
@@ -69,3 +79,14 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS idx_gateway_events_session_id_id
                 ON gateway_events(session_id, id);
         """)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO schema_migrations (
+                version, name, checksum, applied_at, app_release
+            ) VALUES (1, 'baseline', 'baseline-v1', ?, ?)
+            """,
+            (
+                int(time.time() * 1000),
+                os.getenv("AIOS_RELEASE_ID", "development"),
+            ),
+        )

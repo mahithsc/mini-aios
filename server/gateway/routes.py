@@ -21,6 +21,7 @@ from aios_core.sessions import (
 from server.execution.runtime import get_runs_service
 from server.types.chat import AssistantMessage, ChatMetadata, UserMessage
 from server.types.run import RunCreateRequest
+from server.updater import require_accepting_work
 
 from .bus import get_gateway_bus
 from .schemas import (
@@ -114,7 +115,11 @@ def _chat_to_gateway_messages(session_id: str) -> list[MessageOut]:
     return [row for row in rows if row.content]
 
 
-@router.post("/sessions", response_model=SessionOut)
+@router.post(
+    "/sessions",
+    response_model=SessionOut,
+    dependencies=[Depends(require_accepting_work)],
+)
 async def create_session(body: SessionCreate) -> SessionOut:
     chat_id = str(uuid.uuid4())
     save_chat_session(chat_id, [])
@@ -141,7 +146,11 @@ async def get_messages(session_id: str) -> list[MessageOut]:
     return _chat_to_gateway_messages(session_id)
 
 
-@router.post("/sessions/{session_id}/messages", response_model=MessageSubmitOut)
+@router.post(
+    "/sessions/{session_id}/messages",
+    response_model=MessageSubmitOut,
+    dependencies=[Depends(require_accepting_work)],
+)
 async def submit_message(session_id: str, body: MessageCreate) -> MessageSubmitOut:
     _get_chat_or_404(session_id)
 

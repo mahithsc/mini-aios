@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mini-aios.example/schemas/update-envelope.schema.json",
+  "title": "Mini AIOS signed update feed envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["formatVersion", "keyId", "payload", "signature"],
+  "properties": {
+    "formatVersion": { "const": 1 },
+    "keyId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{16}$"
+    },
+    "payload": {
+      "type": "string",
+      "contentEncoding": "base64"
+    },
+    "signature": {
+      "type": "string",
+      "contentEncoding": "base64"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+[Unit]
+Description=Mini AIOS Host Updater
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mini-aios-updater daemon --config /etc/mini-aios/updater.toml
+Restart=on-failure
+RestartSec=10s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/mini-aios /var/lib/mini-aios /var/lib/mini-aios-updater
+
+[Install]
+WantedBy=multi-user.target
