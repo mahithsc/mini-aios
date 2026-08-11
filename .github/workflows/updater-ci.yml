@@ -35,7 +35,15 @@ jobs:
           go test ./...
           go vet ./...
       - name: Validate integration harness
-        run: bash -n scripts/mac-updater-demo.sh
+        run: bash -n scripts/mac-updater-demo.sh scripts/mac-github-updater-test.sh scripts/install-linux-updater.sh
+      - name: Stage a fresh Linux root filesystem
+        run: |
+          (cd updater && CGO_ENABLED=0 go build -o "$RUNNER_TEMP/mini-aios-updater" ./cmd/mini-aios-updater)
+          MINI_AIOS_UPDATER_BINARY="$RUNNER_TEMP/mini-aios-updater" \
+            ./scripts/install-linux-updater.sh --root "$RUNNER_TEMP/mini-aios-root"
+          test -x "$RUNNER_TEMP/mini-aios-root/usr/local/bin/mini-aios-updater"
+          test -f "$RUNNER_TEMP/mini-aios-root/etc/systemd/system/mini-aios-updater.service"
+          test -f "$RUNNER_TEMP/mini-aios-root/etc/mini-aios/updater.toml"
 
   build-updater-binaries:
     needs: validate

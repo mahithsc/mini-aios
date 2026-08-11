@@ -19,7 +19,7 @@ import (
 )
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: %s <daemon|status|check|install|doctor|version> [options]\n", filepath.Base(os.Args[0]))
+	fmt.Fprintf(os.Stderr, "usage: %s <daemon|status|check|bootstrap|install|doctor|version> [options]\n", filepath.Base(os.Args[0]))
 }
 
 func commandConfig(arguments []string) (string, string, error) {
@@ -83,6 +83,10 @@ func main() {
 			log.Fatal(err)
 		}
 		fmt.Printf("release=%s version=%s sequence=%d available=%t platform=%s\n", manifest.ReleaseID, manifest.Version, manifest.Sequence, available, update.ContainerPlatform())
+	case "bootstrap":
+		if err := engine.BootstrapLatest(ctx, releaseID); err != nil {
+			log.Fatal(err)
+		}
 	case "install":
 		if err := engine.InstallLatest(ctx, releaseID); err != nil {
 			log.Fatal(err)

@@ -121,6 +121,22 @@ func (s System) WriteReleaseEnv(release ReleaseRef) error {
 	return writeAtomic(s.Config.ReleaseEnvPath, []byte(payload), 0o600)
 }
 
+func (s System) ClearReleaseEnv() error {
+	err := os.Remove(s.Config.ReleaseEnvPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	directory, openError := os.Open(filepath.Dir(s.Config.ReleaseEnvPath))
+	if openError != nil {
+		return openError
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
+
 func (s System) ReadSelectedRelease() *ReleaseRef {
 	data, err := os.ReadFile(s.Config.ReleaseEnvPath)
 	if err != nil {

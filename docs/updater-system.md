@@ -391,6 +391,7 @@ The updater exposes no network listener. A root-only CLI talks to its Unix socke
 ```text
 mini-aios-updater status
 mini-aios-updater check
+mini-aios-updater bootstrap
 mini-aios-updater install <release-id>
 mini-aios-updater rollback
 mini-aios-updater doctor

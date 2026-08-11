@@ -41,6 +41,7 @@ type State struct {
 	RestoreBackupOnRollback bool        `json:"restoreBackupOnRollback,omitempty"`
 	LastFailedSequence      int64       `json:"lastFailedSequence,omitempty"`
 	LastError               string      `json:"lastError,omitempty"`
+	Bootstrap               bool        `json:"bootstrap,omitempty"`
 	Transitioned            time.Time   `json:"transitionedAt"`
 }
 

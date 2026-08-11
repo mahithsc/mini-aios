@@ -174,6 +174,23 @@ Devices use only `repository@sha256:digest`. Tags are present for humans and nev
 
 ## Install on a Linux appliance
 
+On a fresh Linux AMD64 or ARM64 device, first install Docker Engine with the Compose plugin and create an application environment file containing the required production values. Then run from a repository checkout:
+
+```bash
+sudo ./scripts/install-linux-updater.sh --app-env /path/to/app.env
+```
+
+The release bundle also publishes this script as `install-mini-aios-linux.sh`, along with architecture-neutral binary aliases and all companion assets. The installer:
+
+1. installs the native updater, Compose file, pinned signing key, configuration, and systemd unit;
+2. preserves an existing `/etc/mini-aios/app.env`, or installs the explicitly supplied one;
+3. creates the admin token and root-owned state/data directories;
+4. uses `bootstrap` to verify and start the first signed release without attempting to drain a nonexistent application;
+5. runs `systemctl daemon-reload`; and
+6. runs `systemctl enable --now mini-aios-updater` and verifies the service with `doctor`.
+
+The default is the pre-production `dev` channel currently published through GitHub Releases. Use `--channel stable --feed-url https://...` only after the stable feed and production signing key have been provisioned. For OS image construction, `--root PATH` stages the files without starting Docker or systemd.
+
 Production assets are in `updater/packaging/linux/`:
 
 ```text
@@ -204,7 +221,7 @@ The admin token must be a random value readable only by root. It is mounted read
 
 `/etc/mini-aios/app.env` is root-owned (`0600`) and holds the application configuration that is independent of a release, including `SITE_URL_PROD`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, and `STRIPE_PRICE_ID`. The updater never rewrites this file; it only manages `/opt/mini-aios/release.env`.
 
-Before enabling automatic polling, bootstrap `/opt/mini-aios/release.env` with a known-good published digest and start the Compose service. Then:
+The installer performs the bootstrap and enables automatic polling. For a manual installation, the equivalent final commands are:
 
 ```bash
 systemctl daemon-reload

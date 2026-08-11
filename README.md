@@ -20,4 +20,12 @@ To test the actual GitHub-hosted signed dev feed on a Mac (with Docker Desktop r
 make mac-github-updater-test
 ```
 
+On a fresh Linux device with Docker Engine and Compose installed, provision the application environment and run:
+
+```bash
+sudo ./scripts/install-linux-updater.sh --app-env /path/to/app.env
+```
+
+The installer bootstraps the first signed release and enables the updater daemon for the current boot and future boots.
+
 See [the updater implementation guide](docs/updater-implementation.md) for publishing, Linux installation, security boundaries, and local testing.

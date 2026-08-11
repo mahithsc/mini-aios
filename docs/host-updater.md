@@ -114,6 +114,7 @@ One binary provides a daemon and root-only local client:
 mini-aios-updater daemon
 mini-aios-updater status [--json]
 mini-aios-updater check
+mini-aios-updater bootstrap
 mini-aios-updater install <release-id>
 mini-aios-updater rollback
 mini-aios-updater doctor [--json]
@@ -122,7 +123,7 @@ mini-aios-updater version
 
 `daemon` is the only mode that mutates update state automatically. Other mutating commands send a typed request over `/run/mini-aios-updater/control.sock`; they do not start a second update engine.
 
-`install` can select only a release present in valid TUF metadata. It cannot accept an image URL, tag, digest, shell command, or arbitrary manifest path from the caller.
+`bootstrap` is restricted to a device with no selected release and performs the initial signed activation without a drain or rollback backup. `install` is used thereafter and retains the full drain, backup, observation, and rollback transaction. Neither command accepts an image URL, tag, digest, shell command, or arbitrary manifest path from the caller.
 
 `rollback` selects only the recorded previous release and verifies database compatibility. A normal caller cannot reset the monotonic release sequence.
 

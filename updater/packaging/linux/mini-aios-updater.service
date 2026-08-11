@@ -7,7 +7,7 @@ Requires=docker.service
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/mini-aios-updater daemon --config /etc/mini-aios/updater.toml
-Restart=on-failure
+Restart=always
 RestartSec=10s
 UMask=0077
 NoNewPrivileges=true

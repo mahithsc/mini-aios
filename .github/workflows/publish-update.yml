@@ -130,10 +130,20 @@ jobs:
               -trimpath \
               -ldflags "-s -w -X github.com/mahithsc/mini-aios/updater/internal/update.Version=${VERSION} -X github.com/mahithsc/mini-aios/updater/internal/update.Revision=${REVISION}" \
               -o "$output" ./cmd/mini-aios-updater
+            cp "$output" "../dist/mini-aios-updater_${target_os}_${target_arch}"
           done
           cd ../dist
-          sha256sum mini-aios-updater_* > SHA256SUMS
           cp ../updater/packaging/update-signing-public.pem update-signing-public.pem
+          cp ../updater/packaging/linux/compose.yaml mini-aios-compose.yaml
+          cp ../updater/packaging/linux/mini-aios-updater.service mini-aios-updater.service
+          cp ../scripts/install-linux-updater.sh install-mini-aios-linux.sh
+          chmod 755 install-mini-aios-linux.sh
+          sha256sum \
+            install-mini-aios-linux.sh \
+            mini-aios-compose.yaml \
+            mini-aios-updater.service \
+            mini-aios-updater_* \
+            update-signing-public.pem > SHA256SUMS
       - name: Create signed channel feed
         env:
           IMAGE_DIGEST: ${{ needs.build-image.outputs.digest }}
