@@ -2,6 +2,8 @@ services:
   box:
     image: ${AIOS_IMAGE}
     platform: __CONTAINER_PLATFORM__
+    env_file:
+      - __APP_ENV_FILE__
     ports:
       - "8765:8765"
     environment:

@@ -11,6 +11,7 @@ UPDATER_STATE_DIR="$DEV_ROOT/updater-state"
 KEY_DIR="$DEV_ROOT/keys"
 FEED_DIR="$DEV_ROOT/feed"
 TOKEN_FILE="$DEV_ROOT/updater-admin-token"
+APP_ENV_FILE="$DEV_ROOT/app.env"
 RELEASE_ENV="$DEV_ROOT/release.env"
 COMPOSE_FILE="$DEV_ROOT/compose.yaml"
 CONFIG_FILE="$DEV_ROOT/updater.toml"
@@ -78,10 +79,25 @@ if [ ! -f "$TOKEN_FILE" ]; then
   chmod 600 "$TOKEN_FILE"
 fi
 
+# The current application imports billing/auth configuration at startup. These
+# local-only placeholders let the updater exercise health and drain endpoints
+# without making external Supabase or Stripe calls.
+if [ ! -f "$APP_ENV_FILE" ]; then
+  printf '%s\n' \
+    'SITE_URL_PROD=http://127.0.0.1:8765' \
+    'STRIPE_PUBLISHABLE_KEY=pk_test_updater' \
+    'STRIPE_SECRET_KEY=sk_test_updater' \
+    'STRIPE_PRICE_ID=price_updater' \
+    'SUPABASE_URL=http://127.0.0.1:54321' \
+    'SUPABASE_SECRET_KEY=updater-test-key' > "$APP_ENV_FILE"
+  chmod 600 "$APP_ENV_FILE"
+fi
+
 sed \
   -e "s|__CONTAINER_PLATFORM__|$CONTAINER_PLATFORM|g" \
   -e "s|__AIOS_DATA_DIR__|$DATA_DIR|g" \
   -e "s|__UPDATER_TOKEN_FILE__|$TOKEN_FILE|g" \
+  -e "s|__APP_ENV_FILE__|$APP_ENV_FILE|g" \
   "$REPO_ROOT/updater/packaging/macos/compose.template.yaml" > "$COMPOSE_FILE"
 
 DOCKER_BINARY="$(command -v docker)"

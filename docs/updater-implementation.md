@@ -184,6 +184,7 @@ Install the correct updater binary as `/usr/local/bin/mini-aios-updater`, then i
 ```text
 /opt/mini-aios/compose.yaml
 /etc/mini-aios/updater.toml
+/etc/mini-aios/app.env
 /etc/mini-aios/update-signing-public.pem
 /etc/mini-aios/updater-admin-token
 /etc/systemd/system/mini-aios-updater.service
@@ -197,6 +198,8 @@ Create root-owned data directories:
 ```
 
 The admin token must be a random value readable only by root. It is mounted read-only into the AIOS container and accepted only by `/internal/updater/*`.
+
+`/etc/mini-aios/app.env` is root-owned (`0600`) and holds the application configuration that is independent of a release, including `SITE_URL_PROD`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, and `STRIPE_PRICE_ID`. The updater never rewrites this file; it only manages `/opt/mini-aios/release.env`.
 
 Before enabling automatic polling, bootstrap `/opt/mini-aios/release.env` with a known-good published digest and start the Compose service. Then:
 
