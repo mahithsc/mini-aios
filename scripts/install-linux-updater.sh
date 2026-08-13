@@ -14,12 +14,13 @@ TEMP_DIR=""
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./scripts/install-linux-updater.sh --app-env PATH [options]
+Usage: sudo ./scripts/install-linux-updater.sh [options]
 
 Installs and bootstraps Mini AIOS plus its host updater on a fresh Linux device.
 
 Options:
-  --app-env PATH   Root-owned application environment file to install.
+  --app-env PATH   Optional root-owned application environment file to install.
+                   The box holds no cloud secrets, so this is not required.
   --channel NAME   Signed feed channel: dev, beta, or stable (default: dev).
   --feed-url URL   Override the signed channel feed URL.
   --root PATH      Stage files under an offline root filesystem; implies --no-start.
@@ -173,24 +174,13 @@ install -m 0644 "$COMPOSE_SOURCE" "$OPT_DIR/compose.yaml"
 install -m 0644 "$SERVICE_SOURCE" "$SERVICE_PATH"
 install -m 0644 "$PUBLIC_KEY_SOURCE" "$ETC_DIR/update-signing-public.pem"
 
+# The box holds no cloud secrets — billing, Supabase, and Stripe live in
+# aios-cloud. --app-env stays supported for optional local config, but a fresh
+# device needs none of it to install and run.
 APP_ENV_DESTINATION="$ETC_DIR/app.env"
-if [ ! -f "$APP_ENV_DESTINATION" ]; then
-  if [ -n "$APP_ENV_SOURCE" ]; then
-    [ -f "$APP_ENV_SOURCE" ] || { echo "Application environment file not found: $APP_ENV_SOURCE" >&2; exit 1; }
-    install -m 0600 "$APP_ENV_SOURCE" "$APP_ENV_DESTINATION"
-  elif [ "$NO_START" -eq 0 ]; then
-    echo "A fresh device requires --app-env PATH with its Supabase, Stripe, and site configuration." >&2
-    exit 1
-  fi
-fi
-
-if [ -f "$APP_ENV_DESTINATION" ]; then
-  for required_name in SITE_URL_PROD SUPABASE_URL SUPABASE_SECRET_KEY STRIPE_PUBLISHABLE_KEY STRIPE_SECRET_KEY STRIPE_PRICE_ID; do
-    if ! grep -q "^${required_name}=" "$APP_ENV_DESTINATION"; then
-      echo "Application environment is missing $required_name" >&2
-      exit 1
-    fi
-  done
+if [ ! -f "$APP_ENV_DESTINATION" ] && [ -n "$APP_ENV_SOURCE" ]; then
+  [ -f "$APP_ENV_SOURCE" ] || { echo "Application environment file not found: $APP_ENV_SOURCE" >&2; exit 1; }
+  install -m 0600 "$APP_ENV_SOURCE" "$APP_ENV_DESTINATION"
 fi
 
 TOKEN_PATH="$ETC_DIR/updater-admin-token"

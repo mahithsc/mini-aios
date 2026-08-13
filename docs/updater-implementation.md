@@ -219,7 +219,7 @@ Create root-owned data directories:
 
 The admin token must be a random value readable only by root. It is mounted read-only into the AIOS container and accepted only by `/internal/updater/*`.
 
-`/etc/mini-aios/app.env` is root-owned (`0600`) and holds the application configuration that is independent of a release, including `SITE_URL_PROD`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, and `STRIPE_PRICE_ID`. The updater never rewrites this file; it only manages `/opt/mini-aios/release.env`.
+`/etc/mini-aios/app.env` is root-owned (`0600`) and holds optional release-independent application configuration. The box holds **no cloud secrets** — billing, Supabase, and Stripe live in the cloud service (aios-cloud), never on the device — so this file is optional and carries no service-role or payment credentials. The updater never rewrites this file; it only manages `/opt/mini-aios/release.env`.
 
 The installer performs the bootstrap and enables automatic polling. For a manual installation, the equivalent final commands are:
 
