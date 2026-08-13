@@ -13,7 +13,6 @@ from server.execution.runtime import shutdown_runs_service, start_runs_service
 from server.gateway.routes import router as gateway_router
 from server.lights import lights
 from server.notifications.runtime import shutdown_notification_service, start_notification_service
-from server.routes.billing import router as billing_router
 from server.transcriptions import TranscriptionResponse, transcribe_upload
 from server.updater import router as updater_router
 from server.uploads import save_uploads
@@ -45,7 +44,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(billing_router)
+# Billing, accounts, and Stripe/Supabase live in the cloud service (aios-cloud),
+# never on the device box. The box authenticates LAN callers with a local token
+# (see server.gateway.routes.require_gateway_auth) and holds no cloud secrets.
 app.include_router(gateway_router)
 app.include_router(updater_router)
 
