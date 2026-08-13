@@ -83,13 +83,10 @@ fi
 # local-only placeholders let the updater exercise health and drain endpoints
 # without making external Supabase or Stripe calls.
 if [ ! -f "$APP_ENV_FILE" ]; then
+  # The box holds no cloud secrets (billing/Supabase/Stripe live in aios-cloud),
+  # so the app container boots from just its own config.
   printf '%s\n' \
-    'SITE_URL_PROD=http://127.0.0.1:8765' \
-    'STRIPE_PUBLISHABLE_KEY=pk_test_updater' \
-    'STRIPE_SECRET_KEY=sk_test_updater' \
-    'STRIPE_PRICE_ID=price_updater' \
-    'SUPABASE_URL=http://127.0.0.1:54321' \
-    'SUPABASE_SECRET_KEY=updater-test-key' > "$APP_ENV_FILE"
+    'SITE_URL_PROD=http://127.0.0.1:8765' > "$APP_ENV_FILE"
   chmod 600 "$APP_ENV_FILE"
 fi
 
