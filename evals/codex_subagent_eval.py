@@ -142,10 +142,10 @@ Score 0.0-1.0 on whether the delegated task is a GOOD instruction:
 Return ONLY minified JSON: {"score": <float 0-1>, "reason": "<short>"}
 
 USER REQUEST:
-{user_request}
+<<USER_REQUEST>>
 
 DELEGATED TASK:
-{delegated_task}
+<<DELEGATED_TASK>>
 """
 
 
@@ -153,15 +153,21 @@ def _judge_instruction(user_request: str, delegated_task: str) -> float:
     from openai import OpenAI
 
     client = OpenAI()
-    prompt = _JUDGE_RUBRIC.format(user_request=user_request, delegated_task=delegated_task or "(none)")
+    prompt = (
+        _JUDGE_RUBRIC.replace("<<USER_REQUEST>>", user_request)
+        .replace("<<DELEGATED_TASK>>", delegated_task or "(none)")
+    )
     resp = client.chat.completions.create(
         model=MODEL_ID,
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
     )
+    raw = (resp.choices[0].message.content or "").strip()
+    # Tolerate ```json fences or prose around the JSON object.
+    if "{" in raw and "}" in raw:
+        raw = raw[raw.index("{") : raw.rindex("}") + 1]
     try:
-        data = json.loads(resp.choices[0].message.content.strip())
-        return float(data.get("score", 0.0))
+        return float(json.loads(raw).get("score", 0.0))
     except Exception:
         return 0.0
 
@@ -223,21 +229,30 @@ def eval_no_over_delegation(k: int, threshold: float) -> CaseResult:
 
 
 def eval_instruction_quality(k: int, threshold: float) -> CaseResult:
+    """Judge the QUALITY of the task the agent hands Codex — but only over runs
+    where it actually delegated. Delegation *rate* is measured separately by
+    called_appropriately; scoring non-delegation as 0 here would double-penalize
+    it and muddy the signal. If nothing delegated across k runs, mark skipped."""
     scores, notes = [], []
     for i in range(k):
         sink: list[dict] = []
         _run_agent(POSITIVE_PROMPT, sink)
         if not sink:
-            notes.append(f"run {i}: no delegation to judge")
-            scores.append(0.0)
+            notes.append(f"run {i}: no delegation (not judged; see called_appropriately)")
             continue
         task = sink[-1].get("task") or ""
         s = _judge_instruction(POSITIVE_PROMPT, task)
         scores.append(s)
         if s < threshold:
             notes.append(f"run {i}: weak task (score {s:.2f}): {task[:80]!r}")
-    avg = sum(scores) / len(scores) if scores else 0.0
-    return CaseResult("instruction_quality", "correct-instructions", k, sum(1 for s in scores if s >= threshold), avg, threshold, avg >= threshold, notes)
+    if not scores:
+        notes.append("no delegated runs to judge across k attempts")
+        return CaseResult("instruction_quality", "correct-instructions", k, 0, 0.0,
+                          threshold, False, notes, skipped=True)
+    avg = sum(scores) / len(scores)
+    return CaseResult("instruction_quality", "correct-instructions", len(scores),
+                      sum(1 for s in scores if s >= threshold), avg, threshold,
+                      avg >= threshold, notes)
 
 
 # --------------------------------------------------------------------------- #

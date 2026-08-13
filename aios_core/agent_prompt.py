@@ -79,9 +79,23 @@ _BASE_TOOLS_BLOCK = """
     {"process_id": "string", "signal": "string?"},
     process_kill,
 ),
+"codex_subagent": (
+    "Preferred way to delegate a self-contained coding task to Codex: runs the "
+    "Codex coding agent and streams its live progress (commands, file edits) "
+    "back to the chat, then returns Codex's final result. Use for implementing, "
+    "editing, refactoring, or building and running code in a directory. Codex "
+    "cannot see this chat, so `task` must be a complete, self-contained "
+    "instruction: state the concrete goal, name the target files, and include "
+    "any needed context/constraints. `path` is the working directory.",
+    {"task": "string (self-contained instruction, incl. target files/context)",
+     "timeout": "number?", "model": "string?",
+     "path": "string? (working directory; default '.')"},
+    codex_subagent,
+),
 "codex": (
-    "Delegate one coding task to Codex CLI (codex exec). "
-    "Use for complex edits where a separate coding agent may perform better.",
+    "Low-level blocking variant of codex_subagent (no live streaming). Prefer "
+    "codex_subagent for coding delegation; use this only when streaming is "
+    "explicitly not wanted.",
     {"task": "string", "timeout": "number?", "model": "string?",
      "path": "string? (working directory; default '.')"},
     codex,
@@ -264,9 +278,10 @@ def build_agent_prompt(
             "writing_code",
             """
             A big part of your job is writing code.
-            Use the `codex` tool for coding tasks where a dedicated coding agent will likely produce a better result.
-            For non-trivial coding work, inspect context, form a plan, pressure-test it, then hand `codex` a clear and specific task.
-            When coding, explain the intended change before editing and summarize the outcome after the edit or command finishes.
+            Use the `codex_subagent` tool to delegate coding tasks — implementing, editing, refactoring, or building and running code — where a dedicated coding agent will produce a better result. It streams Codex's progress back to the chat.
+            For non-trivial coding work, inspect context, form a plan, pressure-test it, then hand `codex_subagent` a clear, self-contained task that names the target files and includes the context Codex needs (it cannot see this chat).
+            Do simple, quick edits yourself with the file tools; reserve `codex_subagent` for real coding work rather than trivial one-liners.
+            When coding, explain the intended change before delegating and summarize the outcome after Codex finishes.
             """,
         ),
         _section(
