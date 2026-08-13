@@ -1,40 +1,15 @@
 from time import monotonic
 from uuid import uuid4
 
-from agno.run.agent import CustomEvent, RunEvent as AgentRunEvent
+from agno.run.agent import RunEvent as AgentRunEvent
 
 from ..prompt_loader import render_prompt
+from .subagent_events import (
+    SubagentStreamEvent,
+    build_subagent_stream_event as _build_subagent_stream_event,
+)
 
-
-class SubagentStreamEvent(CustomEvent):
-    def __str__(self) -> str:
-        # Keep nested UI events out of the parent tool's textual result.
-        return ""
-
-
-def _build_subagent_stream_event(
-    *,
-    parent_tool_call_id: str,
-    child_run_id: str,
-    child_event_type: str,
-    tool_call_id: str | None = None,
-    tool_name: str | None = None,
-    input: object | None = None,
-    output: object | None = None,
-    error: str | None = None,
-) -> SubagentStreamEvent:
-    return SubagentStreamEvent(
-        event=AgentRunEvent.custom_event.value,
-        kind="subagent_tool_event",
-        parent_tool_call_id=parent_tool_call_id,
-        child_run_id=child_run_id,
-        child_event_type=child_event_type,
-        tool_call_id=tool_call_id,
-        tool_name=tool_name,
-        input=input,
-        output=output,
-        error=error,
-    )
+__all__ = ["subagent", "SubagentStreamEvent"]
 
 
 def subagent(task: str | None = None, timeout: float = 60, fc=None):

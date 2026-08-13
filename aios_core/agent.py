@@ -28,6 +28,7 @@ from .tools import (
 )
 from .tools.canvas import show_canvas
 from .tools.codex import codex
+from .tools.codex_subagent import codex_subagent
 from .tools.cron import cron
 from .tools.fetch import fetch
 from .tools.generative_widget import generative_widget
@@ -57,6 +58,7 @@ BASE_TOOLS = [
     process_poll,
     process_kill,
     codex,
+    codex_subagent,
     cron,
     show_canvas,
     generative_widget,

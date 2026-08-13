@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"019ff936-c689-7642-bb8c-be8cd6f6c4ad"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll read the file and condense its contents into one sentence."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"sed -n '1,200p' sample.txt\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc \"sed -n '1,200p' sample.txt\"","aggregated_output":"hello world\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"The file says “hello world.”"}}
+{"type":"turn.completed","usage":{"input_tokens":37176,"cached_input_tokens":29184,"cache_write_input_tokens":0,"output_tokens":131,"reasoning_output_tokens":0}}
