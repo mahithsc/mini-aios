@@ -23,6 +23,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import monotonic
 from typing import Callable
 
 from agno.agent import Agent
@@ -32,6 +33,38 @@ from agno.run.agent import RunEvent as AgentRunEvent
 DEFAULT_K = int(os.getenv("EVAL_K", "5"))
 DEFAULT_THRESHOLD = float(os.getenv("EVAL_THRESHOLD", "0.8"))
 MODEL_ID = os.getenv("AIOS_MODEL_ID", "gpt-4.1")
+
+# E2E cases are grouped into difficulty tiers. The overnight loop starts at a
+# low tier and raises EVAL_MAX_TIER as lower tiers stabilize ("as the night
+# progresses"). Only cases with tier <= max_tier are attempted.
+DEFAULT_MAX_TIER = int(os.getenv("EVAL_MAX_TIER", "2"))
+
+# Global caps so an unattended overnight loop can't run away with time/cost.
+# Counted across the whole eval invocation; e2e cases stop launching once hit.
+MAX_E2E_RUNS = int(os.getenv("EVAL_MAX_E2E_RUNS", "24"))
+MAX_MINUTES = float(os.getenv("EVAL_MAX_MINUTES", "180"))
+
+
+class _Budget:
+    """Tracks real-Codex e2e runs + wall-clock against the global caps."""
+
+    def __init__(self) -> None:
+        self.e2e_runs = 0
+        self.start = monotonic()
+
+    def available(self) -> tuple[bool, str]:
+        if self.e2e_runs >= MAX_E2E_RUNS:
+            return False, f"e2e run cap ({MAX_E2E_RUNS}) reached"
+        elapsed_min = (monotonic() - self.start) / 60
+        if elapsed_min >= MAX_MINUTES:
+            return False, f"time cap ({MAX_MINUTES:g}m) reached"
+        return True, ""
+
+    def record(self) -> None:
+        self.e2e_runs += 1
+
+
+BUDGET = _Budget()
 
 
 # --------------------------------------------------------------------------- #
@@ -70,18 +103,26 @@ def _build_agent(record_sink: list[dict] | None) -> Agent:
     )
 
 
-def _run_agent(prompt: str, record_sink: list[dict] | None) -> tuple[list[dict], str]:
-    """Run the agent once; return (codex_calls, final_text)."""
-    agent = _build_agent(record_sink)
+def _run_messages(agent: Agent, messages: list[dict]) -> tuple[list[dict], str]:
+    """Run one agent turn over a full message history; return (codex_calls, text).
+
+    Mirrors the box's runtime (server/execution/runners/chat.py): pass the whole
+    [{role, content}] history each turn so the agent has the conversation."""
     calls: list[dict] = []
     final_chunks: list[str] = []
-    for event in agent.run([{"role": "user", "content": prompt}], stream=True, stream_events=True):
+    for event in agent.run(messages, stream=True, stream_events=True):
         if event.event == AgentRunEvent.tool_call_started and event.tool is not None:
             if event.tool.tool_name == "codex_subagent":
                 calls.append({"args": event.tool.tool_args})
         elif event.event == AgentRunEvent.run_content and event.content is not None:
             final_chunks.append(str(event.content))
     return calls, "".join(final_chunks)
+
+
+def _run_agent(prompt: str, record_sink: list[dict] | None) -> tuple[list[dict], str]:
+    """Single-turn convenience: run the agent once on one user prompt."""
+    agent = _build_agent(record_sink)
+    return _run_messages(agent, [{"role": "user", "content": prompt}])
 
 
 # --------------------------------------------------------------------------- #
@@ -140,6 +181,8 @@ class CaseResult:
     threshold: float
     passed: bool
     notes: list[str] = field(default_factory=list)
+    tier: int = 1
+    skipped: bool = False  # gated by tier or budget; excluded from all_passed
 
 
 POSITIVE_PROMPT = (
@@ -197,43 +240,450 @@ def eval_instruction_quality(k: int, threshold: float) -> CaseResult:
     return CaseResult("instruction_quality", "correct-instructions", k, sum(1 for s in scores if s >= threshold), avg, threshold, avg >= threshold, notes)
 
 
-def eval_delegation_succeeds(k: int, threshold: float) -> CaseResult:
-    """End-to-end with the REAL codex tool. Runs each attempt in a fresh temp
-    workdir; asserts calc.py is created with an add function."""
-    import tempfile
+# --------------------------------------------------------------------------- #
+# End-to-end cases (real Codex, real artifacts). Multi-step tasks that force
+# Codex through several internal turns: create multiple files, wire them
+# together, and (for the server case) produce something that actually runs.
+# --------------------------------------------------------------------------- #
 
-    # The real-Codex e2e case is the expensive one; bound its runs independently
-    # of the cheap stubbed cases (default 3, override with EVAL_E2E_K).
-    k = min(k, int(os.getenv("EVAL_E2E_K", "3")))
-    passes, notes = 0, []
-    for i in range(k):
-        workdir = Path(tempfile.mkdtemp(prefix="codex_eval_"))
-        os.environ["AIOS_EVAL_WORKDIR"] = str(workdir)
-        # Real tool: pass record_sink=None so the actual codex_subagent runs.
-        _, _final = _run_agent(
-            POSITIVE_PROMPT + f" Use path {workdir}.", record_sink=None
-        )
-        calc = workdir / "calc.py"
-        ok = calc.exists() and "def add" in calc.read_text() if calc.exists() else False
-        if ok:
-            passes += 1
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _verify_add_function(workdir: Path, port: int) -> tuple[bool, str]:
+    calc = workdir / "calc.py"
+    if not calc.exists():
+        return False, "calc.py missing"
+    if "def add" not in calc.read_text():
+        return False, "no add() in calc.py"
+    return True, "ok"
+
+
+def _verify_static_site(workdir: Path, port: int) -> tuple[bool, str]:
+    index = workdir / "index.html"
+    css = workdir / "styles.css"
+    if not index.exists():
+        return False, "index.html missing"
+    html = index.read_text().lower()
+    if "<h1" not in html:
+        return False, "no <h1> in index.html"
+    if "styles.css" not in html:
+        return False, "index.html does not link styles.css"
+    if not css.exists():
+        return False, "styles.css missing"
+    if "background" not in css.read_text().lower():
+        return False, "styles.css has no background rule"
+    return True, "ok"
+
+
+def _verify_running_server(workdir: Path, port: int) -> tuple[bool, str]:
+    """Independently start the server Codex built and confirm it serves the
+    expected page. This is the real signal that Codex produced a working,
+    startable website — not just files on disk."""
+    import subprocess
+    import time
+    import urllib.request
+
+    server = workdir / "server.py"
+    if not server.exists():
+        return False, "server.py missing"
+
+    proc = subprocess.Popen(
+        ["python", "server.py"],
+        cwd=str(workdir),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        body = ""
+        for _ in range(30):  # up to ~6s for the server to come up
+            if proc.poll() is not None:
+                return False, f"server.py exited early (rc={proc.returncode})"
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1) as resp:
+                    body = resp.read().decode(errors="replace")
+                    break
+            except Exception:
+                time.sleep(0.2)
         else:
-            notes.append(f"run {i}: artifact missing/invalid in {workdir}")
-    score = passes / k
-    return CaseResult("delegation_succeeds", "e2e-success", k, passes, score, threshold, score >= threshold, notes)
+            return False, f"server did not respond on port {port}"
+        if "hello from codex" not in body.lower():
+            return False, "response missing 'Hello from Codex'"
+        return True, "ok"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
 
 
-CASES: list[tuple[str, Callable[[int, float], CaseResult]]] = [
-    ("called_appropriately", eval_called_appropriately),
-    ("no_over_delegation", eval_no_over_delegation),
-    ("instruction_quality", eval_instruction_quality),
-    ("delegation_succeeds", eval_delegation_succeeds),
+def _run_workdir_script(workdir: Path, script: str, timeout: int = 30) -> tuple[int, str]:
+    import subprocess
+
+    proc = subprocess.run(
+        ["python", script],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return proc.returncode, (proc.stdout + proc.stderr)
+
+
+def _verify_tests_pass(workdir: Path, port: int) -> tuple[bool, str]:
+    if not (workdir / "tests.py").exists():
+        return False, "tests.py missing"
+    try:
+        rc, out = _run_workdir_script(workdir, "tests.py")
+    except Exception as exc:
+        return False, f"tests.py did not run: {exc}"
+    return (rc == 0, "ok" if rc == 0 else f"tests.py failed (rc={rc}): {out[-200:]}")
+
+
+def _verify_json_api(workdir: Path, port: int) -> tuple[bool, str]:
+    """Start the API Codex built, POST an item, GET the list, confirm it persisted."""
+    import json as _json
+    import subprocess
+    import time
+    import urllib.request
+
+    if not (workdir / "server.py").exists():
+        return False, "server.py missing"
+    proc = subprocess.Popen(
+        ["python", "server.py"], cwd=str(workdir),
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    base = f"http://127.0.0.1:{port}"
+    try:
+        for _ in range(30):
+            if proc.poll() is not None:
+                return False, f"server exited early (rc={proc.returncode})"
+            try:
+                urllib.request.urlopen(f"{base}/api/items", timeout=1)
+                break
+            except Exception:
+                time.sleep(0.2)
+        else:
+            return False, f"server did not respond on port {port}"
+        req = urllib.request.Request(
+            f"{base}/api/items",
+            data=_json.dumps({"title": "buy milk"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=3)
+        with urllib.request.urlopen(f"{base}/api/items", timeout=3) as resp:
+            body = resp.read().decode(errors="replace")
+        return ("buy milk" in body, "ok" if "buy milk" in body else "posted item not in GET list")
+    except Exception as exc:
+        return False, f"api error: {exc}"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+
+
+def _setup_refactor(workdir: Path) -> None:
+    """Seed a buggy module + a failing test so Codex has something to fix."""
+    (workdir / "mathutils.py").write_text(
+        "def average(nums):\n"
+        "    # BUG: integer division + no empty-list guard\n"
+        "    return sum(nums) // len(nums)\n"
+    )
+    (workdir / "tests.py").write_text(
+        "from mathutils import average\n"
+        "assert average([1, 2]) == 1.5, average([1, 2])\n"
+        "assert average([]) == 0\n"
+        "print('ok')\n"
+    )
+
+
+@dataclass
+class E2ECase:
+    name: str
+    prompt: str  # may reference {path} and {port}
+    verify: Callable[[Path, int], tuple[bool, str]]
+    tier: int = 1
+    needs_port: bool = False
+    setup: Callable[[Path], None] | None = None
+
+
+E2E_CASES: list[E2ECase] = [
+    E2ECase(
+        name="e2e_add_function",
+        tier=1,
+        prompt=(
+            "Use the codex subagent to implement a function add(a, b) that returns "
+            "their sum, written to a file calc.py in {path}."
+        ),
+        verify=_verify_add_function,
+    ),
+    E2ECase(
+        name="e2e_static_site",
+        tier=2,
+        prompt=(
+            "Use the codex subagent to build a basic static website in {path}: an "
+            "index.html with a <title>My Site</title> and an <h1> heading, plus a "
+            "styles.css (linked from index.html) that sets the page background color. "
+            "Keep it to plain HTML/CSS."
+        ),
+        verify=_verify_static_site,
+    ),
+    E2ECase(
+        name="e2e_running_web_server",
+        tier=2,
+        prompt=(
+            "Use the codex subagent to build AND start a basic website in {path}. "
+            "Create server.py using only the Python standard library that serves an "
+            "index.html whose body contains the exact text 'Hello from Codex' at "
+            "http://localhost:{port}/. Running `python server.py` must start the "
+            "server listening on port {port}. Build it, start it briefly to confirm "
+            "it responds with the page, then stop it and report what you did."
+        ),
+        verify=_verify_running_server,
+        needs_port=True,
+    ),
+    E2ECase(
+        name="e2e_json_api",
+        tier=3,
+        prompt=(
+            "Use the codex subagent to build a minimal JSON todo API in {path} using "
+            "only the Python standard library. Create server.py exposing GET "
+            "/api/items (returns a JSON array of items) and POST /api/items (accepts "
+            "{{\"title\": ...}} and appends it). Running `python server.py` must listen "
+            "on port {port}. Persist items in memory is fine."
+        ),
+        verify=_verify_json_api,
+        needs_port=True,
+    ),
+    E2ECase(
+        name="e2e_cli_with_tests",
+        tier=3,
+        prompt=(
+            "Use the codex subagent to build a small word-count CLI in {path}: a file "
+            "wordcount.py with a function count_words(text) returning the number of "
+            "whitespace-separated words, and a test file tests.py (standard library "
+            "only) that asserts several cases and prints 'ok'. Running `python "
+            "tests.py` must exit 0."
+        ),
+        verify=_verify_tests_pass,
+    ),
+    E2ECase(
+        name="e2e_refactor_passes_tests",
+        tier=4,
+        prompt=(
+            "The directory {path} has mathutils.py with a buggy average() and a "
+            "tests.py that currently fails. Use the codex subagent to fix "
+            "mathutils.py so that `python tests.py` passes (float division, and "
+            "average([]) returns 0). Do not weaken the tests."
+        ),
+        verify=_verify_tests_pass,
+        setup=_setup_refactor,
+    ),
 ]
 
 
-def run_evals(k: int = DEFAULT_K, threshold: float = DEFAULT_THRESHOLD, only: set[str] | None = None) -> dict:
-    results = []
-    for name, fn in CASES:
+def eval_e2e_case(case: E2ECase, k: int, threshold: float) -> CaseResult:
+    """Route a multi-step build task through the main agent to the REAL codex
+    tool, then independently verify the artifacts (and, where relevant, that the
+    result actually runs). Bounded by the global BUDGET so an overnight loop
+    can't run away."""
+    import tempfile
+
+    k = min(k, int(os.getenv("EVAL_E2E_K", "3")))
+    passes, notes, runs_done = 0, [], 0
+    for i in range(k):
+        ok_budget, why = BUDGET.available()
+        if not ok_budget:
+            notes.append(f"stopped early: {why} (after {runs_done} runs)")
+            break
+        BUDGET.record()
+        workdir = Path(tempfile.mkdtemp(prefix=f"{case.name}_"))
+        if case.setup is not None:
+            try:
+                case.setup(workdir)
+            except Exception as exc:
+                notes.append(f"run {i}: setup failed: {exc}")
+                continue
+        port = _free_port() if case.needs_port else 0
+        prompt = case.prompt.format(path=workdir, port=port)
+        try:
+            # record_sink=None -> the real codex_subagent runs.
+            _run_agent(prompt, record_sink=None)
+            ok, why2 = case.verify(workdir, port)
+        except Exception as exc:
+            ok, why2 = False, f"exception: {exc}"
+        runs_done += 1
+        if ok:
+            passes += 1
+        else:
+            notes.append(f"run {i}: {why2} (workdir={workdir})")
+    if runs_done == 0:
+        return CaseResult(case.name, "e2e-success", 0, 0, 0.0, threshold, False,
+                          notes or ["no runs executed"], tier=case.tier, skipped=True)
+    score = passes / runs_done
+    return CaseResult(case.name, "e2e-success", runs_done, passes, score, threshold,
+                      score >= threshold, notes, tier=case.tier)
+
+
+# --------------------------------------------------------------------------- #
+# Multi-turn cases: an LLM plays the human, driving a real conversation with the
+# main agent over several turns. Each turn the agent may re-delegate to the REAL
+# Codex, building on prior work. Tests conversational continuity + repeated,
+# correct delegation — not just a single hand-off.
+# --------------------------------------------------------------------------- #
+
+_SIMULATOR_PROMPT = """You are role-playing a HUMAN user chatting with an AI coding assistant.
+
+Your overall GOAL for the whole conversation:
+{goal}
+
+Conversation so far (oldest first; may be empty):
+{transcript}
+
+Write ONLY your next message to the assistant: a short, natural user turn that
+pushes toward the GOAL, building on what has already been done. Ask for one
+increment at a time (like a real user). If the GOAL is already fully
+accomplished, reply with exactly: DONE
+"""
+
+
+def _simulate_user_turn(goal: str, messages: list[dict]) -> str | None:
+    """Ask the simulator LLM for the next human message, or None when it says DONE."""
+    from openai import OpenAI
+
+    transcript = "\n".join(f"{m['role']}: {str(m['content'])[:600]}" for m in messages) or "(none yet)"
+    resp = OpenAI().chat.completions.create(
+        model=MODEL_ID,
+        messages=[{"role": "user", "content": _SIMULATOR_PROMPT.format(goal=goal, transcript=transcript)}],
+        temperature=0.3,
+    )
+    text = (resp.choices[0].message.content or "").strip()
+    if text.upper().startswith("DONE") or not text:
+        return None
+    return text
+
+
+def _verify_multipage_site(workdir: Path, port: int) -> tuple[bool, str]:
+    index, about = workdir / "index.html", workdir / "about.html"
+    if not index.exists():
+        return False, "index.html missing"
+    if not about.exists():
+        return False, "about.html missing"
+    if "about.html" not in index.read_text().lower():
+        return False, "index.html nav missing About link"
+    if "index.html" not in about.read_text().lower():
+        return False, "about.html nav missing Home link"
+    return True, "ok"
+
+
+@dataclass
+class MultiTurnCase:
+    name: str
+    goal: str  # references {path} and optionally {port}
+    verify: Callable[[Path, int], tuple[bool, str]]
+    tier: int = 5
+    needs_port: bool = False
+    max_turns: int = 4
+
+
+MULTITURN_CASES: list[MultiTurnCase] = [
+    MultiTurnCase(
+        name="mt_multipage_site",
+        tier=5,
+        max_turns=4,
+        goal=(
+            "Build a small static website in {path} with a home page (index.html) "
+            "and an About page (about.html), and a nav bar on BOTH pages linking to "
+            "each other. Plain HTML/CSS only. Add the pages one at a time."
+        ),
+        verify=_verify_multipage_site,
+    ),
+]
+
+
+def eval_multiturn_case(case: MultiTurnCase, k: int, threshold: float) -> CaseResult:
+    """Drive a simulated multi-turn conversation; each turn rebuilds the agent
+    with the full history (like the box runtime) and may hit the REAL Codex.
+    Passes when the final artifacts verify AND Codex was actually delegated to."""
+    import tempfile
+
+    k = min(k, int(os.getenv("EVAL_MULTITURN_K", "2")))
+    passes, notes, runs_done = 0, [], 0
+    for i in range(k):
+        ok_budget, why = BUDGET.available()
+        if not ok_budget:
+            notes.append(f"stopped early: {why} (after {runs_done} runs)")
+            break
+        workdir = Path(tempfile.mkdtemp(prefix=f"{case.name}_"))
+        port = _free_port() if case.needs_port else 0
+        goal = case.goal.format(path=workdir, port=port)
+        messages: list[dict] = []
+        calls_per_turn: list[int] = []
+        for _turn in range(case.max_turns):
+            ok_b, _ = BUDGET.available()
+            if not ok_b:
+                break
+            user_msg = _simulate_user_turn(goal, messages)
+            if user_msg is None:
+                break
+            messages.append({"role": "user", "content": user_msg})
+            BUDGET.record()
+            try:
+                # Fresh agent + full history each turn; record_sink=None -> real codex.
+                agent = _build_agent(None)
+                calls, text = _run_messages(agent, messages)
+            except Exception as exc:
+                notes.append(f"run {i}: turn error: {exc}")
+                calls, text = [], "(error)"
+            calls_per_turn.append(len(calls))
+            messages.append({"role": "assistant", "content": text or "(no text)"})
+        runs_done += 1
+        try:
+            ok, why2 = case.verify(workdir, port)
+        except Exception as exc:
+            ok, why2 = False, f"verify error: {exc}"
+        delegated = any(c > 0 for c in calls_per_turn)
+        if ok and delegated:
+            passes += 1
+        else:
+            notes.append(
+                f"run {i}: verify={ok} ({why2}); codex_calls_per_turn={calls_per_turn} "
+                f"(workdir={workdir})"
+            )
+    if runs_done == 0:
+        return CaseResult(case.name, "multiturn", 0, 0, 0.0, threshold, False,
+                          notes or ["no runs executed"], tier=case.tier, skipped=True)
+    score = passes / runs_done
+    return CaseResult(case.name, "multiturn", runs_done, passes, score, threshold,
+                      score >= threshold, notes, tier=case.tier)
+
+
+# Cheap behavior cases (stubbed Codex) — always run, always tier 1.
+STUB_CASES: list[tuple[str, Callable[[int, float], CaseResult]]] = [
+    ("called_appropriately", eval_called_appropriately),
+    ("no_over_delegation", eval_no_over_delegation),
+    ("instruction_quality", eval_instruction_quality),
+]
+
+
+def run_evals(
+    k: int = DEFAULT_K,
+    threshold: float = DEFAULT_THRESHOLD,
+    only: set[str] | None = None,
+    max_tier: int = DEFAULT_MAX_TIER,
+) -> dict:
+    results: list[CaseResult] = []
+
+    for name, fn in STUB_CASES:
         if only and name not in only:
             continue
         print(f"[eval] {name} (k={k}) ...", flush=True)
@@ -244,20 +694,82 @@ def run_evals(k: int = DEFAULT_K, threshold: float = DEFAULT_THRESHOLD, only: se
         results.append(res)
         print(f"       -> {'PASS' if res.passed else 'FAIL'} score={res.score:.2f}", flush=True)
 
+    for case in E2E_CASES:
+        explicit = bool(only and case.name in only)
+        if only and not explicit:
+            continue
+        # Tier gate ("as the night progresses"): skip harder tiers unless the
+        # loop has raised max_tier, or the case was named explicitly.
+        if not explicit and case.tier > max_tier:
+            results.append(CaseResult(case.name, "e2e-success", 0, 0, 0.0, threshold,
+                                      False, [f"skipped: tier {case.tier} > max_tier {max_tier}"],
+                                      tier=case.tier, skipped=True))
+            print(f"[eval] {case.name} — SKIP (tier {case.tier} > {max_tier})", flush=True)
+            continue
+        ok_budget, why = BUDGET.available()
+        if not ok_budget:
+            results.append(CaseResult(case.name, "e2e-success", 0, 0, 0.0, threshold,
+                                      False, [f"skipped: {why}"], tier=case.tier, skipped=True))
+            print(f"[eval] {case.name} — SKIP ({why})", flush=True)
+            continue
+        print(f"[eval] {case.name} (tier {case.tier}, e2e_runs={BUDGET.e2e_runs}/{MAX_E2E_RUNS}) ...", flush=True)
+        try:
+            res = eval_e2e_case(case, k, threshold)
+        except Exception as exc:
+            res = CaseResult(case.name, "e2e-success", 0, 0, 0.0, threshold, False,
+                             [f"ERROR: {exc}"], tier=case.tier)
+        results.append(res)
+        print(f"       -> {'PASS' if res.passed else 'FAIL'} score={res.score:.2f}", flush=True)
+
+    for case in MULTITURN_CASES:
+        explicit = bool(only and case.name in only)
+        if only and not explicit:
+            continue
+        if not explicit and case.tier > max_tier:
+            results.append(CaseResult(case.name, "multiturn", 0, 0, 0.0, threshold,
+                                      False, [f"skipped: tier {case.tier} > max_tier {max_tier}"],
+                                      tier=case.tier, skipped=True))
+            print(f"[eval] {case.name} — SKIP (tier {case.tier} > {max_tier})", flush=True)
+            continue
+        ok_budget, why = BUDGET.available()
+        if not ok_budget:
+            results.append(CaseResult(case.name, "multiturn", 0, 0, 0.0, threshold,
+                                      False, [f"skipped: {why}"], tier=case.tier, skipped=True))
+            print(f"[eval] {case.name} — SKIP ({why})", flush=True)
+            continue
+        print(f"[eval] {case.name} (multi-turn, tier {case.tier}, e2e_runs={BUDGET.e2e_runs}/{MAX_E2E_RUNS}) ...", flush=True)
+        try:
+            res = eval_multiturn_case(case, k, threshold)
+        except Exception as exc:
+            res = CaseResult(case.name, "multiturn", 0, 0, 0.0, threshold, False,
+                             [f"ERROR: {exc}"], tier=case.tier)
+        results.append(res)
+        print(f"       -> {'PASS' if res.passed else 'FAIL'} score={res.score:.2f}", flush=True)
+
+    scored = [r for r in results if not r.skipped]
     scorecard = {
         "model": MODEL_ID,
         "k": k,
         "threshold": threshold,
-        "all_passed": all(r.passed for r in results),
+        "max_tier": max_tier,
+        "budget": {
+            "e2e_runs": BUDGET.e2e_runs,
+            "max_e2e_runs": MAX_E2E_RUNS,
+            "minutes_elapsed": round((monotonic() - BUDGET.start) / 60, 1),
+            "max_minutes": MAX_MINUTES,
+        },
+        "all_passed": bool(scored) and all(r.passed for r in scored),
         "cases": [r.__dict__ for r in results],
     }
     out = Path(__file__).parent / "scorecard.json"
     out.write_text(json.dumps(scorecard, indent=2))
-    print(f"[eval] wrote {out} — all_passed={scorecard['all_passed']}")
+    print(f"[eval] wrote {out} — all_passed={scorecard['all_passed']} "
+          f"(e2e_runs={BUDGET.e2e_runs}/{MAX_E2E_RUNS})")
     return scorecard
 
 
 if __name__ == "__main__":
-    only = set(sys.argv[1:]) or None
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    only = set(args) or None
     card = run_evals(only=only)
     sys.exit(0 if card["all_passed"] else 1)
