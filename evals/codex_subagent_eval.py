@@ -558,8 +558,12 @@ def eval_e2e_case(case: E2ECase, k: int, threshold: float) -> CaseResult:
         port = _free_port() if case.needs_port else 0
         prompt = case.prompt.format(path=workdir, port=port)
         try:
-            # record_sink=None -> the real codex_subagent runs.
-            _run_agent(prompt, record_sink=None)
+            # Isolate to workdir (same as the multi-turn case): otherwise the
+            # agent inspects the SHARED workspace, sees stale artifacts from a
+            # prior case, concludes the task is already done, and never delegates
+            # — leaving the fresh workdir empty and verification failing.
+            with _chat_files_dir(workdir):
+                _run_agent(prompt, record_sink=None)
             ok, why2 = case.verify(workdir, port)
         except Exception as exc:
             ok, why2 = False, f"exception: {exc}"
