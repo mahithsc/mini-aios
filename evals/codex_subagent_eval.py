@@ -29,6 +29,13 @@ from typing import Callable
 from agno.agent import Agent
 from agno.models.openai import OpenAIChat
 from agno.run.agent import RunEvent as AgentRunEvent
+from dotenv import load_dotenv
+
+# Ensure OPENAI_API_KEY (and friends) are present regardless of which case runs
+# first. The simulator/judge build ``OpenAI()`` directly, so we can't rely on
+# the ``load_dotenv()`` side effect that fires when ``aios_core.agent`` is first
+# imported (a case-ordering trap when a later tier is run in isolation).
+load_dotenv()
 
 DEFAULT_K = int(os.getenv("EVAL_K", "5"))
 DEFAULT_THRESHOLD = float(os.getenv("EVAL_THRESHOLD", "0.8"))
