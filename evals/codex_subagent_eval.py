@@ -594,17 +594,50 @@ def _simulate_user_turn(goal: str, messages: list[dict]) -> str | None:
     return text
 
 
-def _verify_multipage_site(workdir: Path, port: int) -> tuple[bool, str]:
-    index, about = workdir / "index.html", workdir / "about.html"
-    if not index.exists():
-        return False, "index.html missing"
-    if not about.exists():
-        return False, "about.html missing"
-    if "about.html" not in index.read_text().lower():
-        return False, "index.html nav missing About link"
-    if "index.html" not in about.read_text().lower():
-        return False, "about.html nav missing Home link"
-    return True, "ok"
+def _verify_multiroute_server(workdir: Path, port: int) -> tuple[bool, str]:
+    """Start the server the agent had Codex build across turns and confirm it
+    serves BOTH routes with cross-linking nav."""
+    import subprocess
+    import time
+    import urllib.request
+
+    if not (workdir / "server.py").exists():
+        return False, "server.py missing"
+    proc = subprocess.Popen(
+        ["python", "server.py"], cwd=str(workdir),
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    base = f"http://127.0.0.1:{port}"
+    try:
+        home = None
+        for _ in range(30):
+            if proc.poll() is not None:
+                return False, f"server exited early (rc={proc.returncode})"
+            try:
+                with urllib.request.urlopen(f"{base}/", timeout=1) as r:
+                    home = r.read().decode(errors="replace")
+                    break
+            except Exception:
+                time.sleep(0.2)
+        else:
+            return False, f"server did not respond on / (port {port})"
+        try:
+            with urllib.request.urlopen(f"{base}/about", timeout=2) as r:
+                about = r.read().decode(errors="replace")
+        except Exception as exc:
+            return False, f"/about route not served: {exc}"
+        if "/about" not in home.lower():
+            return False, "home page nav missing link to /about"
+        al = about.lower()
+        if 'href="/"' not in al and "home" not in al:
+            return False, "about page nav missing link back home"
+        return True, "ok"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
 
 
 @dataclass
@@ -619,15 +652,19 @@ class MultiTurnCase:
 
 MULTITURN_CASES: list[MultiTurnCase] = [
     MultiTurnCase(
-        name="mt_multipage_site",
+        name="mt_multiroute_server",
         tier=5,
-        max_turns=4,
+        max_turns=5,
+        needs_port=True,
         goal=(
-            "Build a small static website in {path} with a home page (index.html) "
-            "and an About page (about.html), and a nav bar on BOTH pages linking to "
-            "each other. Plain HTML/CSS only. Add the pages one at a time."
+            "Build a Python web application in {path} using only the standard "
+            "library — this is real backend coding, so have the coding subagent do "
+            "it. Create server.py that serves a home page at / and listens on port "
+            "{port} when run as `python server.py`. Then, in later messages, ask to "
+            "add an /about route and a shared nav bar linking Home (/) and About "
+            "(/about) on both pages. Build it up one route at a time."
         ),
-        verify=_verify_multipage_site,
+        verify=_verify_multiroute_server,
     ),
 ]
 
