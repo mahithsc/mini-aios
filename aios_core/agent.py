@@ -5,12 +5,13 @@ from agno.models.openai import OpenAIChat
 from dotenv import load_dotenv
 
 from .agent_prompt import build_agent_prompt
-from .skills import load_skills
+from .memory import build_memory_prompt
 from .sessions import (
     get_chat_artifacts_dir,
     get_chat_files_dir,
     get_chat_session_relative_dir,
 )
+from .skills import load_skills
 from .tools import (
     bash,
     edit,
@@ -30,7 +31,9 @@ from .tools.codex import codex
 from .tools.cron import cron
 from .tools.fetch import fetch
 from .tools.generative_widget import generative_widget
+from .tools.memory import memory
 from .tools.notify import notify
+from .tools.session_search import session_search
 from .tools.subagent import subagent
 from .workspace import resolve_workspace_path
 
@@ -61,7 +64,7 @@ BASE_TOOLS = [
     tavily_search,
     fetch,
 ]
-MAIN_TOOLS = [*BASE_TOOLS, subagent]
+MAIN_TOOLS = [*BASE_TOOLS, memory, session_search, subagent]
 
 
 def _build_prompt(
@@ -88,6 +91,8 @@ def _build_prompt(
         current_chat_files_dir=current_chat_files_dir,
         current_chat_artifacts_dir=current_chat_artifacts_dir,
         current_chat_artifact_url_template=current_chat_artifact_url_template,
+        include_memory_tools=include_subagent_tool,
+        memory_context=build_memory_prompt(),
         skills=load_skills(),
     )
 

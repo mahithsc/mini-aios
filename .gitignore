@@ -11,6 +11,9 @@ session/
 # skills
 skills/
 
+# curated agent memory
+memories/
+
 # runtime state
 runs/
 
