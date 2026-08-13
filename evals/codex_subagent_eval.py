@@ -29,6 +29,8 @@ from typing import Callable
 from agno.agent import Agent
 from agno.models.openai import OpenAIChat
 from agno.run.agent import RunEvent as AgentRunEvent
+from contextlib import contextmanager
+
 from dotenv import load_dotenv
 
 # Ensure OPENAI_API_KEY (and friends) are present regardless of which case runs
@@ -36,6 +38,24 @@ from dotenv import load_dotenv
 # the ``load_dotenv()`` side effect that fires when ``aios_core.agent`` is first
 # imported (a case-ordering trap when a later tier is run in isolation).
 load_dotenv()
+
+
+@contextmanager
+def _chat_files_dir(workdir: "Path"):
+    """Point relative file-tool and Codex paths at ``workdir`` for the duration,
+    mirroring the box runtime (``push_chat_runtime_context``). Without this the
+    agent inspects the SHARED workspace, finds stale artifacts from earlier runs,
+    hallucinates the task is already done, and never delegates — while ``workdir``
+    stays empty and verification fails. Single-turn e2e cases dodge this by
+    embedding the absolute path in the prompt; the multi-turn simulator paraphrases
+    and drops it, so isolation must be enforced here."""
+    from aios_core import runtime_context as rc
+
+    token = rc._CURRENT_CHAT_FILES_DIR.set(str(workdir))
+    try:
+        yield
+    finally:
+        rc._CURRENT_CHAT_FILES_DIR.reset(token)
 
 DEFAULT_K = int(os.getenv("EVAL_K", "5"))
 DEFAULT_THRESHOLD = float(os.getenv("EVAL_THRESHOLD", "0.8"))
@@ -573,8 +593,11 @@ Conversation so far (oldest first; may be empty):
 
 Write ONLY your next message to the assistant: a short, natural user turn that
 pushes toward the GOAL, building on what has already been done. Ask for one
-increment at a time (like a real user). If the GOAL is already fully
-accomplished, reply with exactly: DONE
+increment at a time (like a real user). When your GOAL says the coding subagent
+should do the work, make each build/change request explicit about it — e.g.
+"use your codex coding subagent to ..." — so the assistant delegates the coding
+rather than hand-editing it itself. If the GOAL is already fully accomplished,
+reply with exactly: DONE
 """
 
 
@@ -687,24 +710,25 @@ def eval_multiturn_case(case: MultiTurnCase, k: int, threshold: float) -> CaseRe
         goal = case.goal.format(path=workdir, port=port)
         messages: list[dict] = []
         calls_per_turn: list[int] = []
-        for _turn in range(case.max_turns):
-            ok_b, _ = BUDGET.available()
-            if not ok_b:
-                break
-            user_msg = _simulate_user_turn(goal, messages)
-            if user_msg is None:
-                break
-            messages.append({"role": "user", "content": user_msg})
-            BUDGET.record()
-            try:
-                # Fresh agent + full history each turn; record_sink=None -> real codex.
-                agent = _build_agent(None)
-                calls, text = _run_messages(agent, messages)
-            except Exception as exc:
-                notes.append(f"run {i}: turn error: {exc}")
-                calls, text = [], "(error)"
-            calls_per_turn.append(len(calls))
-            messages.append({"role": "assistant", "content": text or "(no text)"})
+        with _chat_files_dir(workdir):
+            for _turn in range(case.max_turns):
+                ok_b, _ = BUDGET.available()
+                if not ok_b:
+                    break
+                user_msg = _simulate_user_turn(goal, messages)
+                if user_msg is None:
+                    break
+                messages.append({"role": "user", "content": user_msg})
+                BUDGET.record()
+                try:
+                    # Fresh agent + full history each turn; record_sink=None -> real codex.
+                    agent = _build_agent(None)
+                    calls, text = _run_messages(agent, messages)
+                except Exception as exc:
+                    notes.append(f"run {i}: turn error: {exc}")
+                    calls, text = [], "(error)"
+                calls_per_turn.append(len(calls))
+                messages.append({"role": "assistant", "content": text or "(no text)"})
         runs_done += 1
         try:
             ok, why2 = case.verify(workdir, port)
