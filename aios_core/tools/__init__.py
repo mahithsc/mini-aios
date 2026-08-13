@@ -17,6 +17,8 @@ __all__ = [
     "generative_widget",
     "tavily_search",
     "fetch",
+    "memory",
+    "session_search",
     "subagent",
 ]
 
@@ -83,6 +85,14 @@ def __getattr__(name: str):
         from .fetch import fetch
 
         return fetch
+    if name == "memory":
+        from .memory import memory
+
+        return memory
+    if name == "session_search":
+        from .session_search import session_search
+
+        return session_search
     if name == "subagent":
         from .subagent import subagent
 
