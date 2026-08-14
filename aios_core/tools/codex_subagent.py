@@ -114,7 +114,7 @@ def _reader_thread(stream: Any, out_queue: "queue.Queue[str | None]") -> None:
 
 def codex_subagent(
     task: str | None = None,
-    timeout: float = 180,
+    timeout: float = 600,
     model: str | None = None,
     path: str = ".",
     fc=None,

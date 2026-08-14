@@ -140,7 +140,10 @@ def _run_messages(agent: Agent, messages: list[dict]) -> tuple[list[dict], str]:
     for event in agent.run(messages, stream=True, stream_events=True):
         if event.event == AgentRunEvent.tool_call_started and event.tool is not None:
             if event.tool.tool_name == "codex_subagent":
-                calls.append({"args": event.tool.tool_args})
+                calls.append({"args": event.tool.tool_args, "result": None})
+        elif event.event == AgentRunEvent.tool_call_completed and event.tool is not None:
+            if event.tool.tool_name == "codex_subagent" and calls:
+                calls[-1]["result"] = str(event.tool.result)[:400]
         elif event.event == AgentRunEvent.run_content and event.content is not None:
             final_chunks.append(str(event.content))
     return calls, "".join(final_chunks)
@@ -563,8 +566,11 @@ def eval_e2e_case(case: E2ECase, k: int, threshold: float) -> CaseResult:
             # prior case, concludes the task is already done, and never delegates
             # — leaving the fresh workdir empty and verification failing.
             with _chat_files_dir(workdir):
-                _run_agent(prompt, record_sink=None)
+                calls, _ = _run_agent(prompt, record_sink=None)
             ok, why2 = case.verify(workdir, port)
+            if not ok:
+                results = [c.get("result") for c in calls]
+                why2 = f"{why2}; codex_calls={len(calls)} results={results}"
         except Exception as exc:
             ok, why2 = False, f"exception: {exc}"
         runs_done += 1
