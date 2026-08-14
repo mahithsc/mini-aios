@@ -18,6 +18,11 @@ __all__ = [
     "codex_start",
     "codex_poll",
     "codex_stop",
+    "apps_list",
+    "app_status",
+    "app_logs",
+    "app_restart",
+    "app_stop",
     "generative_widget",
     "tavily_search",
     "fetch",
@@ -85,6 +90,16 @@ def __getattr__(name: str):
         from .codex_job import codex_poll, codex_start, codex_stop
 
         return {"codex_start": codex_start, "codex_poll": codex_poll, "codex_stop": codex_stop}[name]
+    if name in {"apps_list", "app_status", "app_logs", "app_restart", "app_stop"}:
+        from ..deploy.agent_tools import app_logs, app_restart, app_status, app_stop, apps_list
+
+        return {
+            "apps_list": apps_list,
+            "app_status": app_status,
+            "app_logs": app_logs,
+            "app_restart": app_restart,
+            "app_stop": app_stop,
+        }[name]
     if name == "generative_widget":
         from .generative_widget import generative_widget
 

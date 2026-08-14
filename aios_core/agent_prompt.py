@@ -123,6 +123,32 @@ _BASE_TOOLS_BLOCK = """
      "path": "string? (working directory; default '.')"},
     codex,
 ),
+"apps_list": (
+    "List the apps you've deployed (slug, status, whether the container is running). "
+    "Deployed apps are durable services that outlive the chat.",
+    {},
+    apps_list,
+),
+"app_status": (
+    "Get one deployed app's status (running?, stored status, port).",
+    {"slug": "string"},
+    app_status,
+),
+"app_logs": (
+    "Fetch recent container logs for a deployed app to debug it.",
+    {"slug": "string", "tail": "number? (lines, default 100)"},
+    app_logs,
+),
+"app_restart": (
+    "Restart a deployed app's container.",
+    {"slug": "string"},
+    app_restart,
+),
+"app_stop": (
+    "Stop a deployed app's container (its definition is kept so it can be restarted).",
+    {"slug": "string"},
+    app_stop,
+),
 "cron": (
     "Manage scheduled cron jobs (actions: create, list, edit, delete)",
     {"action": "string", "name": "string?", "description": "string?",

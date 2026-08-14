@@ -82,7 +82,10 @@ and log why in the Progress Log — do not fake it.
             list tools → call deploy → real container deployed + served. The codex_start command
             wiring (`codex -c mcp_servers.deploy=...`) + Codex actually calling it = step 7.
       `::test_codex_build_and_deploy_loop`.
-- [ ] 6. **Main-agent lifecycle tools** + prompt wiring.
+- [x] 6. **Main-agent lifecycle tools** — ✅ DONE — `agent_tools.py`: `apps_list`, `app_status`,
+      `app_logs`, `app_restart`, `app_stop` over durable store+supervisor; registered in
+      MAIN_TOOLS + prompt. `test_deploy_agent_tools.py` (real-Docker lifecycle: deploy→status→
+      logs→stop→restart). 26 tests pass, no regressions.
 - [ ] 7. **Full e2e** — `deploy_app(goal)` → Codex builds → deployed → public URL serves the
       Codex-built page. `::test_full_deploy_app_e2e`.
 
@@ -92,6 +95,12 @@ when the runtime is genuinely absent, never to dodge a real failure). The full e
 Codex-authored app answering a real HTTP request at its public `https://<slug>.apps.trywink.io/`.
 
 ## Progress Log (append newest first)
+- Step 6 DONE ✅ — main-agent lifecycle tools (`apps_list/app_status/app_logs/app_restart/
+  app_stop`) over durable store+supervisor; registered in MAIN_TOOLS + prompt; real-Docker
+  lifecycle e2e (deploy→status→logs→stop→restart). 26 tests pass, no regressions. Next: step 7
+  — the FULL loop: wire the deploy MCP server into codex_start's command, then a real
+  `codex_start` job that builds an app AND calls deploy → app served at a LOCAL url (public url
+  grafts in once a valid CF token arrives). This is the expensive real-codex e2e.
 - Step 5b DONE ✅ — `mcp_server.py` (FastMCP) exposes `deploy`; validated by a REAL MCP protocol
   round-trip (spawn over stdio as Codex does → handshake → list tools → call deploy → real
   container serves). 14 deploy tests pass. codex_start MCP wiring + Codex-calls-deploy deferred

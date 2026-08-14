@@ -30,6 +30,7 @@ from .tools.canvas import show_canvas
 from .tools.codex import codex
 from .tools.codex_subagent import codex_subagent
 from .tools.codex_job import codex_poll, codex_start, codex_stop
+from .deploy.agent_tools import app_logs, app_restart, app_status, app_stop, apps_list
 from .tools.cron import cron
 from .tools.fetch import fetch
 from .tools.generative_widget import generative_widget
@@ -70,7 +71,17 @@ BASE_TOOLS = [
     tavily_search,
     fetch,
 ]
-MAIN_TOOLS = [*BASE_TOOLS, memory, session_search, subagent]
+MAIN_TOOLS = [
+    *BASE_TOOLS,
+    memory,
+    session_search,
+    subagent,
+    apps_list,
+    app_status,
+    app_logs,
+    app_restart,
+    app_stop,
+]
 
 
 def _build_prompt(
