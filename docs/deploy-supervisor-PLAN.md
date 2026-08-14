@@ -58,8 +58,13 @@ and log why in the Progress Log — do not fake it.
 - [x] 3. **Reconciler** — ✅ DONE — `reconcile()` restarts `running` projects whose container is
       gone; validated by killing a container and confirming it re-serves.
       `test_deploy_e2e.py::test_reconciler_restarts_running`.
-- [ ] 4. **Public exposure** — cloudflared tunnel + reverse proxy; per-slug route on
-      start/stop; public URL reachable. `::test_public_url_reachable`.
+- [~] 4. **Public exposure** — split:
+      - [x] 4a **Reverse proxy** — ✅ DONE — `proxy.py` routes `<slug>.apps.<zone>` (Host header)
+            → container loopback port; register/unregister; 404 unknown, 502 dead backend.
+            `test_deploy_proxy.py` (3) + `test_deploy_e2e.py::test_container_reachable_through_proxy`.
+      - [ ] 4b **cloudflared tunnel** — one tunnel per box fronting the proxy + DNS
+            `*.apps.trywink.io` (CF token in box .env). Then Supervisor.start registers the
+            route + returns the public URL; real public GET reachability test.
 - [ ] 5. **`deploy` MCP tool** into `codex_start` — feedback loop.
       `::test_codex_build_and_deploy_loop`.
 - [ ] 6. **Main-agent lifecycle tools** + prompt wiring.
@@ -72,6 +77,11 @@ when the runtime is genuinely absent, never to dodge a real failure). The full e
 Codex-authored app answering a real HTTP request at its public `https://<slug>.apps.trywink.io/`.
 
 ## Progress Log (append newest first)
+- Step 4a DONE ✅ — reverse proxy (`proxy.py`): Host-based slug routing, register/unregister,
+  404/502 handling; integration e2e proves a real container is reachable THROUGH the proxy.
+  10 deploy tests pass vs live Docker. Next: 4b — front the proxy with ONE cloudflared tunnel +
+  DNS `*.apps.trywink.io`, wire Supervisor.start to register the route + return the public URL,
+  and a real public-GET reachability test. CF token/account/zone in box .env.
 - Steps 2 & 3 DONE ✅ — durable `ProjectStore` (JSON, atomic) + `reconcile()`; 6 deploy tests
   pass vs live Docker (store roundtrip/persist, supervisor, reconciler restarts a killed
   container and re-serves). Next: step 4 (public exposure — cloudflared tunnel + reverse proxy

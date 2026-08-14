@@ -114,3 +114,35 @@ def test_reconciler_restarts_running(tmp_path):
         assert ok and "deploy-supervisor-ok" in body  # really serving again
     finally:
         sup.stop(project)
+
+
+def test_container_reachable_through_proxy(tmp_path):
+    """Step 4a integration: a real container is reachable THROUGH the reverse
+    proxy via its slug Host header (the full local public-exposure path)."""
+    import urllib.request
+
+    from aios_core.deploy.proxy import ReverseProxy
+
+    _write_min_app(tmp_path)
+    project = Project(slug="proxied1", source_dir=tmp_path, spec=Spec(run=["python", "app.py"], port=8000))
+    sup = Supervisor()
+    proxy = ReverseProxy(apps_domain="apps.trywink.io")
+    proxy.start()
+    try:
+        handle = sup.start(project)
+        ok, _ = sup.health(handle["url"])
+        assert ok, sup.logs(project)
+
+        public_url = proxy.register(project.slug, handle["host_port"])
+        assert public_url == "https://proxied1.apps.trywink.io/"
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{proxy.port}/", headers={"Host": "proxied1.apps.trywink.io"}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = resp.read().decode()
+        assert "deploy-supervisor-ok" in body  # container served through the proxy
+    finally:
+        proxy.unregister(project.slug)
+        proxy.shutdown()
+        sup.stop(project)
