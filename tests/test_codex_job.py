@@ -155,6 +155,46 @@ def test_poll_unknown_job():
     assert "error" in CodexJobManager().poll("does-not-exist")
 
 
+def test_progress_sink_emits_codex_events(valid_path, monkeypatch):
+    import time as _time
+
+    from aios_core.tools import codex_job as cj
+
+    _patch(monkeypatch, _FakePopen(lines=_fixture_lines("command_read.jsonl"), returncode=0))
+    captured: list[tuple[str, str, dict]] = []
+    cj.set_progress_sink(lambda sid, t, p: captured.append((sid, t, p)))
+    try:
+        mgr = CodexJobManager()
+        started = mgr.start("read the file", path=".", session_id="chatX", parent_tool_call_id="tc1")
+        _wait_done(mgr, started["job_id"])
+        _time.sleep(0.2)  # let the terminal codex.completed emit land
+    finally:
+        cj.set_progress_sink(None)
+
+    types = [t for _, t, _ in captured]
+    assert "codex.started" in types
+    assert "codex.progress" in types
+    assert "codex.completed" in types
+    assert all(sid == "chatX" for sid, _, _ in captured)  # keyed to the chat
+    assert all("job_id" in p for _, _, p in captured)
+
+
+def test_no_sink_or_no_session_is_silent(valid_path, monkeypatch):
+    # No session_id -> no progress emitted even with a sink installed.
+    from aios_core.tools import codex_job as cj
+
+    _patch(monkeypatch, _FakePopen(lines=_fixture_lines("command_read.jsonl"), returncode=0))
+    captured: list = []
+    cj.set_progress_sink(lambda sid, t, p: captured.append(t))
+    try:
+        mgr = CodexJobManager()
+        started = mgr.start("x", path=".")  # no session_id
+        _wait_done(mgr, started["job_id"])
+    finally:
+        cj.set_progress_sink(None)
+    assert captured == []
+
+
 def test_codex_missing_binary(valid_path, monkeypatch):
     def _raise(*a, **k):
         raise FileNotFoundError()

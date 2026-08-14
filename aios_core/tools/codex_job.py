@@ -26,10 +26,23 @@ from time import monotonic
 from typing import Any
 from uuid import uuid4
 
-from ..runtime_context import resolve_chat_files_path
+from typing import Callable
+
+from ..runtime_context import get_current_chat_id, resolve_chat_files_path
 from .codex_subagent import translate_codex_event
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[2])
+
+# Optional hook so the box can stream live Codex progress to the chat. The server
+# wires this to publish `codex.*` events onto the gateway bus in a thread->loop
+# safe way. aios_core stays decoupled: if unset, jobs just buffer for codex_poll.
+_ProgressSink = Callable[[str, str, dict[str, Any]], None]
+_progress_sink: "_ProgressSink | None" = None
+
+
+def set_progress_sink(sink: "_ProgressSink | None") -> None:
+    global _progress_sink
+    _progress_sink = sink
 
 
 def _deploy_mcp_config() -> str:
@@ -51,11 +64,22 @@ class CodexJob:
     """One background ``codex exec`` session. Thread-safe; a reader thread fills
     ``events`` (command/file activity) and the final message as Codex streams."""
 
-    def __init__(self, job_id: str, task: str, workdir: str, cmd: list[str]) -> None:
+    def __init__(
+        self,
+        job_id: str,
+        task: str,
+        workdir: str,
+        cmd: list[str],
+        *,
+        session_id: str | None = None,
+        parent_tool_call_id: str | None = None,
+    ) -> None:
         self.id = job_id
         self.task = task
         self.workdir = workdir
         self.cmd = cmd
+        self.session_id = session_id
+        self.parent_tool_call_id = parent_tool_call_id
         self.status = "running"  # running | done | error
         self.error: str | None = None
         self.result: str | None = None
@@ -68,6 +92,19 @@ class CodexJob:
         self._lock = threading.Lock()
         self._new = threading.Event()
 
+    def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
+        """Best-effort live progress to the chat; never breaks the job."""
+        if _progress_sink is None or not self.session_id:
+            return
+        try:
+            _progress_sink(
+                self.session_id,
+                event_type,
+                {"job_id": self.id, "parent_tool_call_id": self.parent_tool_call_id, **payload},
+            )
+        except Exception:
+            pass
+
     def start(self) -> None:
         self._proc = subprocess.Popen(
             self.cmd,
@@ -77,6 +114,7 @@ class CodexJob:
             bufsize=1,
             cwd=self.workdir,
         )
+        self._emit("codex.started", {"task_summary": self.task[:200]})
         threading.Thread(target=self._run, daemon=True).start()
 
     def _finish(self, status: str, *, error: str | None = None, result: str | None = None) -> None:
@@ -86,6 +124,7 @@ class CodexJob:
             self.result = result
             self.finished_at = monotonic()
         self._new.set()
+        self._emit("codex.completed", {"status": status, "result": result, "error": error})
 
     def _run(self) -> None:
         proc = self._proc
@@ -109,10 +148,22 @@ class CodexJob:
                     if desc["kind"] == "text":
                         self._final_message = desc["value"]
                         self._text_chunks.append(desc["value"])
+                        self._emit("codex.progress", {"kind": "message", "detail": desc["value"][:500]})
                     else:  # tool_start / tool_end -> visible progress
                         with self._lock:
                             self.events.append(desc)
                         self._new.set()
+                        tool = desc.get("tool_name", "tool")
+                        kind = "command" if tool == "command_execution" else "file" if tool == "file_change" else tool
+                        self._emit(
+                            "codex.progress",
+                            {
+                                "kind": kind,
+                                "phase": desc["kind"],  # tool_start | tool_end
+                                "tool_call_id": desc.get("tool_call_id"),
+                                "detail": str(desc.get("input") or desc.get("output") or "")[:500],
+                            },
+                        )
             returncode = proc.wait()
             stderr = (proc.stderr.read() if proc.stderr else "") or ""
             if returncode != 0:
@@ -174,7 +225,15 @@ class CodexJobManager:
     def _active_count(self) -> int:
         return sum(1 for j in self._jobs.values() if j.status == "running")
 
-    def start(self, task: str, path: str = ".", model: str | None = None, enable_deploy: bool = True) -> dict[str, Any]:
+    def start(
+        self,
+        task: str,
+        path: str = ".",
+        model: str | None = None,
+        enable_deploy: bool = True,
+        session_id: str | None = None,
+        parent_tool_call_id: str | None = None,
+    ) -> dict[str, Any]:
         if not isinstance(task, str) or not task.strip():
             return {"error": "task is required"}
         if not isinstance(path, str) or not path.strip():
@@ -199,7 +258,14 @@ class CodexJobManager:
         cmd.append(task.strip())
 
         job_id = uuid4().hex[:12]
-        job = CodexJob(job_id, task.strip(), str(workdir), cmd)
+        job = CodexJob(
+            job_id,
+            task.strip(),
+            str(workdir),
+            cmd,
+            session_id=session_id,
+            parent_tool_call_id=parent_tool_call_id,
+        )
         try:
             job.start()
         except FileNotFoundError:
@@ -240,7 +306,14 @@ def codex_start(task: str | None = None, path: str = ".", model: str | None = No
     target files and any context). ``path`` is the working directory. Returns a
     ``job_id`` — call ``codex_poll(job_id)`` to watch progress and get the result.
     """
-    return _manager.start(task or "", path=path, model=model, enable_deploy=True)
+    return _manager.start(
+        task or "",
+        path=path,
+        model=model,
+        enable_deploy=True,
+        session_id=get_current_chat_id(),
+        parent_tool_call_id=str(getattr(fc, "call_id", None)) if getattr(fc, "call_id", None) else None,
+    )
 
 
 def codex_poll(job_id: str | None = None, cursor: int = 0, wait: float = 0.0, fc=None) -> dict[str, Any]:

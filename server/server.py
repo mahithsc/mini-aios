@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,15 +21,35 @@ from server.uploads import save_uploads
 register_runtime_shutdown()
 
 
+def _install_codex_progress_sink() -> None:
+    """Stream live Codex progress (codex.* events) onto the gateway bus so the chat
+    shows what a background Codex job is doing. The CodexJob reader thread calls the
+    sink; we hop back to this loop (bus.publish is not thread-safe) before publishing."""
+    from aios_core.tools.codex_job import set_progress_sink
+    from server.gateway.bus import get_gateway_bus
+
+    loop = asyncio.get_running_loop()
+    bus = get_gateway_bus()
+
+    def sink(session_id: str, event_type: str, payload: dict) -> None:
+        loop.call_soon_threadsafe(bus.publish, session_id, event_type, payload)
+
+    set_progress_sink(sink)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     start_runtime()
     await lights.start()
     await start_notification_service()
     await start_runs_service()
+    _install_codex_progress_sink()
     try:
         yield
     finally:
+        from aios_core.tools.codex_job import set_progress_sink
+
+        set_progress_sink(None)
         await lights.shutdown()
         await shutdown_notification_service()
         await shutdown_runs_service()
