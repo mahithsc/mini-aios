@@ -19,13 +19,28 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import threading
+from pathlib import Path
 from time import monotonic
 from typing import Any
 from uuid import uuid4
 
 from ..runtime_context import resolve_chat_files_path
 from .codex_subagent import translate_codex_event
+
+_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+
+
+def _deploy_mcp_config() -> str:
+    """codex `-c` value registering the deploy MCP server for the session, so Codex
+    can call `deploy(slug)` after building. Uses this interpreter + PYTHONPATH so the
+    server can import aios_core."""
+    return (
+        'mcp_servers.deploy={command="' + sys.executable + '",'
+        'args=["-m","aios_core.deploy.mcp_server"],'
+        'env={PYTHONPATH="' + _REPO_ROOT + '"}}'
+    )
 
 # A generous safety cap only to reap a stuck/zombie Codex — NOT a task deadline.
 SAFETY_CAP_SECONDS = float(os.getenv("AIOS_CODEX_SAFETY_CAP", "1800"))  # 30 min
@@ -159,7 +174,7 @@ class CodexJobManager:
     def _active_count(self) -> int:
         return sum(1 for j in self._jobs.values() if j.status == "running")
 
-    def start(self, task: str, path: str = ".", model: str | None = None) -> dict[str, Any]:
+    def start(self, task: str, path: str = ".", model: str | None = None, enable_deploy: bool = True) -> dict[str, Any]:
         if not isinstance(task, str) or not task.strip():
             return {"error": "task is required"}
         if not isinstance(path, str) or not path.strip():
@@ -177,6 +192,8 @@ class CodexJobManager:
                 return {"error": f"too many active codex jobs ({MAX_ACTIVE_JOBS}); running: {running}"}
 
         cmd = ["codex", "exec", "--json", "--skip-git-repo-check", "--sandbox", "danger-full-access"]
+        if enable_deploy:
+            cmd.extend(["-c", _deploy_mcp_config()])
         if isinstance(model, str) and model.strip():
             cmd.extend(["--model", model.strip()])
         cmd.append(task.strip())
@@ -223,7 +240,7 @@ def codex_start(task: str | None = None, path: str = ".", model: str | None = No
     target files and any context). ``path`` is the working directory. Returns a
     ``job_id`` — call ``codex_poll(job_id)`` to watch progress and get the result.
     """
-    return _manager.start(task or "", path=path, model=model)
+    return _manager.start(task or "", path=path, model=model, enable_deploy=True)
 
 
 def codex_poll(job_id: str | None = None, cursor: int = 0, wait: float = 0.0, fc=None) -> dict[str, Any]:

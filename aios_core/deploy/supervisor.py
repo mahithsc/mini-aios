@@ -99,5 +99,16 @@ class Supervisor:
         res = _docker("logs", "--tail", str(tail), self.container_name(project.slug))
         return (res.stdout + res.stderr).strip()
 
+    def running_url(self, project: Project) -> str | None:
+        """The local URL a running container is published at (via `docker port`),
+        or None if it isn't running / has no published port."""
+        res = _docker("port", self.container_name(project.slug), str(project.spec.port))
+        line = res.stdout.strip().splitlines()[0] if res.stdout.strip() else ""
+        if not line:
+            return None
+        # `docker port` prints e.g. "127.0.0.1:53812"
+        host_port = line.rsplit(":", 1)[-1].strip()
+        return f"http://127.0.0.1:{host_port}" if host_port.isdigit() else None
+
     def stop(self, project: Project) -> None:
         _docker("rm", "-f", self.container_name(project.slug))

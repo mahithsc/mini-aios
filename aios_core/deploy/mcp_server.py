@@ -17,6 +17,7 @@ import os
 from mcp.server.fastmcp import FastMCP
 
 from .deployer import deploy as _deploy
+from .store import ProjectStore
 
 mcp = FastMCP("aios-deploy")
 
@@ -30,7 +31,7 @@ def deploy(slug: str) -> dict:
     Returns {status:"running", url, ...} on success, or {status:"error", error,
     logs} on failure — read `logs` to fix the app and call deploy again.
     """
-    return _deploy(slug, os.getcwd())
+    return _deploy(slug, os.getcwd(), store=ProjectStore())
 
 
 def main() -> None:

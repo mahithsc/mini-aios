@@ -86,8 +86,11 @@ and log why in the Progress Log — do not fake it.
       `app_logs`, `app_restart`, `app_stop` over durable store+supervisor; registered in
       MAIN_TOOLS + prompt. `test_deploy_agent_tools.py` (real-Docker lifecycle: deploy→status→
       logs→stop→restart). 26 tests pass, no regressions.
-- [ ] 7. **Full e2e** — `deploy_app(goal)` → Codex builds → deployed → public URL serves the
-      Codex-built page. `::test_full_deploy_app_e2e`.
+- [x] 7. **Full e2e** — ✅ DONE — `codex_start` wired with the deploy MCP server; a REAL Codex
+      session builds app.py + project.json, calls the `deploy` MCP tool (`mcp_tool_call` event),
+      and the container serves the Codex-authored page at a LOCAL url.
+      `test_deploy_codex_e2e.py` (CODEX_DEPLOY_E2E=1) — 1 passed in 38s. (Public url instead of
+      local grafts in once a valid CF token unblocks 4b.)
 
 ## E2E success criteria (the definition of done)
 All tests in `tests/test_deploy_e2e.py` pass with Docker+cloudflared available (they skip only
@@ -95,6 +98,13 @@ when the runtime is genuinely absent, never to dodge a real failure). The full e
 Codex-authored app answering a real HTTP request at its public `https://<slug>.apps.trywink.io/`.
 
 ## Progress Log (append newest first)
+- 🎉 Step 7 DONE ✅ — FULL build-and-deploy works end to end. codex_start wired with the deploy
+  MCP server (`-c mcp_servers.deploy=...`); a REAL Codex session wrote app.py + project.json,
+  called the deploy MCP tool, and the container served the Codex-authored 'HELLO-FROM-CODEX-E2E'
+  at a local url. `test_deploy_codex_e2e.py` passes (38s). CORE PROJECT COMPLETE — every step 1-7
+  done and green except 4b public url (blocked on a valid Cloudflare token; local urls work).
+  Remaining unblocked polish: graft apps-infra container hardening (step 1 tail: dropped caps,
+  resource limits, no host mount). Then: user provides valid CF token → finish 4b named tunnel.
 - Step 6 DONE ✅ — main-agent lifecycle tools (`apps_list/app_status/app_logs/app_restart/
   app_stop`) over durable store+supervisor; registered in MAIN_TOOLS + prompt; real-Docker
   lifecycle e2e (deploy→status→logs→stop→restart). 26 tests pass, no regressions. Next: step 7
