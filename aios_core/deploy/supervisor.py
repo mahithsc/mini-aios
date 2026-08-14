@@ -87,13 +87,21 @@ class Supervisor:
         env_args: list[str] = []
         for key, value in project.spec.env.items():
             env_args += ["-e", f"{key}={value}"]
+        spec = project.spec
         args = [
             "run", "-d", "--name", name,
-            "-p", f"127.0.0.1:{host_port}:{project.spec.port}",
+            "-p", f"127.0.0.1:{host_port}:{spec.port}",
             "-v", f"{project.source_dir}:/app:ro",
             "-w", "/app",
+            # Hardening: no Linux capabilities, no privilege escalation, and
+            # resource ceilings so a runaway app can't exhaust the box.
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            "--memory", f"{spec.memory_mb}m",
+            "--cpus", str(spec.cpus),
+            "--pids-limit", str(spec.pids_limit),
             *env_args,
-            project.spec.image,
+            spec.image,
             *_container_command(project),
         ]
         res = _docker(*args)

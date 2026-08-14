@@ -42,6 +42,9 @@ def load_spec(source_dir: Path) -> Spec:
         image=data.get("image", "python:3.12-slim"),
         env=dict(data.get("env", {})),
         prepare=[list(c) for c in data.get("prepare", [])],
+        memory_mb=int(data.get("memory_mb", 512)),
+        cpus=float(data.get("cpus", 1.0)),
+        pids_limit=int(data.get("pids_limit", 256)),
     )
 
 

@@ -98,6 +98,12 @@ when the runtime is genuinely absent, never to dodge a real failure). The full e
 Codex-authored app answering a real HTTP request at its public `https://<slug>.apps.trywink.io/`.
 
 ## Progress Log (append newest first)
+- Container hardening (partial) ✅ — Supervisor now runs containers with `--cap-drop ALL`,
+  `--security-opt no-new-privileges`, and `--memory/--cpus/--pids-limit` (Spec.memory_mb/cpus/
+  pids_limit, persisted). Verified via `docker inspect` AND that a Flask deps app still deploys
+  with hardening on. 12 deploy tests pass. Deferred: non-root `--user` (conflicts with pip
+  install to system site-packages — needs a user-site or prebuilt-image approach) + read-only
+  rootfs + network gating. Remaining major item: 4b public url (needs valid CF token).
 - Quality sweep: fixed the biggest gap — DEPENDENCIES. `Spec.prepare`/`requirements.txt` were
   ignored, so only stdlib apps worked. Now the Supervisor installs deps at container start
   (prepare cmds, or `pip install -r requirements.txt`) before exec'ing the app, and deploy uses

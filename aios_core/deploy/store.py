@@ -32,6 +32,9 @@ def _to_dict(p: Project) -> dict:
             "image": p.spec.image,
             "env": p.spec.env,
             "prepare": p.spec.prepare,
+            "memory_mb": p.spec.memory_mb,
+            "cpus": p.spec.cpus,
+            "pids_limit": p.spec.pids_limit,
         },
     }
 
@@ -49,6 +52,9 @@ def _from_dict(d: dict) -> Project:
             image=s.get("image", "python:3.12-slim"),
             env=dict(s.get("env", {})),
             prepare=list(s.get("prepare", [])),
+            memory_mb=int(s.get("memory_mb", 512)),
+            cpus=float(s.get("cpus", 1.0)),
+            pids_limit=int(s.get("pids_limit", 256)),
         ),
     )
 
