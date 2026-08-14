@@ -146,3 +146,50 @@ def test_container_reachable_through_proxy(tmp_path):
         proxy.unregister(project.slug)
         proxy.shutdown()
         sup.stop(project)
+
+
+def test_deploy_project_serves_and_registers(tmp_path):
+    """Step 5a: deploy() builds+runs a project dir, it really serves, and the store
+    records it as running."""
+    import urllib.request
+
+    from aios_core.deploy.deployer import deploy
+    from aios_core.deploy.store import ProjectStore
+
+    _write_min_app(tmp_path)
+    (tmp_path / "project.json").write_text('{"run": ["python", "app.py"], "port": 8000}')
+    store = ProjectStore(path=tmp_path / "projects.json")
+    result = deploy("dep1", tmp_path, store=store)
+    project = Project(slug="dep1", source_dir=tmp_path, spec=Spec(run=["python", "app.py"], port=8000))
+    try:
+        assert result["status"] == "running", result
+        with urllib.request.urlopen(result["url"], timeout=5) as r:
+            assert "deploy-supervisor-ok" in r.read().decode()
+        assert store.get("dep1").status == "running"
+    finally:
+        Supervisor().stop(project)
+
+
+def test_deploy_reports_failure_with_logs(tmp_path):
+    """A crashing app yields status=error WITH the container logs, so Codex can
+    read the failure and fix it — the feedback loop that makes deploy non-blind."""
+    from aios_core.deploy.deployer import deploy
+
+    (tmp_path / "app.py").write_text("print('BOOMCRASH', flush=True)\nimport sys; sys.exit(1)\n")
+    (tmp_path / "project.json").write_text('{"run": ["python", "app.py"], "port": 8000}')
+    result = deploy("dep2", tmp_path)
+    project = Project(slug="dep2", source_dir=tmp_path, spec=Spec(run=["python", "app.py"], port=8000))
+    try:
+        assert result["status"] == "error"
+        assert "BOOMCRASH" in result.get("logs", "")  # real crash output surfaced
+    finally:
+        Supervisor().stop(project)
+
+
+def test_deploy_missing_manifest(tmp_path):
+    """No project.json → a clear error (no container started)."""
+    from aios_core.deploy.deployer import deploy
+
+    _write_min_app(tmp_path)
+    result = deploy("dep3", tmp_path)
+    assert result["status"] == "error" and "project.json" in result["error"]

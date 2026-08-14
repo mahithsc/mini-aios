@@ -73,7 +73,12 @@ and log why in the Progress Log — do not fake it.
             Reliable public exposure needs a **valid CF API token** (scopes: Zone→DNS→Edit +
             Account→Cloudflare Tunnel→Edit for zone `trywink.io`) so we can create the named
             tunnel + wildcard DNS. Until then, public URL e2e stays blocked; local URLs work.
-- [ ] 5. **`deploy` MCP tool** into `codex_start` — feedback loop.
+- [~] 5. **`deploy` tool Codex invokes** — feedback loop. Split:
+      - [x] 5a **deploy core** — ✅ DONE — `deployer.py::deploy(slug, source_dir)`: reads
+            `project.json`, build+run via Supervisor, health-check, returns structured feedback
+            (url on success; error + container logs on failure so Codex can fix). 3 e2e pass.
+      - [ ] 5b **MCP wiring** — expose `deploy` as an MCP tool to `codex exec`
+            (`codex -c mcp_servers.deploy=...`) so Codex calls it and iterates in-session.
       `::test_codex_build_and_deploy_loop`.
 - [ ] 6. **Main-agent lifecycle tools** + prompt wiring.
 - [ ] 7. **Full e2e** — `deploy_app(goal)` → Codex builds → deployed → public URL serves the
@@ -85,6 +90,12 @@ when the runtime is genuinely absent, never to dodge a real failure). The full e
 Codex-authored app answering a real HTTP request at its public `https://<slug>.apps.trywink.io/`.
 
 ## Progress Log (append newest first)
+- Step 5a DONE ✅ — `deployer.py::deploy()`: reads project.json, build+run via Supervisor,
+  health-check, returns structured feedback (url on success; error + container logs on failure).
+  3 new e2e pass (serves+registers, crash surfaces logs, missing manifest errors). 13 deploy
+  tests pass total. Next: 5b — expose deploy as an MCP tool to `codex exec` so Codex calls it
+  in-session and iterates on the feedback. Then step 6 (main-agent lifecycle tools) + step 7
+  (full deploy_app loop, LOCAL url).
 - Step 4b PARTIAL + BLOCKER 🔴 — `tunnel.py` built (quick-tunnel mode). Diagnosed the live-test
   failure honestly: fresh trycloudflare subdomains are slow to resolve via DNS (`[Errno 8]
   nodename nor servname`), so quick tunnels are flaky → opt-in only. The RELIABLE path (named
