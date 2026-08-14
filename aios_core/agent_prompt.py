@@ -79,23 +79,46 @@ _BASE_TOOLS_BLOCK = """
     {"process_id": "string", "signal": "string?"},
     process_kill,
 ),
+"codex_start": (
+    "Preferred way to delegate a self-contained coding task to Codex. Starts the "
+    "Codex coding agent as a BACKGROUND job and returns a job_id immediately, so "
+    "long builds never block the turn or hit a timeout. Use for implementing, "
+    "editing, refactoring, or building code in a directory. Codex cannot see this "
+    "chat, so `task` must be complete and self-contained: state the concrete goal, "
+    "name the target files, and include any needed context. `path` is the working "
+    "directory. After starting, call codex_poll to watch progress and get the "
+    "result; you may keep working while it runs.",
+    {"task": "string (self-contained instruction, incl. target files/context)",
+     "model": "string?", "path": "string? (working directory; default '.')"},
+    codex_start,
+),
+"codex_poll": (
+    "Check a Codex job from codex_start. Returns status (running|done|error), new "
+    "activity events since `cursor` (commands run, files changed), the updated "
+    "cursor, and — when done — Codex's final result. Pass `wait` (seconds) to "
+    "block briefly for new progress. Poll until status is not 'running'.",
+    {"job_id": "string", "cursor": "number? (from the previous poll)",
+     "wait": "number? (seconds to block for progress; default 0)"},
+    codex_poll,
+),
+"codex_stop": (
+    "Stop a running Codex job started with codex_start.",
+    {"job_id": "string"},
+    codex_stop,
+),
 "codex_subagent": (
-    "Preferred way to delegate a self-contained coding task to Codex: runs the "
-    "Codex coding agent and streams its live progress (commands, file edits) "
-    "back to the chat, then returns Codex's final result. Use for implementing, "
-    "editing, refactoring, or building and running code in a directory. Codex "
-    "cannot see this chat, so `task` must be a complete, self-contained "
-    "instruction: state the concrete goal, name the target files, and include "
-    "any needed context/constraints. `path` is the working directory.",
+    "Synchronous variant of codex_start/codex_poll: runs Codex to completion and "
+    "returns its final result in one call (blocks the turn). Prefer the async "
+    "codex_start + codex_poll flow; use this only for short tasks where blocking "
+    "is fine. Same self-contained `task` requirement.",
     {"task": "string (self-contained instruction, incl. target files/context)",
      "timeout": "number?", "model": "string?",
      "path": "string? (working directory; default '.')"},
     codex_subagent,
 ),
 "codex": (
-    "Low-level blocking variant of codex_subagent (no live streaming). Prefer "
-    "codex_subagent for coding delegation; use this only when streaming is "
-    "explicitly not wanted.",
+    "Low-level blocking codex exec (no streaming). Prefer codex_start; use only "
+    "when neither async nor streaming is wanted.",
     {"task": "string", "timeout": "number?", "model": "string?",
      "path": "string? (working directory; default '.')"},
     codex,
