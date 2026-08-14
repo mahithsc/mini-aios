@@ -52,9 +52,12 @@ and log why in the Progress Log — do not fake it.
 - [x] 1. **Supervisor core** — spec → `docker run` a container, publish loopback port, health
       check, logs, stop/remove. ✅ DONE — `tests/test_deploy_e2e.py` 3 passed vs live Docker.
       (Still TODO at step 1 tail: graft apps-infra container hardening; currently mounts source RO.)
-- [ ] 2. **Project store + registry** — durable dir + DB row; create/get/list; status.
-- [ ] 3. **Reconciler** — on start, re-launch `status=running` projects.
-      `::test_reconciler_restarts_running`.
+- [x] 2. **Project store + registry** — ✅ DONE — JSON-backed `ProjectStore` (durable, atomic);
+      create/get/list/set_status/delete. `tests/test_deploy_store.py` (2 passed).
+      (TODO later: move to the apps-infra DB registry.)
+- [x] 3. **Reconciler** — ✅ DONE — `reconcile()` restarts `running` projects whose container is
+      gone; validated by killing a container and confirming it re-serves.
+      `test_deploy_e2e.py::test_reconciler_restarts_running`.
 - [ ] 4. **Public exposure** — cloudflared tunnel + reverse proxy; per-slug route on
       start/stop; public URL reachable. `::test_public_url_reachable`.
 - [ ] 5. **`deploy` MCP tool** into `codex_start` — feedback loop.
@@ -69,6 +72,11 @@ when the runtime is genuinely absent, never to dodge a real failure). The full e
 Codex-authored app answering a real HTTP request at its public `https://<slug>.apps.trywink.io/`.
 
 ## Progress Log (append newest first)
+- Steps 2 & 3 DONE ✅ — durable `ProjectStore` (JSON, atomic) + `reconcile()`; 6 deploy tests
+  pass vs live Docker (store roundtrip/persist, supervisor, reconciler restarts a killed
+  container and re-serves). Next: step 4 (public exposure — cloudflared tunnel + reverse proxy
+  → https://<slug>.apps.trywink.io). CF creds are in box .env. Consider a per-app quick-tunnel
+  for the first reachability test before wiring the proxy.
 - Step 1 DONE ✅ — Supervisor core validated vs LIVE Docker (3 e2e passed, 8.7s): real
   container serves real HTTP, stop/restart/failure-detection honest. Docker Desktop must be
   running (`open -a Docker`; daemon booted in ~6s). Next: step 2 (Project store + registry),

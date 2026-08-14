@@ -85,3 +85,32 @@ def test_supervisor_reports_bad_run_command(tmp_path):
         assert ok is False  # nothing should be served
     finally:
         sup.stop(project)
+
+
+def test_reconciler_restarts_running(tmp_path):
+    """Step 3: after a simulated reboot (container gone, store says running), the
+    reconciler brings the real service back up and it serves again."""
+    from aios_core.deploy.reconciler import reconcile
+    from aios_core.deploy.store import ProjectStore
+
+    _write_min_app(tmp_path)
+    store = ProjectStore(path=tmp_path / "projects.json")
+    project = Project(slug="recon1", source_dir=tmp_path, spec=Spec(run=["python", "app.py"], port=8000))
+    sup = Supervisor()
+    try:
+        sup.start(project)
+        store.save(project)
+        store.set_status("recon1", "running")
+
+        # simulate a reboot: the container is gone but the store still says running
+        sup.stop(project)
+        assert not sup.is_running(project)
+
+        result = reconcile(store, sup)
+        record = next((r for r in result if r["slug"] == "recon1"), None)
+        assert record is not None and "url" in record, f"reconcile did not restart: {result}"
+        assert sup.is_running(project)
+        ok, body = sup.health(record["url"])
+        assert ok and "deploy-supervisor-ok" in body  # really serving again
+    finally:
+        sup.stop(project)
