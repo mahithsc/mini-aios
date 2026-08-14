@@ -49,8 +49,9 @@ and log why in the Progress Log — do not fake it.
 - Requires Docker (Docker Desktop present on the test machine) + cloudflared.
 
 ## Build checklist (ordered; each independently testable)
-- [ ] 1. **Supervisor core** — spec → `docker run` a container, publish loopback port, health
-      check, logs, stop/remove. `tests/test_deploy_e2e.py::test_supervisor_runs_container`.
+- [x] 1. **Supervisor core** — spec → `docker run` a container, publish loopback port, health
+      check, logs, stop/remove. ✅ DONE — `tests/test_deploy_e2e.py` 3 passed vs live Docker.
+      (Still TODO at step 1 tail: graft apps-infra container hardening; currently mounts source RO.)
 - [ ] 2. **Project store + registry** — durable dir + DB row; create/get/list; status.
 - [ ] 3. **Reconciler** — on start, re-launch `status=running` projects.
       `::test_reconciler_restarts_running`.
@@ -68,4 +69,9 @@ when the runtime is genuinely absent, never to dodge a real failure). The full e
 Codex-authored app answering a real HTTP request at its public `https://<slug>.apps.trywink.io/`.
 
 ## Progress Log (append newest first)
+- Step 1 DONE ✅ — Supervisor core validated vs LIVE Docker (3 e2e passed, 8.7s): real
+  container serves real HTTP, stop/restart/failure-detection honest. Docker Desktop must be
+  running (`open -a Docker`; daemon booted in ~6s). Next: step 2 (Project store + registry),
+  then step 3 (reconciler). Reuse apps-infra: `aios_core/apps/` (+ skill_limits,
+  workspace.get_runtime_paths) — bring over without the f28e2aae checkpoint.
 - (init) Plan written. Async Codex tools already built on the branch. Next: Supervisor core (#1).
