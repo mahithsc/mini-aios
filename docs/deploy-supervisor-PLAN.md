@@ -77,8 +77,10 @@ and log why in the Progress Log — do not fake it.
       - [x] 5a **deploy core** — ✅ DONE — `deployer.py::deploy(slug, source_dir)`: reads
             `project.json`, build+run via Supervisor, health-check, returns structured feedback
             (url on success; error + container logs on failure so Codex can fix). 3 e2e pass.
-      - [ ] 5b **MCP wiring** — expose `deploy` as an MCP tool to `codex exec`
-            (`codex -c mcp_servers.deploy=...`) so Codex calls it and iterates in-session.
+      - [x] 5b **MCP server** — ✅ DONE — `mcp_server.py` (FastMCP) exposes `deploy(slug)`;
+            validated by a REAL MCP protocol round-trip (`test_deploy_mcp.py`): stdio handshake →
+            list tools → call deploy → real container deployed + served. The codex_start command
+            wiring (`codex -c mcp_servers.deploy=...`) + Codex actually calling it = step 7.
       `::test_codex_build_and_deploy_loop`.
 - [ ] 6. **Main-agent lifecycle tools** + prompt wiring.
 - [ ] 7. **Full e2e** — `deploy_app(goal)` → Codex builds → deployed → public URL serves the
@@ -90,6 +92,11 @@ when the runtime is genuinely absent, never to dodge a real failure). The full e
 Codex-authored app answering a real HTTP request at its public `https://<slug>.apps.trywink.io/`.
 
 ## Progress Log (append newest first)
+- Step 5b DONE ✅ — `mcp_server.py` (FastMCP) exposes `deploy`; validated by a REAL MCP protocol
+  round-trip (spawn over stdio as Codex does → handshake → list tools → call deploy → real
+  container serves). 14 deploy tests pass. codex_start MCP wiring + Codex-calls-deploy deferred
+  to step 7 (the full codex e2e). Next: step 6 (main-agent lifecycle tools: apps_list/status/
+  logs/restart/stop — thin wrappers over store+supervisor, unblocked).
 - Step 5a DONE ✅ — `deployer.py::deploy()`: reads project.json, build+run via Supervisor,
   health-check, returns structured feedback (url on success; error + container logs on failure).
   3 new e2e pass (serves+registers, crash surfaces logs, missing manifest errors). 13 deploy
