@@ -62,9 +62,17 @@ and log why in the Progress Log — do not fake it.
       - [x] 4a **Reverse proxy** — ✅ DONE — `proxy.py` routes `<slug>.apps.<zone>` (Host header)
             → container loopback port; register/unregister; 404 unknown, 502 dead backend.
             `test_deploy_proxy.py` (3) + `test_deploy_e2e.py::test_container_reachable_through_proxy`.
-      - [ ] 4b **cloudflared tunnel** — one tunnel per box fronting the proxy + DNS
-            `*.apps.trywink.io` (CF token in box .env). Then Supervisor.start registers the
-            route + returns the public URL; real public GET reachability test.
+      - [~] 4b **cloudflared tunnel** — `tunnel.py` built. Quick-tunnel path (no auth) works
+            (manual curl = 200), but a FRESH trycloudflare subdomain is slow/flaky to become
+            DNS-resolvable (30-90s+) → opt-in live test only (`DEPLOY_TUNNEL_TEST=1`), not the
+            reliable suite. Named-tunnel + stable `*.apps.trywink.io` DNS avoids this and is the
+            durable path — but it is **⛔ BLOCKED**:
+            ### 🔴 USER ACTION NEEDED
+            The provided `CLOUDFLARE_API_TOKEN` is **invalid** (`/tokens/verify` → "Invalid API
+            Token"; it's 53 chars with a `cfat_` prefix — real CF tokens are 40 chars, no prefix).
+            Reliable public exposure needs a **valid CF API token** (scopes: Zone→DNS→Edit +
+            Account→Cloudflare Tunnel→Edit for zone `trywink.io`) so we can create the named
+            tunnel + wildcard DNS. Until then, public URL e2e stays blocked; local URLs work.
 - [ ] 5. **`deploy` MCP tool** into `codex_start` — feedback loop.
       `::test_codex_build_and_deploy_loop`.
 - [ ] 6. **Main-agent lifecycle tools** + prompt wiring.
@@ -77,6 +85,12 @@ when the runtime is genuinely absent, never to dodge a real failure). The full e
 Codex-authored app answering a real HTTP request at its public `https://<slug>.apps.trywink.io/`.
 
 ## Progress Log (append newest first)
+- Step 4b PARTIAL + BLOCKER 🔴 — `tunnel.py` built (quick-tunnel mode). Diagnosed the live-test
+  failure honestly: fresh trycloudflare subdomains are slow to resolve via DNS (`[Errno 8]
+  nodename nor servname`), so quick tunnels are flaky → opt-in only. The RELIABLE path (named
+  tunnel + stable `*.apps.trywink.io`) is BLOCKED on a valid Cloudflare token (provided one is
+  invalid — see USER ACTION above). Pivoting the loop to the UNBLOCKED core: step 5 (deploy MCP
+  tool) + step 7 full loop with LOCAL urls (public URL grafts in once a valid token arrives).
 - Step 4a DONE ✅ — reverse proxy (`proxy.py`): Host-based slug routing, register/unregister,
   404/502 handling; integration e2e proves a real container is reachable THROUGH the proxy.
   10 deploy tests pass vs live Docker. Next: 4b — front the proxy with ONE cloudflared tunnel +
