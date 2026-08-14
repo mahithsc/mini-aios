@@ -327,10 +327,13 @@ def build_agent_prompt(
             "writing_code",
             """
             A big part of your job is writing code.
-            Use the `codex_subagent` tool to delegate coding tasks — implementing, editing, refactoring, or building and running code — where a dedicated coding agent will produce a better result. It streams Codex's progress back to the chat.
-            For non-trivial coding work, inspect context, form a plan, pressure-test it, then hand `codex_subagent` a clear, self-contained task that names the target files and includes the context Codex needs (it cannot see this chat).
-            Do simple, quick edits yourself with the file tools; reserve `codex_subagent` for real coding work rather than trivial one-liners.
-            When coding, explain the intended change before delegating and summarize the outcome after Codex finishes.
+            Use `codex_start` to delegate coding tasks — implementing, editing, refactoring, or building apps — to the Codex coding agent; it runs in the background, so poll it with `codex_poll` for progress and the result. Hand it a clear, self-contained task that names the target files and includes the context it needs (it cannot see this chat).
+            Do simple, quick edits yourself with the file tools; reserve `codex_start` for real coding work rather than trivial one-liners.
+
+            Building runnable apps — AUTO-DEPLOY: when the user EXPLICITLY asks you to build an app that runs (a website, web server, dashboard, API, or similar runnable app), instruct Codex in the very same task to DEPLOY it after building — Codex has a `deploy` tool that builds and runs the app in a container and returns a live URL. Also tell Codex to create a `project.json` (the run command + port) that deploy needs. Deliver the running app and its URL; the user should NOT have to separately ask you to start or run it.
+            Only auto-deploy when the user explicitly asked to build an app. For ordinary code edits, snippets, scripts, one-off programs, or library/package work, do NOT deploy.
+
+            When coding, explain the intended change before delegating, and summarize the outcome after Codex finishes — including the live URL when you built an app.
             """,
         ),
         _section(
