@@ -193,3 +193,34 @@ def test_deploy_missing_manifest(tmp_path):
     _write_min_app(tmp_path)
     result = deploy("dep3", tmp_path)
     assert result["status"] == "error" and "project.json" in result["error"]
+
+
+def test_deploy_app_with_dependencies(tmp_path):
+    """A requirements.txt is pip-installed at container start — a real Flask app
+    (non-stdlib) deploys and serves. Slower (pip install), but proves real apps work."""
+    import urllib.request
+
+    from aios_core.deploy.deployer import deploy
+
+    (tmp_path / "app.py").write_text(
+        textwrap.dedent(
+            """
+            from flask import Flask
+            app = Flask(__name__)
+            @app.route("/")
+            def home():
+                return "FLASK-DEP-OK"
+            app.run(host="0.0.0.0", port=8000)
+            """
+        )
+    )
+    (tmp_path / "requirements.txt").write_text("flask\n")
+    (tmp_path / "project.json").write_text('{"run": ["python", "app.py"], "port": 8000}')
+    result = deploy("depapp", tmp_path)
+    project = Project(slug="depapp", source_dir=tmp_path, spec=Spec(run=["python", "app.py"], port=8000))
+    try:
+        assert result["status"] == "running", result
+        with urllib.request.urlopen(result["url"], timeout=5) as r:
+            assert "FLASK-DEP-OK" in r.read().decode()
+    finally:
+        Supervisor().stop(project)

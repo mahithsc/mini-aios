@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .models import Project, Spec
 from .store import ProjectStore
-from .supervisor import Supervisor, docker_available
+from .supervisor import Supervisor, docker_available, project_has_deps
 
 
 class DeployError(Exception):
@@ -76,7 +76,11 @@ def deploy(
             store.set_status(slug, "error")
         return {"status": "error", "error": f"failed to start container: {exc}"}
 
-    ok, body = supervisor.health(handle["url"])
+    # Installing dependencies (pip) can take a while; be patient before calling it unhealthy.
+    if project_has_deps(project):
+        ok, body = supervisor.health(handle["url"], attempts=180, delay=0.5)  # ~90s
+    else:
+        ok, body = supervisor.health(handle["url"])
     if not ok:
         logs = supervisor.logs(project)
         if store is not None:

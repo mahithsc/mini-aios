@@ -98,6 +98,12 @@ when the runtime is genuinely absent, never to dodge a real failure). The full e
 Codex-authored app answering a real HTTP request at its public `https://<slug>.apps.trywink.io/`.
 
 ## Progress Log (append newest first)
+- Quality sweep: fixed the biggest gap — DEPENDENCIES. `Spec.prepare`/`requirements.txt` were
+  ignored, so only stdlib apps worked. Now the Supervisor installs deps at container start
+  (prepare cmds, or `pip install -r requirements.txt`) before exec'ing the app, and deploy uses
+  a patient health window (~90s) for the install. Proven: a real Flask app deploys and serves
+  (`test_deploy_app_with_dependencies`). 9 deploy-e2e pass. Remaining: apps-infra container
+  hardening; 4b public url (needs valid CF token).
 - 🎉 Step 7 DONE ✅ — FULL build-and-deploy works end to end. codex_start wired with the deploy
   MCP server (`-c mcp_servers.deploy=...`); a REAL Codex session wrote app.py + project.json,
   called the deploy MCP tool, and the container served the Codex-authored 'HELLO-FROM-CODEX-E2E'

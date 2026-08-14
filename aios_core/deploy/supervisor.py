@@ -11,15 +11,38 @@ of step 1 — this module is the seam where that goes.
 
 from __future__ import annotations
 
+import shlex
 import shutil
 import socket
 import subprocess
 import time
 import urllib.request
+from pathlib import Path
 
 from .models import Project
 
 CONTAINER_PREFIX = "aios-app-"
+
+
+def _container_command(project: Project) -> list[str]:
+    """The command the container runs. If the project declares dependencies —
+    either explicit `prepare` commands or a requirements.txt — install them first
+    (the container's own filesystem is writable; only /app is mounted read-only),
+    then exec the run command. Otherwise run it directly."""
+    spec = project.spec
+    prep: list[str] = []
+    if spec.prepare:
+        prep = [shlex.join(cmd) for cmd in spec.prepare]
+    elif (Path(project.source_dir) / "requirements.txt").exists():
+        prep = ["pip install -q --no-cache-dir -r requirements.txt"]
+    if not prep:
+        return list(spec.run)
+    script = " && ".join(prep + ["exec " + shlex.join(spec.run)])
+    return ["sh", "-lc", script]
+
+
+def project_has_deps(project: Project) -> bool:
+    return bool(project.spec.prepare) or (Path(project.source_dir) / "requirements.txt").exists()
 
 
 class SupervisorError(Exception):
@@ -71,7 +94,7 @@ class Supervisor:
             "-w", "/app",
             *env_args,
             project.spec.image,
-            *project.spec.run,
+            *_container_command(project),
         ]
         res = _docker(*args)
         if res.returncode != 0:
