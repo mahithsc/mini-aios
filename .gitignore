@@ -25,3 +25,6 @@ cron_logs/
 # local workspace
 workspace/
 evals/scorecard.json
+
+# git linked worktrees
+.worktrees/
