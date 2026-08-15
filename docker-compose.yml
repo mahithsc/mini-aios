@@ -9,8 +9,8 @@ services:
     env_file: .env
     environment:
       AIOS_CLOUD_URL: https://computer.trywink.io
-    # Persist the workspace (device_id, pairing/device_link, aios.db) so the box
-    # stays paired across restarts. AIOS_ENV=production -> ~/.mini-aios/workspace.
+    # Persist the runtime root so state, skills, and the shared workspace all
+    # survive restarts. AIOS_ENV=production -> ~/.mini-aios/.
     volumes:
       - aios-data:/root/.mini-aios
     restart: unless-stopped

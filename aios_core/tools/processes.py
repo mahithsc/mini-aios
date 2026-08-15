@@ -12,7 +12,9 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from ..runtime_context import default_chat_files_cwd, resolve_chat_files_path
+from ..workspace import PathAccessError
 from .ansi_strip import strip_ansi
+from .execution_sandbox import sandboxed_command
 
 _DEFAULT_SHELL = "/bin/bash"
 _DEFAULT_OUTPUT_LIMIT = 200_000
@@ -74,7 +76,7 @@ class ProcessSession:
         proc = None
         try:
             proc = subprocess.Popen(
-                [self.shell, "--noprofile", "--norc"],
+                sandboxed_command([self.shell, "--noprofile", "--norc"]),
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
@@ -384,7 +386,10 @@ class ProcessManager:
         if cwd is None:
             resolved_cwd = default_chat_files_cwd()
         else:
-            resolved_cwd = resolve_chat_files_path(cwd)
+            try:
+                resolved_cwd = resolve_chat_files_path(cwd)
+            except PathAccessError as exc:
+                return {"error": str(exc)}
         if not resolved_cwd.exists():
             return {"error": f"path does not exist: {resolved_cwd}"}
         if not resolved_cwd.is_dir():

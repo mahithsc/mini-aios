@@ -9,6 +9,8 @@ import subprocess
 import time
 
 from ..runtime_context import default_chat_files_cwd, resolve_chat_files_path
+from ..workspace import PathAccessError
+from .execution_sandbox import ExecutionSandboxUnavailable, sandboxed_command
 from .toolcore import (
     failure_exit_hint,
     interpret_benign_exit_code,
@@ -97,26 +99,28 @@ def bash(cmd: str, timeout: float = 30, cwd: str = None):
     Args:
         cmd: Shell command to run.
         timeout: Seconds before the command is killed (default 30).
-        cwd: Working directory (default: chat files dir).
+        cwd: Working directory (default: shared applications dir).
     """
     if cwd is None:
         workdir = default_chat_files_cwd()
     else:
-        workdir = resolve_chat_files_path(cwd)
+        try:
+            workdir = resolve_chat_files_path(cwd)
+        except PathAccessError as exc:
+            return f"error: {exc}"
         if not workdir.is_dir():
             return f"error: cwd is not a directory: {workdir}"
 
     try:
         proc = subprocess.Popen(
-            cmd,
-            shell=True,
+            sandboxed_command(["/bin/bash", "--noprofile", "--norc", "-c", cmd]),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
             cwd=str(workdir),
         )
-    except OSError as exc:
+    except (OSError, ExecutionSandboxUnavailable) as exc:
         return f"error: failed to start command: {exc}"
 
     # Bounded in-flight collection: keep the first 40% and a rolling last

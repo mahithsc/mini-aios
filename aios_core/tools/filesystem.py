@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 from ..runtime_context import resolve_chat_files_path
+from ..workspace import PathAccessError
 from . import file_state
 from .binary_extensions import has_binary_extension
 from .toolcore import (
@@ -118,11 +119,14 @@ def read(path: str, offset: int = 0, limit: int = None):
     """Read a text file with line numbers.
 
     Args:
-        path: File path (relative paths resolve to the chat files dir).
+        path: File path (relative paths resolve to the shared applications dir).
         offset: 0-based line to start from (default 0).
         limit: Max lines to return (default 2000).
     """
-    resolved = resolve_chat_files_path(path)
+    try:
+        resolved = resolve_chat_files_path(path)
+    except PathAccessError as exc:
+        return f"error: {exc}"
     guard = _guard_path(resolved, for_read=True)
     if guard:
         return guard
@@ -204,10 +208,13 @@ def write(path: str, content: str):
     """Write content to a file (atomic: temp file + rename).
 
     Args:
-        path: File path (relative paths resolve to the chat files dir).
+        path: File path (relative paths resolve to the shared applications dir).
         content: Full file content to write.
     """
-    resolved = resolve_chat_files_path(path)
+    try:
+        resolved = resolve_chat_files_path(path, for_write=True)
+    except PathAccessError as exc:
+        return f"error: {exc}"
     guard = _guard_path(resolved, for_read=False)
     if guard:
         return guard
@@ -247,12 +254,15 @@ def edit(path: str, old: str, new: str, all: bool = False):
     unless all=true). Line endings of the file are preserved.
 
     Args:
-        path: File path (relative paths resolve to the chat files dir).
+        path: File path (relative paths resolve to the shared applications dir).
         old: Exact text to replace.
         new: Replacement text.
         all: Replace every occurrence instead of requiring uniqueness.
     """
-    resolved = resolve_chat_files_path(path)
+    try:
+        resolved = resolve_chat_files_path(path, for_write=True)
+    except PathAccessError as exc:
+        return f"error: {exc}"
     guard = _guard_path(resolved, for_read=False)
     if guard:
         return guard

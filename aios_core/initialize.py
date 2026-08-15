@@ -1,32 +1,28 @@
 import atexit
 import json
 import os
-from datetime import datetime
 
 from .crons import cron_manager
 from .db import initialize_app_db
-from .workspace import ensure_workspace_dir
+from .storage_migration import migrate_legacy_storage
+from .workspace import ensure_runtime_dirs, get_runtime_paths, get_state_dir, get_skills_dir
 
 RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
     "\033[0m", "\033[1m", "\033[2m", "\033[36m", "\033[32m", "\033[33m"
 )
 
-SKILLS_DIR = "skills"
-SESSION_DIR = "session"
-RUNS_DIR = "runs"
-WORKSPACE_DIR = ensure_workspace_dir()
-SKILLS_DIR = str(WORKSPACE_DIR / SKILLS_DIR)
-SESSION_DIR = str(WORKSPACE_DIR / SESSION_DIR)
-RUNS_DIR = str(WORKSPACE_DIR / RUNS_DIR)
-RUNS_METADATA_DIR = f"{RUNS_DIR}/metadata"
-RUNS_SNAPSHOTS_DIR = f"{RUNS_DIR}/snapshots"
-RUNS_EVENTS_DIR = f"{RUNS_DIR}/events"
-SESSION_MANIFEST_PATH = f"{SESSION_DIR}/session_manifest.json"
-SKILLS_INDEX_PATH = f"{SKILLS_DIR}/skills_index.json"
+_PATHS = get_runtime_paths()
+WORKSPACE_DIR = str(_PATHS.workspace)
+SKILLS_DIR = str(_PATHS.skills)
+RUNS_DIR = str(_PATHS.runs)
+RUNS_METADATA_DIR = str(_PATHS.runs / "metadata")
+RUNS_SNAPSHOTS_DIR = str(_PATHS.runs / "snapshots")
+RUNS_EVENTS_DIR = str(_PATHS.runs / "events")
+SKILLS_INDEX_PATH = str(_PATHS.skills / "skills_index.json")
 _RUNTIME_STARTED = False
-_SKILLS_README_PATH = f"{SKILLS_DIR}/README.md"
-_SKILL_TEMPLATE_DIR = f"{SKILLS_DIR}/_template"
-_SKILL_TEMPLATE_PATH = f"{_SKILL_TEMPLATE_DIR}/SKILL.md"
+_SKILLS_README_PATH = str(_PATHS.skills / "README.md")
+_SKILL_TEMPLATE_DIR = str(_PATHS.skills / "_template")
+_SKILL_TEMPLATE_PATH = str(_PATHS.skills / "_template" / "SKILL.md")
 
 _SKILLS_README_CONTENT = """# Skills
 
@@ -40,6 +36,8 @@ skills/
   my-skill/
     SKILL.md
 ```
+
+Skills live outside the user workspace and are read-only to agents.
 
 ## How discovery works
 
@@ -86,90 +84,43 @@ description: Describe what the skill does and when to use it.
 """
 
 
-def initialize_files():
-    os.makedirs(SKILLS_DIR, exist_ok=True)
-    os.makedirs(SESSION_DIR, exist_ok=True)
-    os.makedirs(RUNS_METADATA_DIR, exist_ok=True)
-    os.makedirs(RUNS_SNAPSHOTS_DIR, exist_ok=True)
-    os.makedirs(RUNS_EVENTS_DIR, exist_ok=True)
-    os.makedirs(_SKILL_TEMPLATE_DIR, exist_ok=True)
+def _initialize_skill_files() -> None:
+    skills_dir = get_skills_dir()
+    template_dir = skills_dir / "_template"
+    template_dir.mkdir(parents=True, exist_ok=True)
+
+    index_path = skills_dir / "skills_index.json"
+    if not index_path.exists():
+        index_path.write_text(
+            json.dumps({"version": 1, "skills": []}, indent=2),
+            encoding="utf-8",
+        )
+
+    readme_path = skills_dir / "README.md"
+    if not readme_path.exists():
+        readme_path.write_text(_SKILLS_README_CONTENT, encoding="utf-8")
+
+    template_path = template_dir / "SKILL.md"
+    if not template_path.exists():
+        template_path.write_text(_SKILL_TEMPLATE_CONTENT, encoding="utf-8")
+
+
+def initialize_files() -> None:
+    # State and the skills root must exist before importing legacy data.
+    # Default skill files are created only after migration so they cannot
+    # displace the active legacy manifest.
+    # The workspace's three user-facing directories are created by the
+    # migration only after old lowercase/internal entries have been staged.
+    get_state_dir().mkdir(parents=True, exist_ok=True)
+    get_skills_dir().mkdir(parents=True, exist_ok=True)
     initialize_app_db()
 
-    files_to_create = {
-        SESSION_MANIFEST_PATH: [],
-        SKILLS_INDEX_PATH: {"version": 1, "skills": []},
-    }
-
-    for path, default_content in files_to_create.items():
-        if not os.path.exists(path):
-            with open(path, "w") as f:
-                json.dump(default_content, f, indent=2)
-
-    text_files_to_create = {
-        _SKILLS_README_PATH: _SKILLS_README_CONTENT,
-        _SKILL_TEMPLATE_PATH: _SKILL_TEMPLATE_CONTENT,
-    }
-
-    for path, content in text_files_to_create.items():
-        if not os.path.exists(path):
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content)
-
-    # Import legacy JSON transcripts only after the current session directory
-    # exists. The importer is idempotent and keeps the JSON files untouched.
     from .sessions import initialize_chat_storage
 
     initialize_chat_storage()
-
-
-def _create_manifest_timestamp() -> str:
-    return datetime.now().isoformat(timespec="seconds")
-
-
-def _infer_manifest_added_at(entry: dict) -> str:
-    file_name = entry.get("file")
-    if isinstance(file_name, str):
-        try:
-            return datetime.strptime(file_name, "chat_%Y%m%d_%H%M%S.json").isoformat(
-                timespec="seconds"
-            )
-        except ValueError:
-            pass
-
-    return _create_manifest_timestamp()
-
-
-def load_manifest():
-    with open(SESSION_MANIFEST_PATH) as f:
-        manifest = json.load(f)
-
-    if not isinstance(manifest, list):
-        return []
-
-    normalized_manifest = []
-    manifest_changed = False
-
-    for entry in manifest:
-        if not isinstance(entry, dict):
-            continue
-
-        normalized_entry = dict(entry)
-        added_at = normalized_entry.get("addedAt")
-        if not isinstance(added_at, str) or not added_at:
-            normalized_entry["addedAt"] = _infer_manifest_added_at(normalized_entry)
-            manifest_changed = True
-
-        normalized_manifest.append(normalized_entry)
-
-    if manifest_changed:
-        save_manifest(normalized_manifest)
-
-    return normalized_manifest
-
-
-def save_manifest(manifest):
-    with open(SESSION_MANIFEST_PATH, "w") as f:
-        json.dump(manifest, f, indent=2)
+    migrate_legacy_storage()
+    _initialize_skill_files()
+    ensure_runtime_dirs()
 
 
 def start_runtime(start_crons: bool = True):
@@ -177,8 +128,8 @@ def start_runtime(start_crons: bool = True):
     if _RUNTIME_STARTED:
         return
 
-    os.chdir(WORKSPACE_DIR)
     initialize_files()
+    os.chdir(get_runtime_paths().applications)
     if start_crons:
         cron_manager.start()
     _RUNTIME_STARTED = True
@@ -187,10 +138,6 @@ def start_runtime(start_crons: bool = True):
 def shutdown_runtime(stop_crons: bool = True):
     global _RUNTIME_STARTED
 
-    # PTY sessions run in their own process groups (start_new_session), so
-    # anything the agent spawned would survive this process as an orphan
-    # unless closed here. Runs even when the runtime never started — tool
-    # calls can create sessions without start_runtime.
     try:
         from .tools.processes import close_all_processes
 

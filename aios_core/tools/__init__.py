@@ -17,6 +17,7 @@ __all__ = [
     "generative_widget",
     "tavily_search",
     "fetch",
+    "read_skill",
     "subagent",
 ]
 
@@ -83,6 +84,10 @@ def __getattr__(name: str):
         from .fetch import fetch
 
         return fetch
+    if name == "read_skill":
+        from .skill import read_skill
+
+        return read_skill
     if name == "subagent":
         from .subagent import subagent
 

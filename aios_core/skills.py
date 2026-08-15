@@ -4,10 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .workspace import resolve_workspace_path
+from .workspace import get_skills_dir
 
-SKILLS_DIR = resolve_workspace_path("skills")
-SKILLS_INDEX_PATH = SKILLS_DIR / "skills_index.json"
 _SKILL_FILE_NAME = "SKILL.md"
 _IGNORED_DIR_PREFIXES = (".", "_")
 _IGNORED_ROOT_FILES = {"README.md", "skills_index.json"}
@@ -59,7 +57,7 @@ def _is_ignored_path(path: Path, skills_dir: Path) -> bool:
     return False
 
 
-def _workspace_skill_path(path: Path, skills_dir: Path) -> str:
+def _agent_skill_path(path: Path, skills_dir: Path) -> str:
     return f"skills/{path.relative_to(skills_dir).as_posix()}"
 
 
@@ -101,7 +99,7 @@ def _load_skill_from_file(
         "name": name,
         "title": title or name,
         "summary": description,
-        "file": _workspace_skill_path(path, skills_dir),
+        "file": _agent_skill_path(path, skills_dir),
     }
 
 
@@ -173,9 +171,9 @@ def _discover_skill_files(skills_dir: Path) -> list[Path]:
     return discovered
 
 
-def _load_manifest_entries() -> list[str | dict[str, Any]]:
+def _load_manifest_entries(skills_dir: Path) -> list[str | dict[str, Any]]:
     try:
-        with open(SKILLS_INDEX_PATH, encoding="utf-8") as file:
+        with open(skills_dir / "skills_index.json", encoding="utf-8") as file:
             raw_manifest = json.load(file)
     except (FileNotFoundError, json.JSONDecodeError):
         return []
@@ -188,11 +186,11 @@ def _load_manifest_entries() -> list[str | dict[str, Any]]:
 
 
 def load_skills() -> list[dict[str, str]]:
-    skills_dir = SKILLS_DIR
+    skills_dir = get_skills_dir()
     skills: list[dict[str, str]] = []
     seen_files: set[str] = set()
 
-    for entry in _load_manifest_entries():
+    for entry in _load_manifest_entries(skills_dir):
         skill = _manifest_entry_to_skill(entry, skills_dir)
         if not skill:
             continue

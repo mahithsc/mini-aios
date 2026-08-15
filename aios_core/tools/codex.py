@@ -1,6 +1,8 @@
 import subprocess
 
 from ..runtime_context import resolve_chat_files_path
+from ..workspace import PathAccessError
+from .execution_sandbox import sandboxed_command
 
 
 def codex(
@@ -24,7 +26,10 @@ def codex(
 
     if not isinstance(path, str) or not path.strip():
         return "error: path must be a non-empty string"
-    workdir = resolve_chat_files_path(path.strip())
+    try:
+        workdir = resolve_chat_files_path(path.strip(), for_write=True)
+    except PathAccessError as exc:
+        return f"error: {exc}"
     if not workdir.exists():
         return f"error: path does not exist: {workdir}"
     if not workdir.is_dir():
@@ -35,7 +40,8 @@ def codex(
         "exec",
         "--skip-git-repo-check",
         "--sandbox",
-        "danger-full-access",
+        "workspace-write",
+        "--ephemeral",
     ]
     if isinstance(model, str) and model.strip():
         cmd.extend(["--model", model.strip()])
@@ -43,7 +49,9 @@ def codex(
 
     try:
         result = subprocess.run(
-            cmd,
+            # Codex applies its own workspace-write sandbox. The native wrapper
+            # is defense in depth when macOS permits nested sandboxing.
+            sandboxed_command(cmd, allow_unwrapped=True),
             capture_output=True,
             text=True,
             timeout=timeout_value,
