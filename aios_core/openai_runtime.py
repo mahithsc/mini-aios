@@ -30,8 +30,14 @@ EventSink = Callable[[SubagentStreamEvent], Awaitable[None] | None]
 class AgentRuntimeContext:
     """Per-run application context shared with function tools."""
 
-    def __init__(self, event_sink: EventSink | None = None) -> None:
+    def __init__(
+        self,
+        event_sink: EventSink | None = None,
+        *,
+        conversation_recorder: Any | None = None,
+    ) -> None:
         self._event_sink = event_sink
+        self.conversation_recorder = conversation_recorder
         self._loop: asyncio.AbstractEventLoop | None = None
 
     def bind_to_current_loop(self) -> None:
@@ -39,6 +45,8 @@ class AgentRuntimeContext:
         self._loop = asyncio.get_running_loop()
 
     async def emit(self, event: SubagentStreamEvent) -> None:
+        if self.conversation_recorder is not None:
+            await self.conversation_recorder.record_custom_event(event)
         if self._event_sink is None:
             return
         result = self._event_sink(event)
@@ -47,13 +55,38 @@ class AgentRuntimeContext:
 
     def emit_sync(self, event: SubagentStreamEvent) -> None:
         """Forward an event from a synchronous tool's worker thread."""
-        if self._event_sink is None:
+        if self._event_sink is None and self.conversation_recorder is None:
             return
         loop = self._loop
         if loop is None or not loop.is_running():
             return
         future = asyncio.run_coroutine_threadsafe(self.emit(event), loop)
         future.result()
+
+    def child(self, child_run_id: str) -> AgentRuntimeContext:
+        recorder = self.conversation_recorder
+        if recorder is not None:
+            recorder = recorder.child(child_run_id)
+        child = AgentRuntimeContext(
+            self._event_sink,
+            conversation_recorder=recorder,
+        )
+        child._loop = self._loop
+        return child
+
+    async def record_sdk_event(self, event: object) -> int | None:
+        if self.conversation_recorder is None:
+            return None
+        return await self.conversation_recorder.record_sdk_event(event)
+
+    async def persist_tool_output(
+        self,
+        call_id: str,
+        raw_item: dict[str, Any] | Any,
+    ) -> int | None:
+        if self.conversation_recorder is None:
+            return None
+        return await self.conversation_recorder.persist_tool_output(call_id, raw_item)
 
 
 class FunctionCallContext:
@@ -218,7 +251,25 @@ def as_function_tool(
         if parameter.annotation is not inspect.Parameter.empty
     }
     invoke.__annotations__["return"] = Any
-    return function_tool(invoke, strict_mode=strict_mode)
+
+    async def persist_exact_tool_output(extraction_context: Any) -> dict[str, Any] | None:
+        tool_context = extraction_context.tool_context
+        runtime_context = getattr(tool_context, "context", None)
+        if not isinstance(runtime_context, AgentRuntimeContext):
+            return None
+        row_id = await runtime_context.persist_tool_output(
+            str(tool_context.tool_call_id),
+            extraction_context.raw_item,
+        )
+        if row_id is None:
+            return None
+        return {"conversationItemId": row_id}
+
+    return function_tool(
+        invoke,
+        strict_mode=strict_mode,
+        custom_data_extractor=persist_exact_tool_output,
+    )
 
 
 @dataclass(frozen=True)

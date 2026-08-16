@@ -116,6 +116,12 @@ def initialize_files():
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
 
+    # Import existing JSON transcripts into SQLite only after the session
+    # directory exists. Source files stay untouched as a rollback backup.
+    from .sessions import initialize_chat_storage
+
+    initialize_chat_storage()
+
 
 def _create_manifest_timestamp() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -181,6 +187,15 @@ def start_runtime(start_crons: bool = True):
 
 def shutdown_runtime(stop_crons: bool = True):
     global _RUNTIME_STARTED
+
+    # Bash calls also run in their own process groups. Normally the async tool
+    # kills them when a run is cancelled; this covers interpreter/app shutdown.
+    try:
+        from .tools.shell import close_all_shell_processes
+
+        close_all_shell_processes()
+    except Exception:
+        pass
 
     # PTY sessions run in their own process groups (start_new_session), so
     # anything the agent spawned would survive this process as an orphan

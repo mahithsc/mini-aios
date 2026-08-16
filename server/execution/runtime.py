@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
-from server.execution.runners.chat import ChatRunner
+
+from aios_core.conversation_store import ConversationStore
 from server.execution.broadcaster import RunBroadcaster
+from server.execution.runners.chat import ChatRunner
 from server.execution.service import RunsService
 from server.execution.store import FileRunStore
 
@@ -28,6 +30,7 @@ def initialize_runs_service() -> RunsService:
             store=FileRunStore(),
             broadcaster=RunBroadcaster(),
             worker_count=_resolve_worker_count(),
+            conversation_store=ConversationStore(),
         )
         _runs_service.register_runner(ChatRunner())
     return _runs_service

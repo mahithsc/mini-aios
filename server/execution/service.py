@@ -1,22 +1,40 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from typing import Protocol
 
+from aios_core.runtime_control import get_runtime_control
 from server.execution.broadcaster import RunBroadcaster
 from server.execution.store import RunStore
 from server.types.run import Run, RunCreateRequest, RunEvent, RunEventType, RunKind, RunSnapshot, RunStatus
-from aios_core.runtime_control import get_runtime_control
 
 _STALE_RUN_ERROR_MESSAGE = "Server restarted before run completed."
+log = logging.getLogger(__name__)
 
 
 class RunExecutor(Protocol):
     kind: str
 
     async def execute(self, run: Run, runs_service: "RunsService") -> None:
+        ...
+
+
+class ConversationRecoveryStore(Protocol):
+    def get_run_status(self, run_id: str) -> str | None:
+        ...
+
+    def recover_stale_run(self, run_id: str, *, error: str) -> bool:
+        ...
+
+    def recover_stale_runs(
+        self,
+        *,
+        error: str,
+        chat_id: str | None = None,
+    ) -> list[str]:
         ...
 
 
@@ -34,10 +52,12 @@ class RunsService:
         broadcaster: RunBroadcaster,
         *,
         worker_count: int = 1,
+        conversation_store: ConversationRecoveryStore | None = None,
     ) -> None:
         self._store = store
         self._broadcaster = broadcaster
         self._worker_count = max(1, worker_count)
+        self._conversation_store = conversation_store
         self._active_runs: dict[str, ActiveRun] = {}
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._runners: dict[str, RunExecutor] = {}
@@ -49,6 +69,14 @@ class RunsService:
         if self._started:
             return
 
+        # Canonical SQLite can remain nonterminal even when a cleanup failure
+        # already made the file-backed run snapshot terminal. Reconcile it
+        # independently before consulting the run projection.
+        if self._conversation_store is not None:
+            await asyncio.to_thread(
+                self._conversation_store.recover_stale_runs,
+                error=_STALE_RUN_ERROR_MESSAGE,
+            )
         await self._reconcile_stale_runs()
         self._started = True
         self._workers = [
@@ -168,21 +196,147 @@ class RunsService:
         return persisted_event
 
     async def _reconcile_stale_runs(self) -> None:
-        stale_snapshots = self._store.list_snapshots(statuses=["queued", "running"])
-        for snapshot in stale_snapshots:
+        # Include terminal chat projections for canonical-status repair and
+        # non-chat queued/running runs for the existing restart behavior.
+        snapshots = self._store.list_snapshots()
+        for snapshot in snapshots:
             run = self._store.get_run(snapshot.runId)
             if run is None:
                 continue
 
-            await self.emit_event(
-                snapshot.runId,
-                build_run_event(
-                    run_id=snapshot.runId,
-                    event_type="error",
-                    chat_id=run.chatId,
-                    data={"error": _STALE_RUN_ERROR_MESSAGE},
-                ),
+            canonical_status: str | None = None
+            if (
+                run.kind == "chat"
+                and run.chatId
+                and self._conversation_store is not None
+            ):
+                if snapshot.status in {"queued", "running"}:
+                    # The file-backed run log and canonical SQLite history have
+                    # separate projections. Repair SQLite first so a restart can
+                    # never expose an orphan call or replay a side effect blindly.
+                    await asyncio.to_thread(
+                        self._conversation_store.recover_stale_run,
+                        snapshot.runId,
+                        error=_STALE_RUN_ERROR_MESSAGE,
+                    )
+                canonical_status = await asyncio.to_thread(
+                    self._conversation_store.get_run_status,
+                    snapshot.runId,
+                )
+
+            terminal = self._canonical_terminal_projection(canonical_status)
+            if terminal is not None:
+                event_type, expected_status, data = terminal
+                if snapshot.status != expected_status:
+                    await self.emit_event(
+                        snapshot.runId,
+                        build_run_event(
+                            run_id=snapshot.runId,
+                            event_type=event_type,
+                            chat_id=run.chatId,
+                            data={**data, "recovered": True},
+                        ),
+                    )
+                else:
+                    # A previous terminal event may have reached the file
+                    # snapshot but failed before updating the SQL chat
+                    # projection. Reapply the persisted event; assistant-event
+                    # IDs make this operation idempotent.
+                    await self._restore_canonical_terminal_projection(
+                        run,
+                        canonical_status or "",
+                        broadcast_existing=False,
+                    )
+                continue
+
+            if snapshot.status in {"queued", "running"}:
+                await self.emit_event(
+                    snapshot.runId,
+                    build_run_event(
+                        run_id=snapshot.runId,
+                        event_type="error",
+                        chat_id=run.chatId,
+                        data={"error": _STALE_RUN_ERROR_MESSAGE},
+                    ),
+                )
+
+    @staticmethod
+    def _canonical_terminal_projection(
+        canonical_status: str | None,
+    ) -> tuple[RunEventType, RunStatus, dict[str, object]] | None:
+        if canonical_status == "complete":
+            return "completed", "completed", {}
+        if canonical_status == "cancelled":
+            return (
+                "cancelled",
+                "cancelled",
+                {"reason": "Canonical conversation turn was cancelled."},
             )
+        if canonical_status == "error":
+            return "error", "error", {"error": _STALE_RUN_ERROR_MESSAGE}
+        return None
+
+    async def _canonical_status_for_run(self, run: Run) -> str | None:
+        if (
+            run.kind != "chat"
+            or not run.chatId
+            or self._conversation_store is None
+        ):
+            return None
+        try:
+            return await asyncio.to_thread(
+                self._conversation_store.get_run_status,
+                run.id,
+            )
+        except Exception:
+            log.exception("Failed to read canonical status for run %s", run.id)
+            return None
+
+    async def _restore_canonical_terminal_projection(
+        self,
+        run: Run,
+        canonical_status: str,
+        *,
+        broadcast_existing: bool = True,
+    ) -> None:
+        terminal = self._canonical_terminal_projection(canonical_status)
+        if terminal is None:
+            return
+        event_type, expected_status, data = terminal
+        snapshot = self._store.get_snapshot(run.id)
+        if snapshot is not None and snapshot.status == expected_status:
+            # The file event may already have committed before its chat/SSE
+            # projection failed. Replay that exact event idempotently instead
+            # of appending a contradictory error terminal.
+            events = self._store.list_events_after(
+                run.id,
+                max(0, snapshot.lastSequence - 1),
+            )
+            existing = next(
+                (
+                    event
+                    for event in reversed(events)
+                    if event.event.type == event_type
+                ),
+                None,
+            )
+            if existing is not None:
+                if run.chatId:
+                    self._store.project_chat_state(run.id, run.chatId, existing)
+                if broadcast_existing:
+                    await self._broadcaster.broadcast_run_event(existing)
+                self._sync_active_run(snapshot)
+                return
+
+        await self.emit_event(
+            run.id,
+            build_run_event(
+                run_id=run.id,
+                event_type=event_type,
+                chat_id=run.chatId,
+                data=data,
+            ),
+        )
 
     def mark_completed(self, run_id: str) -> RunSnapshot:
         existing_snapshot = self._store.get_snapshot(run_id)
@@ -288,20 +442,54 @@ class RunsService:
                     await execution_task
                 except asyncio.CancelledError:
                     if active.cancel_requested:
-                        await self.emit_event(
-                            run_id,
-                            build_run_event(
-                                run_id=run_id,
-                                event_type="cancelled",
-                                chat_id=active.run.chatId,
-                                data={"reason": "Run stopped by user."},
-                            ),
-                        )
+                        try:
+                            await self.emit_event(
+                                run_id,
+                                build_run_event(
+                                    run_id=run_id,
+                                    event_type="cancelled",
+                                    chat_id=active.run.chatId,
+                                    data={"reason": "Run stopped by user."},
+                                ),
+                            )
+                        except Exception:
+                            canonical_status = await self._canonical_status_for_run(
+                                active.run
+                            )
+                            try:
+                                await self._restore_canonical_terminal_projection(
+                                    active.run,
+                                    canonical_status or "",
+                                )
+                            except Exception:
+                                # A secondary cancellation projection failure
+                                # must not kill this worker or alter canonical
+                                # state. Startup reconciliation retries it.
+                                log.exception(
+                                    "Failed to restore cancelled projection for %s",
+                                    run_id,
+                                )
                         continue
                     if active.execution_task is not None:
                         active.execution_task.cancel()
                     raise
                 except Exception as exc:
+                    canonical_status = await self._canonical_status_for_run(active.run)
+                    if self._canonical_terminal_projection(canonical_status) is not None:
+                        try:
+                            await self._restore_canonical_terminal_projection(
+                                active.run,
+                                canonical_status or "",
+                            )
+                        except Exception:
+                            # Never downgrade a canonically terminal turn to an
+                            # error because its secondary projection failed.
+                            # Startup reconciliation will retry the projection.
+                            log.exception(
+                                "Failed to restore canonical terminal projection for %s",
+                                run_id,
+                            )
+                        continue
                     await self.emit_event(
                         run_id,
                         build_run_event(

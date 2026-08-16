@@ -27,10 +27,14 @@ def _attachment(
 
 def _text(message: utils.ResponseInputMessage) -> str:
     content = message["content"]
+    if isinstance(content, str):
+        return content
     assert isinstance(content, list)
-    text_part = content[0]
-    assert text_part["type"] == "input_text"
-    return text_part["text"]
+    return "".join(
+        part.get("text", "")
+        for part in content
+        if part.get("type") in ("input_text", "output_text")
+    )
 
 
 def _decode_data_uri(data_uri: str) -> bytes:
@@ -126,7 +130,7 @@ def test_formats_responses_text_image_file_and_audio_inputs(tmp_path: Path) -> N
     assert _decode_data_uri(file_part["file_data"]) == file_bytes
 
 
-def test_formats_assistant_transcript_as_input_text() -> None:
+def test_formats_assistant_transcript_as_role_correct_output() -> None:
     message = AssistantMessage(
         id="assistant-1",
         createdAt=1,
@@ -156,6 +160,7 @@ def test_formats_assistant_transcript_as_input_text() -> None:
     [formatted] = utils.format_chat_messages_to_model_messages([message])
 
     assert formatted["role"] == "assistant"
+    assert isinstance(formatted["content"], str)
     text = _text(formatted)
     assert text.startswith("Working")
     assert "[Tool call: lookup id=call-1]" in text
@@ -186,8 +191,74 @@ def test_history_truncation_keeps_the_newest_message(monkeypatch) -> None:
     formatted = utils.format_chat_messages_to_model_messages(messages)
 
     assert len(formatted) == 2
+    assert formatted[0]["role"] == "assistant"
+    assert isinstance(formatted[0]["content"], str)
     assert "1 older message(s) were omitted" in _text(formatted[0])
     assert _text(formatted[1]) == "recent"
+
+
+def test_public_single_message_helper_preserves_user_attachments(tmp_path: Path) -> None:
+    text_path = tmp_path / "context.txt"
+    text_path.write_text("supporting context", encoding="utf-8")
+    message = UserMessage(
+        id="user-single",
+        createdAt=1,
+        updatedAt=1,
+        status="complete",
+        content="Read this.",
+        attachments=[
+            _attachment(
+                text_path,
+                attachment_id="context",
+                kind="file",
+                mime_type="text/plain",
+            )
+        ],
+    )
+
+    formatted = utils.chat_message_to_model_message(message)
+
+    assert formatted["role"] == "user"
+    assert "Read this." in _text(formatted)
+    assert "supporting context" in _text(formatted)
+
+
+def test_legacy_helper_excludes_unusable_assistant_rows() -> None:
+    incomplete = AssistantMessage(
+        id="assistant-streaming",
+        createdAt=1,
+        updatedAt=1,
+        status="streaming",
+        events=[
+            {"id": "token", "createdAt": 1, "type": "token", "value": "partial"}
+        ],
+    )
+    empty = AssistantMessage(
+        id="assistant-empty",
+        createdAt=2,
+        updatedAt=2,
+        status="complete",
+        events=[
+            {"id": "start", "createdAt": 2, "type": "stream_start"},
+            {"id": "end", "createdAt": 3, "type": "stream_end"},
+        ],
+    )
+    complete = AssistantMessage(
+        id="assistant-complete",
+        createdAt=4,
+        updatedAt=4,
+        status="complete",
+        events=[
+            {"id": "token", "createdAt": 4, "type": "token", "value": "done"}
+        ],
+    )
+
+    assert utils.legacy_chat_message_to_model_item(incomplete) is None
+    assert utils.legacy_chat_message_to_model_item(empty) is None
+    assert utils.legacy_chat_message_to_model_item(complete) == {
+        "role": "assistant",
+        "content": "done",
+    }
 
 
 def test_inline_media_over_request_budget_falls_back_to_workspace_path(

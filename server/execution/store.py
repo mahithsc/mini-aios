@@ -6,14 +6,19 @@ import time
 import uuid
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from aios_core.initialize import RUNS_EVENTS_DIR, RUNS_METADATA_DIR, RUNS_SNAPSHOTS_DIR
-from aios_core.sessions import load_chat_session, save_chat_session, update_chat_status
-from pydantic import TypeAdapter, ValidationError
+from aios_core.sessions import append_assistant_event
+from server.types.run import (
+    Run,
+    RunCreateRequest,
+    RunEvent,
+    RunKind,
+    RunSnapshot,
+    RunStatus,
+)
 
-from server.types.chat import AssistantMessage, ChatMessage, LLMEvent, MessageStatus
-from server.types.run import Run, RunCreateRequest, RunEvent, RunKind, RunSnapshot, RunStatus
-
-LLM_EVENT_ADAPTER = TypeAdapter(LLMEvent)
 log = logging.getLogger(__name__)
 
 
@@ -217,9 +222,7 @@ class FileRunStore(RunStore):
         if llm_event is None:
             return
 
-        messages = load_chat_session(chat_id)
-        save_chat_session(chat_id, _apply_chat_event(messages, run_id, llm_event))
-        update_chat_status(chat_id, _chat_status_for_event(LLM_EVENT_ADAPTER.validate_python(llm_event)))
+        append_assistant_event(chat_id, run_id, llm_event)
 
     def _ensure_directories(self) -> None:
         self._metadata_dir.mkdir(parents=True, exist_ok=True)
@@ -360,77 +363,3 @@ def _run_event_to_chat_event(event: RunEvent) -> dict[str, object] | None:
         }
 
     return None
-
-
-def _apply_chat_event(messages: list[ChatMessage], run_id: str, event: dict[str, object]) -> list[ChatMessage]:
-    parsed_event = LLM_EVENT_ADAPTER.validate_python(event)
-
-    assistant_index = next(
-        (
-            index
-            for index in range(len(messages) - 1, -1, -1)
-            if isinstance(messages[index], AssistantMessage) and messages[index].runId == run_id
-        ),
-        -1,
-    )
-
-    if assistant_index == -1:
-        return [*messages, _create_assistant_message(run_id, parsed_event)]
-
-    next_messages = list(messages)
-    assistant_message = next_messages[assistant_index]
-    if not isinstance(assistant_message, AssistantMessage):
-        return messages
-
-    next_messages[assistant_index] = assistant_message.model_copy(
-        update={
-            "updatedAt": parsed_event.createdAt,
-            "status": _assistant_status_for_event(parsed_event),
-            "events": _append_assistant_events(list(assistant_message.events), parsed_event),
-        }
-    )
-    return next_messages
-
-
-def _create_assistant_message(run_id: str, event: LLMEvent) -> AssistantMessage:
-    created_at = event.createdAt
-    return AssistantMessage(
-        id=str(uuid.uuid4()),
-        createdAt=created_at,
-        updatedAt=created_at,
-        status=_assistant_status_for_event(event),
-        role="assistant",
-        runId=run_id,
-        events=[event],
-    )
-
-
-def _append_assistant_events(events: list[LLMEvent], event: LLMEvent) -> list[LLMEvent]:
-    if event.type == "token" and events and events[-1].type == "token":
-        previous_event = events[-1]
-        events[-1] = previous_event.model_copy(update={"value": previous_event.value + event.value})
-        return events
-
-    events.append(event)
-    return events
-
-
-def _assistant_status_for_event(event: LLMEvent) -> MessageStatus:
-    event_type = event.type
-    if event_type == "stream_error":
-        return "error"
-    if event_type == "stream_cancelled":
-        return "cancelled"
-    if event_type == "stream_end":
-        return "complete"
-    return "streaming"
-
-
-def _chat_status_for_event(event: LLMEvent) -> str:
-    if event.type == "stream_error":
-        return "error"
-    if event.type == "stream_cancelled":
-        return "cancelled"
-    if event.type == "stream_end":
-        return "idle"
-    return "streaming"

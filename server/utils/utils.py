@@ -246,12 +246,11 @@ def _to_model_message(message: ChatMessage) -> ResponseInputMessage:
     if isinstance(message, AssistantMessage):
         return {
             "role": "assistant",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": _assistant_events_to_openai_content(message),
-                }
-            ],
+            # Assistant history is model output, not model input. The Responses
+            # API accepts the SDK's ``EasyInputMessage`` string form for replayed
+            # assistant messages. Using a string also avoids inventing the
+            # provider-owned IDs required by a full ``ResponseOutputMessage``.
+            "content": _assistant_events_to_openai_content(message),
         }
 
     raise TypeError(f"Unsupported chat message type: {type(message)!r}")
@@ -264,7 +263,7 @@ def _message_text(message: ResponseInputMessage) -> str:
     return "".join(
         part.get("text", "")
         for part in content
-        if part.get("type") == "input_text"
+        if part.get("type") in ("input_text", "output_text")
     )
 
 
@@ -305,23 +304,43 @@ def _truncate_message_history(
     return [
         {
             "role": "assistant",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": (
-                        "[Earlier conversation truncated to fit the current context window. "
-                        f"{dropped_count} older message(s) were omitted. "
-                        "Focus on the recent messages and ask for missing details if needed.]"
-                    ),
-                }
-            ],
+            "content": (
+                "[Earlier conversation truncated to fit the current context window. "
+                f"{dropped_count} older message(s) were omitted. "
+                "Focus on the recent messages and ask for missing details if needed.]"
+            ),
         },
         *kept_messages,
     ]
 
 
+def chat_message_to_model_message(message: ChatMessage) -> ResponseInputMessage:
+    """Convert one persisted chat message into a Responses API input item."""
+    validated = CHAT_MESSAGE_ADAPTER.validate_python(message)
+    return _to_model_message(validated)
+
+
+def legacy_chat_message_to_model_item(
+    message: ChatMessage,
+) -> ResponseInputMessage | None:
+    """Convert a safe legacy row, excluding unusable assistant transcripts.
+
+    The UI database may contain interrupted assistant rows. Those rows are not
+    valid conversation history, so only completed assistants with meaningful
+    replay content are admitted when seeding canonical model history. User
+    messages remain eligible regardless of their old UI status.
+    """
+    validated = CHAT_MESSAGE_ADAPTER.validate_python(message)
+    if isinstance(validated, AssistantMessage):
+        if validated.status != "complete":
+            return None
+        if not _assistant_events_to_openai_content(validated).strip():
+            return None
+    return _to_model_message(validated)
+
+
 def format_chat_messages_to_model_messages(
     messages: list[ChatMessage],
 ) -> list[ResponseInputMessage]:
-    model_messages = [_to_model_message(CHAT_MESSAGE_ADAPTER.validate_python(message)) for message in messages]
+    model_messages = [chat_message_to_model_message(message) for message in messages]
     return _truncate_message_history(model_messages)

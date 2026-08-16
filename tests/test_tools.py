@@ -3,7 +3,9 @@
 Run directly: .venv/bin/python tests/test_tools.py
 """
 
+import asyncio
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +30,16 @@ def check(name, condition, detail=""):
     else:
         FAIL.append(name)
         print(f"  FAIL: {name} {detail}")
+
+
+def run_bash(command, timeout=None):
+    return asyncio.run(shell._run_bash(command, timeout, cwd=str(TMP)))
+
+
+def remove_full_output_log(output):
+    match = re.search(r"full output: ([^)\n]+)", output)
+    if match:
+        Path(match.group(1)).unlink(missing_ok=True)
 
 
 print("== read ==")
@@ -183,39 +195,40 @@ check("grep python fallback context", "-needle" in out.replace(str(hay / 'f1.txt
 search._rg_path = False  # restore probe
 
 print("== bash ==")
-out = shell.bash("echo hello-$((1+1))", cwd=str(TMP))
+out = run_bash("echo hello-$((1+1))")
 check("bash basic", "hello-2" in out, out)
 
-out = shell.bash("exit 3", cwd=str(TMP))
+out = run_bash("exit 3")
 check("bash exit code note", "exit code 3" in out, out)
 
-out = shell.bash("definitely-not-a-command-xyz", cwd=str(TMP))
+out = run_bash("definitely-not-a-command-xyz")
 check("bash 127 hint", "command not found" in out, out)
 
-out = shell.bash("grep zzz /etc/hosts", cwd=str(TMP))
+out = run_bash("grep zzz /etc/hosts")
 check("bash benign grep exit", "No matches found (not an error)" in out, out)
 
-out = shell.bash("printf '\\033[31mred\\033[0m plain'", cwd=str(TMP))
+out = run_bash("printf '\\033[31mred\\033[0m plain'")
 check("bash strips ANSI", "red plain" in out and "\x1b" not in out, repr(out[:60]))
 
-out = shell.bash("yes 0123456789 | head -c 200000", cwd=str(TMP))
-check("bash truncates output", "chars omitted" in out and len(out) < 60_000, f"len={len(out)}")
+out = run_bash("yes 0123456789 | head -c 200000")
+check("bash truncates output", "output truncated" in out and len(out) < 60_000, f"len={len(out)}")
+remove_full_output_log(out)
 
 print("== bash: bounded memory on huge output ==")
 start = time.time()
-out = shell.bash("head -c 5000000 /dev/zero | tr '\\0' 'z'; echo; echo FINAL-LINE-SENTINEL", cwd=str(TMP), timeout=60)
+out = run_bash("head -c 5000000 /dev/zero | tr '\\0' 'z'; echo; echo FINAL-LINE-SENTINEL", timeout=60)
 elapsed = time.time() - start
 check("bash 5MB output bounded", len(out) < 60_000, f"len={len(out)}")
-check("bash 5MB omission notice", "chars omitted" in out and "4," in out, out[19_000:21_000] if len(out) > 21_000 else out)
-check("bash 5MB head preserved", out.startswith("zzz"), out[:40])
-check("bash 5MB tail preserved", "FINAL-LINE-SENTINEL" in out[-100:], out[-100:])
+check("bash 5MB truncation notice", "output truncated" in out and "full output:" in out, out[-300:])
+check("bash 5MB tail preserved", "FINAL-LINE-SENTINEL" in out, out[-300:])
 check("bash 5MB reasonable time", elapsed < 20, f"{elapsed:.1f}s")
+remove_full_output_log(out)
 
 marker = f"aios-orphan-{os.getpid()}"
 start = time.time()
-out = shell.bash(
+out = run_bash(
     f"python3 -c 'import time; time.sleep(300)' & echo started-{marker}; wait",
-    timeout=2, cwd=str(TMP),
+    timeout=2,
 )
 elapsed = time.time() - start
 check("bash timeout returns promptly", elapsed < 10, f"{elapsed:.1f}s")

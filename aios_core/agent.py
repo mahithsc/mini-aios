@@ -1,7 +1,9 @@
 import os
+from collections.abc import Mapping
 
-from agents import Agent
+from agents import Agent, ModelSettings
 from dotenv import load_dotenv
+from openai.types.shared import Reasoning
 
 from .agent_prompt import build_agent_prompt
 from .memory import build_memory_prompt
@@ -17,11 +19,6 @@ from .tools import (
     edit,
     glob,
     grep,
-    process_kill,
-    process_list,
-    process_poll,
-    process_send,
-    process_spawn,
     read,
     tavily_search,
     write,
@@ -42,7 +39,19 @@ load_dotenv()
 
 DEFAULT_CRON_TIMEZONE = os.getenv("AIOS_DEFAULT_TIMEZONE", "America/New_York")
 DEFAULT_SERVER_BASE_URL = os.getenv("AIOS_SERVER_BASE_URL", "http://localhost:8765")
-DEFAULT_MODEL_ID = os.getenv("AIOS_MODEL_ID", "gpt-4.1")
+
+
+def _resolve_model_configuration(
+    environment: Mapping[str, str],
+) -> tuple[str, str | None]:
+    model_id = environment.get("AIOS_MODEL_ID", "gpt-5.6")
+    reasoning_effort = environment.get("AIOS_REASONING_EFFORT")
+    if reasoning_effort is None and model_id.startswith("gpt-5.6"):
+        reasoning_effort = "xhigh"
+    return model_id, reasoning_effort
+
+
+DEFAULT_MODEL_ID, DEFAULT_REASONING_EFFORT = _resolve_model_configuration(os.environ)
 
 
 BASE_TOOLS = [
@@ -52,11 +61,6 @@ BASE_TOOLS = [
     glob,
     grep,
     bash,
-    process_spawn,
-    process_list,
-    process_send,
-    process_poll,
-    process_kill,
     pi,
     cron,
     show_canvas,
@@ -119,11 +123,15 @@ def _create_agent_with_tools(
             include_subagent_tool=include_subagent_tool,
             chat_id=chat_id,
         ),
-        tools=[
-            as_function_tool(tool, strict_mode=tool is not process_spawn)
-            for tool in tools
-        ],
+        tools=[as_function_tool(tool) for tool in tools],
         model=DEFAULT_MODEL_ID,
+        model_settings=ModelSettings(
+            reasoning=(
+                Reasoning(effort=DEFAULT_REASONING_EFFORT)
+                if DEFAULT_REASONING_EFFORT is not None
+                else None
+            ),
+        ),
     )
 
 

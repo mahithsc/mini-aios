@@ -46,38 +46,11 @@ _BASE_TOOLS_BLOCK = """
     grep,
 ),
 "bash": (
-    "Run a non-interactive shell command. On timeout the whole process group "
-    "is killed; output is capped and exit codes are reported. Use "
-    "process_spawn for long-running or interactive commands.",
-    {"cmd": "string", "timeout": "number? (seconds)", "cwd": "string?"},
+    "Run a command in a fresh non-interactive Bash process. Stdout and stderr "
+    "are combined; output is capped with a full log saved when truncated. "
+    "Timeout or cancellation kills the whole process group.",
+    {"command": "string", "timeout": "number? (seconds; no default)"},
     bash,
-),
-"process_spawn": (
-    "Create a persistent PTY-backed shell session.",
-    {"cwd": "string?", "env": "object?", "shell": "string?"},
-    process_spawn,
-),
-"process_list": (
-    "List active PTY-backed shell sessions.",
-    {},
-    process_list,
-),
-"process_send": (
-    "Send a shell command or raw input to an existing PTY session.",
-    {"process_id": "string", "command": "string?", "input": "string?"},
-    process_send,
-),
-"process_poll": (
-    "Read incremental output and status from an existing PTY session. "
-    "Pass wait (seconds, max 30) to block until the active command finishes "
-    "instead of polling repeatedly.",
-    {"process_id": "string", "cursor": "number?", "wait": "number?"},
-    process_poll,
-),
-"process_kill": (
-    "Interrupt or terminate an existing PTY session.",
-    {"process_id": "string", "signal": "string?"},
-    process_kill,
 ),
 "pi": (
     "Control background Pi coding-agent jobs through one action-based tool. "
@@ -316,14 +289,6 @@ def build_agent_prompt(
             When coding, explain the intended change before delegating, and summarize the outcome after Pi finishes — including the live URL when you built an app.
             """,
         ),
-        _section(
-            "process_management",
-            """
-            You can create, kill, and poll processes.
-            For tasks like SSH, long-running commands, or any work that needs persistent shell state, use the PTY process tools.
-            Typical PTY flow is: `process_spawn` -> `process_send` -> `process_poll`.
-            """,
-        ),
     ]
 
     if include_memory_tools:
@@ -359,7 +324,7 @@ def build_agent_prompt(
                 Default chat files directory: {current_chat_files_dir}
                 Default chat artifacts directory: {current_chat_artifacts_dir}
                 {artifact_url_line}
-                Relative paths for file tools, search tools, shell commands, PTY sessions, and Pi default to the chat files directory.
+                Relative paths for file tools, search tools, shell commands, and Pi default to the chat files directory.
                 Use explicit workspace-relative paths like `session/...` or `runs/...` only when you intentionally want to work outside the chat files directory.
                 """,
             )

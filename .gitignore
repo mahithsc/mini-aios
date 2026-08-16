@@ -16,6 +16,7 @@ memories/
 
 # runtime state
 runs/
+state/
 
 # local db
 aios.db

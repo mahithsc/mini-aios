@@ -390,22 +390,26 @@ class ProcessManager:
         if not resolved_cwd.is_dir():
             return {"error": f"path is not a directory: {resolved_cwd}"}
 
-        # Prune dead sessions, then enforce the concurrency cap so leaked
-        # sessions can't accumulate forever in a long-lived server process.
+        # Keep recently-finished sessions available for a final poll, but only
+        # count live shells toward the concurrency cap.  Treating retained
+        # history as active makes a run of explicitly-killed sessions exhaust
+        # the cap until the 60-second history window expires.
         stale: list[ProcessSession] = []
+        live_session_ids: list[str] = []
+        now = time.time()
         with self._lock:
             for session_id, existing in list(self._sessions.items()):
-                if not existing.is_alive() and time.time() - existing.last_activity_at > 60:
+                if existing.is_alive():
+                    live_session_ids.append(session_id)
+                elif now - existing.last_activity_at > 60:
                     stale.append(self._sessions.pop(session_id))
-            active_count = len(self._sessions)
+            active_count = len(live_session_ids)
         for existing in stale:
             existing.close()
         if active_count >= _MAX_SESSIONS:
-            with self._lock:
-                session_ids = ", ".join(self._sessions)
             return {
                 "error": f"too many process sessions ({active_count}/{_MAX_SESSIONS}). "
-                f"Kill one first with process_kill. Active: {session_ids}"
+                f"Kill one first with process_kill. Active: {', '.join(live_session_ids)}"
             }
 
         try:

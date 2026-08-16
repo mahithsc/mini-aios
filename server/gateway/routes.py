@@ -11,12 +11,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
 
 from aios_core.sessions import (
+    append_user_message,
+    create_chat,
     get_chat_metadata,
     list_chat_history,
     load_chat_session,
-    save_chat_session,
-    update_chat_status,
-    update_chat_title,
 )
 from server.execution.runtime import get_runs_service
 from server.types.chat import AssistantMessage, ChatMetadata, UserMessage
@@ -122,9 +121,7 @@ def _chat_to_gateway_messages(session_id: str) -> list[MessageOut]:
 )
 async def create_session(body: SessionCreate) -> SessionOut:
     chat_id = str(uuid.uuid4())
-    save_chat_session(chat_id, [])
-    if body.title:
-        update_chat_title(chat_id, body.title)
+    create_chat(chat_id, body.title)
     get_gateway_bus().publish(chat_id, "session.created", {"title": body.title})
     return _session_out(_get_chat_or_404(chat_id))
 
@@ -162,12 +159,17 @@ async def submit_message(session_id: str, body: MessageCreate) -> MessageSubmitO
         status="complete",
         content=body.content,
     )
-    save_chat_session(session_id, [*load_chat_session(session_id), user_message])
-    update_chat_status(session_id, "streaming")
+    append_user_message(session_id, user_message, chat_status="streaming")
 
     # Published before submit_run so it precedes assistant.started in id order.
     get_gateway_bus().publish(session_id, "user.message", {"text": body.content})
-    await get_runs_service().submit_run(RunCreateRequest(kind="chat", chatId=session_id))
+    await get_runs_service().submit_run(
+        RunCreateRequest(
+            kind="chat",
+            chatId=session_id,
+            turnId=user_message.id,
+        )
+    )
 
     return MessageSubmitOut(status="accepted", session_id=session_id, hermes=None)
 

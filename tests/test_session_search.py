@@ -9,23 +9,42 @@ from server.types.chat import AssistantMessage, UserMessage
 
 @pytest.fixture
 def isolated_search_storage(tmp_path, monkeypatch):
-    """Point the file-based session store at a temp workspace.
-
-    Session recall on main reads the JSON session store (``session_manifest.json``
-    + per-chat ``chat.json``) rather than a SQLite table, so the fixture just
-    redirects that directory.
-    """
-    session_dir = tmp_path / "session"
+    """Point the SQLite chat store and its legacy importer at a temp workspace."""
+    workspace_dir = tmp_path / "workspace"
+    session_dir = workspace_dir / "session"
     session_dir.mkdir(parents=True)
     (session_dir / "session_manifest.json").write_text("[]", encoding="utf-8")
 
+    monkeypatch.setattr(sessions, "DB_PATH", str(workspace_dir / "aios.db"))
     monkeypatch.setattr(sessions, "SESSION_DIR", session_dir)
     monkeypatch.setattr(
         sessions,
         "SESSION_MANIFEST_PATH",
         session_dir / "session_manifest.json",
     )
+    monkeypatch.setattr(
+        sessions,
+        "_LEGACY_DEV_SESSION_DIR",
+        tmp_path / "missing-legacy-session",
+    )
+    monkeypatch.setattr(
+        sessions,
+        "_LEGACY_ROOT_SESSION_DIR",
+        tmp_path / "missing-root-session",
+    )
+    monkeypatch.setattr(
+        sessions,
+        "_LEGACY_SQLITE_CHAT_DB",
+        tmp_path / "missing-state" / "aios.db",
+    )
+    monkeypatch.delenv("AIOS_STATE_DIR", raising=False)
+    monkeypatch.delenv("AIOS_HOME", raising=False)
+    monkeypatch.setattr(sessions, "get_workspace_dir", lambda: workspace_dir)
+    sessions._CHAT_STORAGE_READY.clear()
+
     yield session_dir
+
+    sessions._CHAT_STORAGE_READY.clear()
 
 
 def _user(message_id: str, text: str, timestamp: int) -> UserMessage:
