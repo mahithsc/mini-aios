@@ -12,13 +12,16 @@ is set, so `make test` stays fast and deterministic.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import threading
 from pathlib import Path
 
 import pytest
+from agents.tool_context import ToolContext
 
+from aios_core.openai_runtime import AgentRuntimeContext, as_function_tool
 from aios_core.tools.codex_subagent import codex_subagent, translate_codex_event
 from aios_core.tools.subagent_events import SubagentStreamEvent
 
@@ -184,6 +187,47 @@ def test_generator_timeout_kills_process_and_errors(valid_path, monkeypatch):
 
     assert "stream_error" in _types(events)
     assert "timed out" in final.lower()
+    assert popen.killed is True
+
+
+def test_adapter_cancellation_kills_codex_process(valid_path, monkeypatch):
+    block = threading.Event()
+    started = threading.Event()
+    popen = _FakePopen(block=block)
+    monkeypatch.setattr(
+        "aios_core.tools.codex_subagent.subprocess.Popen",
+        lambda *args, **kwargs: (started.set() or popen),
+    )
+
+    async def invoke() -> list[str]:
+        nested_events: list[str] = []
+
+        async def sink(event) -> None:
+            nested_events.append(event.child_event_type)
+
+        runtime = AgentRuntimeContext(event_sink=sink)
+        runtime.bind_to_current_loop()
+        tool = as_function_tool(codex_subagent)
+        context = ToolContext(
+            context=runtime,
+            tool_name="codex_subagent",
+            tool_call_id="parent",
+            tool_arguments="{}",
+        )
+        task = asyncio.create_task(
+            tool.on_invoke_tool(
+                context,
+                '{"task":"work","timeout":600,"model":null,"path":"."}',
+            )
+        )
+        assert await asyncio.to_thread(started.wait, 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert await asyncio.to_thread(block.wait, 1)
+        return nested_events
+
+    assert asyncio.run(invoke()) == ["stream_start"]
     assert popen.killed is True
 
 

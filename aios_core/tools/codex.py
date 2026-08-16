@@ -8,6 +8,7 @@ def codex(
     timeout: float = 180,
     model: str = None,
     path: str = ".",
+    fc=None,
 ):
     """
     Delegate a task to Codex CLI in non-interactive mode.
@@ -42,16 +43,25 @@ def codex(
     cmd.append(task.strip())
 
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_value,
             cwd=str(workdir),
         )
+        add_cancel_callback = getattr(fc, "add_cancel_callback", None)
+        if callable(add_cancel_callback):
+            add_cancel_callback(
+                lambda: process.kill() if process.poll() is None else None
+            )
+        stdout, stderr = process.communicate(timeout=timeout_value)
     except FileNotFoundError:
         return "error: codex CLI is not installed or not on PATH"
     except subprocess.TimeoutExpired as e:
+        process.kill()
+        stdout, stderr = process.communicate()
+
         def _to_str(v):
             if v is None:
                 return ""
@@ -59,16 +69,18 @@ def codex(
                 return v.decode(errors="replace")
             return str(v)
 
-        partial = (_to_str(e.stdout) + _to_str(e.stderr)).strip()
+        partial = (_to_str(stdout) + _to_str(stderr)).strip()
+        if not partial:
+            partial = (_to_str(e.stdout) + _to_str(e.stderr)).strip()
         if partial:
             return f"{partial}\n(error: codex timed out after {timeout_value:g}s)"
         return f"error: codex timed out after {timeout_value:g}s"
     except Exception as e:
         return f"error: codex failed -- {e}"
 
-    out = (result.stdout + result.stderr).strip()
-    if result.returncode != 0:
+    out = (stdout + stderr).strip()
+    if process.returncode != 0:
         if out:
-            return f"error: codex exit {result.returncode} -- {out}"
-        return f"error: codex exit {result.returncode}"
+            return f"error: codex exit {process.returncode} -- {out}"
+        return f"error: codex exit {process.returncode}"
     return out or "(empty)"

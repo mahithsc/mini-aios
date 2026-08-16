@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from agents import RunConfig, Runner
 
 DB_PATH = "crons.db"
 log = logging.getLogger(__name__)
@@ -186,8 +187,13 @@ class CronManager:
             from agent import create_agent
             agent = create_agent()
             messages = [{"role": "user", "content": instructions}]
-            response = agent.run(messages)
-            output = response.content or ""
+            response = Runner.run_sync(
+                agent,
+                messages,
+                max_turns=None,
+                run_config=RunConfig(tracing_disabled=True),
+            )
+            output = str(response.final_output or "")
         except Exception as e:
             status = "error"
             output = str(e)

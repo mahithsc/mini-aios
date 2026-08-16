@@ -1,17 +1,14 @@
 import uuid
 
+from agents import RunConfig, Runner
+
 from aios_core.agent import create_agent
 from aios_core.dream import dream
 from aios_core.initialize import (
-    CYAN,
-    DIM,
-    GREEN,
-    RESET,
     register_runtime_shutdown,
     start_runtime,
 )
 from aios_core.sessions import save_chat_session
-from agno.agent import RunEvent
 
 
 def new_chat():
@@ -42,21 +39,14 @@ while True:
     
     messages.append({"role": "user", "content": user_input})
     agent = create_agent()
-    response = agent.run(messages, stream=True, stream_events=True)
-    for event in response:
-        if event.event == RunEvent.tool_call_started:
-            tool = event.tool
-            print(f"\n  {DIM}{CYAN}▶ {tool.tool_name}{RESET}{DIM}({tool.tool_args}){RESET}", flush=True)
-
-        elif event.event == RunEvent.tool_call_completed:
-            tool = event.tool
-            result_preview = str(tool.result)[:120]
-            print(f"  {DIM}{GREEN}✓ {tool.tool_name}{RESET}{DIM} → {result_preview}{RESET}", flush=True)
-
-        elif event.event == RunEvent.run_content:
-            if event.content is not None:
-                content += event.content
-                print(event.content, end="", flush=True)
+    response = Runner.run_sync(
+        agent,
+        messages,
+        max_turns=None,
+        run_config=RunConfig(tracing_disabled=True),
+    )
+    content = str(response.final_output or "")
+    print(content, end="", flush=True)
 
     messages.append({"role": "assistant", "content": content})
     print()

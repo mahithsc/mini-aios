@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.cron import CronTrigger
+from agents import RunConfig, Runner
+
 from .agent import create_agent
 from .db import DB_PATH, get_db_connection, initialize_app_db
 from .prompt_loader import render_prompt
@@ -409,8 +411,13 @@ class CronManager:
         try:
             agent = create_agent()
             messages = [{"role": "user", "content": prompt}]
-            response = agent.run(messages)
-            output = response.content or ""
+            response = Runner.run_sync(
+                agent,
+                messages,
+                max_turns=None,
+                run_config=RunConfig(tracing_disabled=True),
+            )
+            output = str(response.final_output or "")
         except Exception as e:
             status = "error"
             output = str(e)

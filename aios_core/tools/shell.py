@@ -6,6 +6,7 @@ import os
 import select
 import signal
 import subprocess
+import threading
 import time
 
 from ..runtime_context import default_chat_files_cwd, resolve_chat_files_path
@@ -87,7 +88,7 @@ def _kill_process_group(proc: subprocess.Popen) -> None:
             pass
 
 
-def bash(cmd: str, timeout: float = 30, cwd: str = None):
+def bash(cmd: str, timeout: float = 30, cwd: str = None, fc=None):
     """Run a non-interactive shell command and return its combined output.
 
     On timeout the whole process group is killed (including children), so
@@ -118,6 +119,16 @@ def bash(cmd: str, timeout: float = 30, cwd: str = None):
         )
     except OSError as exc:
         return f"error: failed to start command: {exc}"
+
+    add_cancel_callback = getattr(fc, "add_cancel_callback", None)
+    if callable(add_cancel_callback):
+        add_cancel_callback(
+            lambda: threading.Thread(
+                target=_kill_process_group,
+                args=(proc,),
+                daemon=True,
+            ).start()
+        )
 
     # Bounded in-flight collection: keep the first 40% and a rolling last
     # 60% of the output cap, so a command emitting gigabytes never grows

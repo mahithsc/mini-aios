@@ -196,6 +196,21 @@ def codex_subagent(
         yield f"error: codex failed -- {exc}"
         return
 
+    def cancelled() -> bool:
+        return bool(getattr(fc, "cancelled", False))
+
+    def cancel_process() -> None:
+        if process.poll() is None:
+            process.kill()
+
+    add_cancel_callback = getattr(fc, "add_cancel_callback", None)
+    if callable(add_cancel_callback):
+        add_cancel_callback(cancel_process)
+    if cancelled():
+        cancel_process()
+        process.wait()
+        return
+
     line_queue: "queue.Queue[str | None]" = queue.Queue()
     reader = threading.Thread(
         target=_reader_thread, args=(process.stdout, line_queue), daemon=True
@@ -206,6 +221,8 @@ def codex_subagent(
     def _drain(descriptors: list[dict[str, Any]]) -> Iterator[SubagentStreamEvent]:
         nonlocal final_message
         for desc in descriptors:
+            if cancelled():
+                return
             kind = desc["kind"]
             if kind == "text":
                 text_chunks.append(desc["value"])
@@ -227,18 +244,31 @@ def codex_subagent(
 
     try:
         while True:
+            if cancelled():
+                cancel_process()
+                process.wait()
+                return
             remaining = deadline - monotonic()
             if remaining <= 0:
                 raise TimeoutError
             try:
                 line = line_queue.get(timeout=min(remaining, 1.0))
             except queue.Empty:
+                if cancelled():
+                    cancel_process()
+                    process.wait()
+                    return
                 if process.poll() is not None and line_queue.empty():
                     break
                 continue
 
             if line is None:  # reader hit EOF
                 break
+
+            if cancelled():
+                cancel_process()
+                process.wait()
+                return
 
             stripped = line.strip()
             if not stripped:
@@ -257,6 +287,9 @@ def codex_subagent(
         return
 
     returncode = process.wait()
+
+    if cancelled():
+        return
 
     if returncode != 0:
         stderr_output = (process.stderr.read() if process.stderr else "") or ""

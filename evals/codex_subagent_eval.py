@@ -21,17 +21,17 @@ from __future__ import annotations
 import json
 import os
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
-from typing import Callable
+from typing import Any, Callable
 
-from agno.agent import Agent
-from agno.models.openai import OpenAIChat
-from agno.run.agent import RunEvent as AgentRunEvent
-from contextlib import contextmanager
-
+from agents import Agent, RunConfig, Runner
+from agents.items import ToolCallItem, ToolCallOutputItem
 from dotenv import load_dotenv
+
+from aios_core.openai_runtime import AgentRuntimeContext, as_function_tool
 
 # Ensure OPENAI_API_KEY (and friends) are present regardless of which case runs
 # first. The simulator/judge build ``OpenAI()`` directly, so we can't rely on
@@ -106,7 +106,13 @@ def _make_recording_codex(sink: list[dict]) -> Callable:
     model's view of the tool is identical."""
     from aios_core.tools.codex_subagent import codex_subagent as real
 
-    def codex_subagent(task=None, timeout=180, model=None, path=".", fc=None):
+    def codex_subagent(
+        task: str | None = None,
+        timeout: float = 600,
+        model: str | None = None,
+        path: str = ".",
+        fc: Any = None,
+    ) -> str:
         sink.append({"task": task, "timeout": timeout, "model": model, "path": path})
         return "Completed the delegated task. (recording stub)"
 
@@ -120,14 +126,37 @@ def _build_agent(record_sink: list[dict] | None) -> Agent:
     tools = []
     for tool in MAIN_TOOLS:
         if getattr(tool, "__name__", "") == "codex_subagent" and record_sink is not None:
-            tools.append(_make_recording_codex(record_sink))
-        else:
-            tools.append(tool)
+            tool = _make_recording_codex(record_sink)
+        tools.append(
+            as_function_tool(
+                tool,
+                strict_mode=getattr(tool, "__name__", "") != "process_spawn",
+            )
+        )
     return Agent(
-        system_message=_build_prompt(include_subagent_tool=True),
+        name="AIOS eval",
+        instructions=_build_prompt(include_subagent_tool=True),
         tools=tools,
-        model=OpenAIChat(id=DEFAULT_MODEL_ID),
+        model=DEFAULT_MODEL_ID,
     )
+
+
+def _tool_arguments(item: ToolCallItem) -> dict[str, Any]:
+    raw_item = item.raw_item
+    arguments = (
+        raw_item.get("arguments")
+        if isinstance(raw_item, dict)
+        else getattr(raw_item, "arguments", None)
+    )
+    if isinstance(arguments, dict):
+        return arguments
+    if not isinstance(arguments, str):
+        return {}
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        return {"raw": arguments}
+    return parsed if isinstance(parsed, dict) else {"value": parsed}
 
 
 def _run_messages(agent: Agent, messages: list[dict]) -> tuple[list[dict], str]:
@@ -136,17 +165,31 @@ def _run_messages(agent: Agent, messages: list[dict]) -> tuple[list[dict], str]:
     Mirrors the box's runtime (server/execution/runners/chat.py): pass the whole
     [{role, content}] history each turn so the agent has the conversation."""
     calls: list[dict] = []
-    final_chunks: list[str] = []
-    for event in agent.run(messages, stream=True, stream_events=True):
-        if event.event == AgentRunEvent.tool_call_started and event.tool is not None:
-            if event.tool.tool_name == "codex_subagent":
-                calls.append({"args": event.tool.tool_args, "result": None})
-        elif event.event == AgentRunEvent.tool_call_completed and event.tool is not None:
-            if event.tool.tool_name == "codex_subagent" and calls:
-                calls[-1]["result"] = str(event.tool.result)[:400]
-        elif event.event == AgentRunEvent.run_content and event.content is not None:
-            final_chunks.append(str(event.content))
-    return calls, "".join(final_chunks)
+    calls_by_id: dict[str, dict] = {}
+    result = Runner.run_sync(
+        agent,
+        input=messages,
+        context=AgentRuntimeContext(),
+        max_turns=None,
+        run_config=RunConfig(tracing_disabled=True),
+    )
+
+    for item in result.new_items:
+        if isinstance(item, ToolCallItem) and item.tool_name == "codex_subagent":
+            call_id = str(item.call_id or id(item))
+            call = {"args": _tool_arguments(item), "result": None}
+            calls.append(call)
+            calls_by_id[call_id] = call
+            continue
+
+        if isinstance(item, ToolCallOutputItem):
+            call_id = str(item.call_id or "")
+            call = calls_by_id.get(call_id)
+            if call is not None:
+                call["result"] = str(item.output)[:400]
+
+    final_output = result.final_output
+    return calls, "" if final_output is None else str(final_output)
 
 
 def _run_agent(prompt: str, record_sink: list[dict] | None) -> tuple[list[dict], str]:
