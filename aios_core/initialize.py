@@ -193,6 +193,15 @@ def shutdown_runtime(stop_crons: bool = True):
     except Exception:
         pass
 
+    # Pi jobs also own long-lived subprocess groups. Close them even when the
+    # runtime never started so tool-only callers cannot leave orphaned agents.
+    try:
+        from .tools.pi_job import close_all_pi_jobs
+
+        close_all_pi_jobs()
+    except Exception:
+        pass
+
     if not _RUNTIME_STARTED:
         return
 

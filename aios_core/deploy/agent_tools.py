@@ -1,7 +1,7 @@
-"""Main-agent lifecycle tools for durable deployed apps (step 6).
+"""Main-agent lifecycle tools for durable deployed apps.
 
-Deployed services outlive the Codex session that built them, so the main agent
-needs to list / inspect / debug / restart / stop them. Thin wrappers over the
+Deployed services outlive the coding-agent job that built them, so the main
+agent needs to list / inspect / debug / restart / stop them. Thin wrappers over the
 durable ProjectStore + Supervisor. ``_store``/``_sup`` are the injection seams
 for tests.
 """

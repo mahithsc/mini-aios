@@ -1,7 +1,7 @@
 """End-to-end tests for the deploy Supervisor.
 
 HONEST by construction (see the anti-cheating contract in
-docs/deploy-supervisor-PLAN.md): each test runs a REAL container executing REAL
+the deployment supervisor): each test runs a REAL container executing REAL
 code and makes a REAL HTTP request. The test app is a genuine minimal server, not
 a mock of the Supervisor. Tests skip ONLY when Docker is genuinely unavailable —
 never to dodge a real failure.
@@ -171,7 +171,7 @@ def test_deploy_project_serves_and_registers(tmp_path):
 
 
 def test_deploy_reports_failure_with_logs(tmp_path):
-    """A crashing app yields status=error WITH the container logs, so Codex can
+    """A crashing app yields status=error WITH the container logs, so an agent can
     read the failure and fix it — the feedback loop that makes deploy non-blind."""
     from aios_core.deploy.deployer import deploy
 

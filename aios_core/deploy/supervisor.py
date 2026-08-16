@@ -1,7 +1,7 @@
 """Supervisor: run a Project as a real container and observe it.
 
-Step 1 of the deploy build (see docs/deploy-supervisor-PLAN.md): spec -> `docker
-run` a container, publish a loopback port, health-check, logs, stop/remove.
+Translate a project spec into a ``docker run`` container, publish a loopback
+port, health-check it, and expose logs plus stop/remove lifecycle operations.
 
 This first cut mounts the source read-only and runs the spec's command in a base
 image (fast to iterate). The apps-infra container hardening (content-addressed

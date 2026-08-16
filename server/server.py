@@ -21,11 +21,11 @@ from server.uploads import save_uploads
 register_runtime_shutdown()
 
 
-def _install_codex_progress_sink() -> None:
-    """Stream live Codex progress (codex.* events) onto the gateway bus so the chat
-    shows what a background Codex job is doing. The CodexJob reader thread calls the
+def _install_pi_progress_sink() -> None:
+    """Stream live Pi progress (pi.* events) onto the gateway bus so the chat
+    shows what a background Pi job is doing. The PiJob reader thread calls the
     sink; we hop back to this loop (bus.publish is not thread-safe) before publishing."""
-    from aios_core.tools.codex_job import set_progress_sink
+    from aios_core.tools.pi_job import set_progress_sink
     from server.gateway.bus import get_gateway_bus
 
     loop = asyncio.get_running_loop()
@@ -43,11 +43,11 @@ async def lifespan(_: FastAPI):
     await lights.start()
     await start_notification_service()
     await start_runs_service()
-    _install_codex_progress_sink()
+    _install_pi_progress_sink()
     try:
         yield
     finally:
-        from aios_core.tools.codex_job import set_progress_sink
+        from aios_core.tools.pi_job import set_progress_sink
 
         set_progress_sink(None)
         await lights.shutdown()

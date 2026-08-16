@@ -27,9 +27,7 @@ from .tools import (
     write,
 )
 from .tools.canvas import show_canvas
-from .tools.codex import codex
-from .tools.codex_subagent import codex_subagent
-from .tools.codex_job import codex_poll, codex_start, codex_stop
+from .tools.pi import pi
 from .deploy.agent_tools import app_logs, app_restart, app_status, app_stop, apps_list
 from .tools.cron import cron
 from .tools.fetch import fetch
@@ -59,11 +57,7 @@ BASE_TOOLS = [
     process_send,
     process_poll,
     process_kill,
-    codex,
-    codex_subagent,
-    codex_start,
-    codex_poll,
-    codex_stop,
+    pi,
     cron,
     show_canvas,
     generative_widget,

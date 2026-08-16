@@ -9,7 +9,7 @@ Two modes:
   reverse proxy, with wildcard DNS ``*.apps.<zone>`` so each app gets
   ``https://<slug>.apps.<zone>``. Requires a VALID Cloudflare API token (the one
   currently in .env returns "Invalid API Token") + cloudflared auth. Blocked until
-  a working token is supplied — see docs/deploy-supervisor-PLAN.md.
+  a working token is supplied.
 
 The manager only runs cloudflared and parses its output; the reverse proxy does the
 per-slug routing behind it.

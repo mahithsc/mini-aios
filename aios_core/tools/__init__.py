@@ -13,11 +13,7 @@ __all__ = [
     "bash",
     "cron",
     "notify",
-    "codex",
-    "codex_subagent",
-    "codex_start",
-    "codex_poll",
-    "codex_stop",
+    "pi",
     "apps_list",
     "app_status",
     "app_logs",
@@ -78,18 +74,10 @@ def __getattr__(name: str):
         from .notify import notify
 
         return notify
-    if name == "codex":
-        from .codex import codex
+    if name == "pi":
+        from .pi import pi
 
-        return codex
-    if name == "codex_subagent":
-        from .codex_subagent import codex_subagent
-
-        return codex_subagent
-    if name in {"codex_start", "codex_poll", "codex_stop"}:
-        from .codex_job import codex_poll, codex_start, codex_stop
-
-        return {"codex_start": codex_start, "codex_poll": codex_poll, "codex_stop": codex_stop}[name]
+        return pi
     if name in {"apps_list", "app_status", "app_logs", "app_restart", "app_stop"}:
         from ..deploy.agent_tools import app_logs, app_restart, app_status, app_stop, apps_list
 

@@ -79,49 +79,28 @@ _BASE_TOOLS_BLOCK = """
     {"process_id": "string", "signal": "string?"},
     process_kill,
 ),
-"codex_start": (
-    "Preferred way to delegate a self-contained coding task to Codex. Starts the "
-    "Codex coding agent as a BACKGROUND job and returns a job_id immediately, so "
-    "long builds never block the turn or hit a timeout. Use for implementing, "
-    "editing, refactoring, or building code in a directory. Codex cannot see this "
-    "chat, so `task` must be complete and self-contained: state the concrete goal, "
-    "name the target files, and include any needed context. `path` is the working "
-    "directory. After starting, call codex_poll to watch progress and get the "
-    "result; you may keep working while it runs.",
-    {"task": "string (self-contained instruction, incl. target files/context)",
-     "model": "string?", "path": "string? (working directory; default '.')"},
-    codex_start,
-),
-"codex_poll": (
-    "Check a Codex job from codex_start. Returns status (running|done|error), new "
-    "activity events since `cursor` (commands run, files changed), the updated "
-    "cursor, and — when done — Codex's final result. Pass `wait` (seconds) to "
-    "block briefly for new progress. Poll until status is not 'running'.",
-    {"job_id": "string", "cursor": "number? (from the previous poll)",
-     "wait": "number? (seconds to block for progress; default 0)"},
-    codex_poll,
-),
-"codex_stop": (
-    "Stop a running Codex job started with codex_start.",
-    {"job_id": "string"},
-    codex_stop,
-),
-"codex_subagent": (
-    "Synchronous variant of codex_start/codex_poll: runs Codex to completion and "
-    "returns its final result in one call (blocks the turn). Prefer the async "
-    "codex_start + codex_poll flow; use this only for short tasks where blocking "
-    "is fine. Same self-contained `task` requirement.",
-    {"task": "string (self-contained instruction, incl. target files/context)",
-     "timeout": "number?", "model": "string?",
-     "path": "string? (working directory; default '.')"},
-    codex_subagent,
-),
-"codex": (
-    "Low-level blocking codex exec (no streaming). Prefer codex_start; use only "
-    "when neither async nor streaming is wanted.",
-    {"task": "string", "timeout": "number?", "model": "string?",
-     "path": "string? (working directory; default '.')"},
-    codex,
+"pi": (
+    "Control background Pi coding-agent jobs through one action-based tool. "
+    "Use action='start' with a complete, self-contained task to begin work and "
+    "receive a job_id. Pi cannot see this chat, so name the concrete goal, target "
+    "files, constraints, and verification steps in `task`; `path` is its working "
+    "directory. Use action='poll' with the job_id and the previous response cursor "
+    "to receive only new activity; `wait` may block briefly. Keep polling until "
+    "status is done, error, or stopped. Use action='steer' with job_id and message "
+    "to redirect an active job, action='stop' to abort it, and action='list' to "
+    "inspect known jobs. Poll responses may set cursor_reset=true when old events "
+    "were evicted; continue from the returned cursor. The optional coding profile "
+    "allows file and shell changes; read_only limits Pi to inspection tools.",
+    {"action": "string (start|poll|steer|stop|list)",
+     "task": "string? (required for start; include target files/context)",
+     "job_id": "string? (required for poll, steer, and stop)",
+     "path": "string? (start working directory; default '.')",
+     "message": "string? (required for steer)",
+     "cursor": "number? (poll cursor from the previous response)",
+     "wait": "number? (poll wait in seconds; default 0)",
+     "model": "string?", "provider": "string?",
+     "thinking_level": "string?", "profile": "string? (coding|read_only)"},
+    pi,
 ),
 "apps_list": (
     "List the apps you've deployed (slug, status, whether the container is running). "
@@ -327,14 +306,14 @@ def build_agent_prompt(
             "writing_code",
             """
             A big part of your job is writing code.
-            Use `codex_start` to delegate coding tasks — implementing, editing, refactoring, or building apps — to the Codex coding agent; it runs in the background, so poll it with `codex_poll` for progress and the result. Hand it a clear, self-contained task that names the target files and includes the context it needs (it cannot see this chat).
-            Do simple, quick edits yourself with the file tools; reserve `codex_start` for real coding work rather than trivial one-liners.
+            Use `pi(action="start")` to delegate coding tasks — implementing, editing, refactoring, or building apps — to the Pi coding agent. It runs in the background, so retain its job_id and call `pi(action="poll")` with the latest cursor for progress and the result. Hand it a clear, self-contained task that names the target files, includes the context it needs, and says how to verify the result; Pi cannot see this chat. Keep polling until its status is done, error, or stopped. If the user's direction changes while the job is active, use `pi(action="steer")`; use `pi(action="stop")` when its work is no longer wanted.
+            Do simple, quick edits yourself with the file tools; reserve Pi for substantial coding work rather than trivial one-liners.
 
-            Building runnable apps — AUTO-DEPLOY: when the user EXPLICITLY asks you to build an app that runs (a website, web server, dashboard, API, or similar runnable app), instruct Codex in the very same task to DEPLOY it after building — Codex has a `deploy` tool that builds and runs the app in a container and returns a live URL. Also tell Codex to create a `project.json` (the run command + port) that deploy needs. Deliver the running app and its URL; the user should NOT have to separately ask you to start or run it.
-            CRITICAL — the deploy runtime is PYTHON-ONLY (a `python:3.12-slim` container with pip; NO Node/npm). Only build things it can actually run: either a static site (plain HTML/CSS/JS, no build step) served by a tiny Python stdlib server, or a Python app (Flask / FastAPI / stdlib `http.server`). Do NOT use React, Vue, Angular, Next, or anything that needs `npm`, a build step, or Node — Codex cannot scaffold those reliably in non-interactive mode and the runtime cannot run them. E.g. a weather app or dashboard should be plain HTML + vanilla JS calling the API client-side, served by a small Python server; `project.json` runs that Python server on a port.
+            Building runnable apps — AUTO-DEPLOY: when the user EXPLICITLY asks you to build an app that runs (a website, web server, dashboard, API, or similar runnable app), instruct Pi in the very same task to DEPLOY it after building. Pi has a `deploy` tool that builds and runs the app in a container and returns a live URL. Tell Pi to create a `project.json` (the run command + port), call `deploy`, inspect returned logs on error, fix the app, and retry. Deliver the running app and its URL; the user should NOT have to separately ask you to start or run it.
+            CRITICAL — the deploy runtime is PYTHON-ONLY (a `python:3.12-slim` container with pip; NO Node/npm). Only build things it can actually run: either a static site (plain HTML/CSS/JS, no build step) served by a tiny Python stdlib server, or a Python app (Flask / FastAPI / stdlib `http.server`). Do NOT use React, Vue, Angular, Next, or anything that needs `npm`, a build step, or Node because the runtime cannot run them. E.g. a weather app or dashboard should be plain HTML + vanilla JS calling the API client-side, served by a small Python server; `project.json` runs that Python server on a port.
             Only auto-deploy when the user explicitly asked to build an app. For ordinary code edits, snippets, scripts, one-off programs, or library/package work, do NOT deploy.
 
-            When coding, explain the intended change before delegating, and summarize the outcome after Codex finishes — including the live URL when you built an app.
+            When coding, explain the intended change before delegating, and summarize the outcome after Pi finishes — including the live URL when you built an app.
             """,
         ),
         _section(
@@ -380,7 +359,7 @@ def build_agent_prompt(
                 Default chat files directory: {current_chat_files_dir}
                 Default chat artifacts directory: {current_chat_artifacts_dir}
                 {artifact_url_line}
-                Relative paths for file tools, search tools, shell commands, PTY sessions, and Codex default to the chat files directory.
+                Relative paths for file tools, search tools, shell commands, PTY sessions, and Pi default to the chat files directory.
                 Use explicit workspace-relative paths like `session/...` or `runs/...` only when you intentionally want to work outside the chat files directory.
                 """,
             )

@@ -1,12 +1,12 @@
-"""The deploy action — the thing Codex invokes (via MCP, wired in 5b).
+"""Deployment core used by coding-agent and main-agent adapters.
 
-Given a project directory that Codex authored (code + ``project.json``), build and
+Given a project directory that a coding agent authored (code + ``project.json``), build and
 run it as a service, health-check it, and return STRUCTURED FEEDBACK the caller can
-act on: on success the URL; on failure the error + container logs so Codex can fix
+act on: on success the URL; on failure the error + container logs so an agent can fix
 and re-deploy. It never raises for expected failures — it returns ``status: error``
 so the feedback loop keeps going.
 
-``project.json`` (Codex writes it):
+``project.json`` (the coding agent writes it):
     {"run": ["python", "app.py"], "port": 8000,
      "image": "python:3.12-slim", "env": {}, "prepare": []}
 """
@@ -58,7 +58,7 @@ def deploy(
 
     Returns one of:
       {status: running, url, host_port, health_ok, response_sample}
-      {status: error, error, [url], [logs]}   ← Codex reads logs to fix and retry
+      {status: error, error, [url], [logs]}   ← caller reads logs to fix and retry
     """
     source_dir = Path(source_dir)
     supervisor = supervisor or Supervisor()

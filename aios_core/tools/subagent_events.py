@@ -1,7 +1,7 @@
 """Shared streaming-event protocol for subagent-style tools.
 
 A subagent-style tool (the in-process ``subagent`` worker, or an external
-delegate like Codex) blocks until its work finishes, but streams the child's
+delegate to a coding worker) blocks until its work finishes, but streams the child's
 tool activity to the parent harness so the UI can render nested progress live.
 Both kinds emit the same ``SubagentStreamEvent`` shape, keyed by the parent
 tool call, so the frontend consumer treats them identically.

@@ -1,3 +1,7 @@
+FROM node:22.19.0-bookworm-slim AS pi-runtime
+
+RUN npm install --global --ignore-scripts @earendil-works/pi-coding-agent@0.84.2
+
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 ARG AIOS_VERSION=0.1.0
@@ -13,6 +17,11 @@ LABEL org.opencontainers.image.source="https://github.com/mahithsc/mini-aios" \
       io.mini-aios.db-schema="1"
 
 WORKDIR /app
+
+# Pi is an external coding-agent runtime. Copy the pinned Node installation and
+# globally installed Pi CLI from the build stage without adding an apt repository
+# or allowing either dependency to float between image builds.
+COPY --from=pi-runtime /usr/local/ /usr/local/
 
 ENV APP_ENV=production \
     AIOS_ENV=production \

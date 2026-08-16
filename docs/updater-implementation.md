@@ -80,7 +80,7 @@ launchctl bootout gui/$(id -u)/com.mahithsc.mini-aios-updater
 ## Build and test on GitHub
 
 The `Updater build and integration test` workflow runs on pull requests, pushes
-to `main` or `codex/**` branches, or manual dispatch. It does not publish a
+to `main` or `migration/**` branches, or manual dispatch. It does not publish a
 release and requires no signing or registry secrets. It:
 
 - runs the Python and Go test suites plus `go vet`;

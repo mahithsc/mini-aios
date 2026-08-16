@@ -3,7 +3,7 @@
 This makes a REAL round-trip over the public internet: a local server is exposed
 through a cloudflared quick tunnel and fetched from its public URL. It's gated
 behind DEPLOY_TUNNEL_TEST=1 (needs cloudflared + network) so the fast suite stays
-deterministic and we don't hammer trycloudflare — same pattern as the codex live
+deterministic and we don't hammer trycloudflare — same pattern as other live
 test. It is NOT weakened: when it runs, it asserts the real page is served publicly.
 """
 
