@@ -1,205 +1,336 @@
-"""Async Codex job (codex_start / codex_poll / codex_stop) tests.
-
-Mocked subprocess, no network: a fake Codex process streams REAL captured JSONL
-(tests/fixtures/codex_jsonl) into a background CodexJob, and we assert the
-start -> poll lifecycle, event streaming, stop, error, and validation paths.
-"""
+"""Interactive app-server Codex job tests (mocked, deterministic)."""
 
 from __future__ import annotations
 
+import json
+import queue
 import threading
 import time
-from pathlib import Path
 
 import pytest
 
 from aios_core.tools.codex_job import CodexJobManager
 
-FIXTURES = Path(__file__).parent / "fixtures" / "codex_jsonl"
+
+class _QueueStream:
+    def __init__(self) -> None:
+        self.lines: queue.Queue[str | None] = queue.Queue()
+
+    def push(self, message: dict) -> None:
+        self.lines.put(json.dumps(message) + "\n")
+
+    def close(self) -> None:
+        self.lines.put(None)
+
+    def readline(self) -> str:
+        line = self.lines.get()
+        return "" if line is None else line
 
 
-class _Stdout:
-    def __init__(self, lines):
-        self._lines = list(lines)
+class _FakeStdin:
+    def __init__(self, process: _FakeAppServer) -> None:
+        self.process = process
 
-    def readline(self):
-        return self._lines.pop(0) if self._lines else ""
+    def write(self, value: str) -> int:
+        for line in value.splitlines():
+            if line.strip():
+                self.process.receive(json.loads(line))
+        return len(value)
 
-
-class _BlockingStdout:
-    def __init__(self, released: threading.Event):
-        self._released = released
-
-    def readline(self):
-        self._released.wait()
-        return ""
+    def flush(self) -> None:
+        pass
 
 
-class _Stderr:
-    def __init__(self, text=""):
-        self._text = text
-
-    def read(self):
-        return self._text
-
-
-class _FakePopen:
-    def __init__(self, *, lines=None, returncode=0, stderr_text="", block=None):
-        self.stdout = _BlockingStdout(block) if block is not None else _Stdout(lines or [])
-        self.stderr = _Stderr(stderr_text)
-        self._rc = returncode
-        self._block = block
+class _FakeAppServer:
+    def __init__(
+        self, *, asks_question: bool = False, fail_initialize: bool = False
+    ) -> None:
+        self.stdout = _QueueStream()
+        self.stderr = _QueueStream()
+        self.stdin = _FakeStdin(self)
+        self.asks_question = asks_question
+        self.fail_initialize = fail_initialize
+        self.returncode: int | None = None
         self.killed = False
+        self.received: list[dict] = []
+        self.answer: dict | None = None
+        self._done = threading.Event()
+
+    def receive(self, message: dict) -> None:
+        self.received.append(message)
+        method = message.get("method")
+        request_id = message.get("id")
+        if method == "initialize":
+            if self.fail_initialize:
+                self.stdout.push(
+                    {"id": request_id, "error": {"code": -1, "message": "boom"}}
+                )
+            else:
+                self.stdout.push({"id": request_id, "result": {"userAgent": "fake"}})
+        elif method == "thread/start":
+            self.stdout.push(
+                {
+                    "id": request_id,
+                    "result": {"thread": {"id": "thread-1"}, "model": "fake"},
+                }
+            )
+        elif method == "turn/start":
+            self.stdout.push({"id": request_id, "result": {"turn": {"id": "turn-1"}}})
+            self.stdout.push(
+                {
+                    "method": "item/started",
+                    "params": {
+                        "threadId": "thread-1",
+                        "turnId": "turn-1",
+                        "item": {
+                            "id": "cmd-1",
+                            "type": "commandExecution",
+                            "command": "rg --files",
+                            "status": "inProgress",
+                        },
+                    },
+                }
+            )
+            self.stdout.push(
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": "thread-1",
+                        "turnId": "turn-1",
+                        "item": {
+                            "id": "cmd-1",
+                            "type": "commandExecution",
+                            "command": "rg --files",
+                            "aggregatedOutput": "a.py\n",
+                            "exitCode": 0,
+                            "status": "completed",
+                        },
+                    },
+                }
+            )
+            if self.asks_question:
+                self.stdout.push(
+                    {
+                        "id": "question-1",
+                        "method": "item/tool/requestUserInput",
+                        "params": {
+                            "threadId": "thread-1",
+                            "turnId": "turn-1",
+                            "itemId": "ask-item-1",
+                            "isBlocking": True,
+                            "questions": [
+                                {
+                                    "id": "framework",
+                                    "header": "Framework",
+                                    "question": "Which framework?",
+                                    "isOther": True,
+                                    "isSecret": False,
+                                    "options": [
+                                        {
+                                            "label": "FastAPI",
+                                            "description": "Python API",
+                                        },
+                                        {"label": "Flask", "description": "Small app"},
+                                    ],
+                                }
+                            ],
+                        },
+                    }
+                )
+            else:
+                self._complete_turn()
+        elif request_id == "question-1" and "result" in message:
+            self.answer = message["result"]
+            self._complete_turn()
+        elif method == "turn/interrupt":
+            self.stdout.push({"id": request_id, "result": {}})
+
+    def _complete_turn(self) -> None:
+        message = {"id": "msg-1", "type": "agentMessage", "text": "Implemented it."}
+        self.stdout.push(
+            {
+                "method": "item/completed",
+                "params": {"threadId": "thread-1", "turnId": "turn-1", "item": message},
+            }
+        )
+        self.stdout.push(
+            {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turn": {
+                        "id": "turn-1",
+                        "status": "completed",
+                        "items": [message],
+                        "error": None,
+                    },
+                },
+            }
+        )
 
     def poll(self):
-        return self._rc if self.killed else None
+        return self.returncode
 
     def wait(self):
-        return self._rc
+        self._done.wait(timeout=2)
+        return self.returncode if self.returncode is not None else 0
+
+    def terminate(self):
+        self.killed = True
+        self.returncode = 0
+        self.stdout.close()
+        self.stderr.close()
+        self._done.set()
 
     def kill(self):
-        self.killed = True
-        if self._block is not None:
-            self._block.set()
+        self.terminate()
 
 
-def _patch(monkeypatch, popen):
-    monkeypatch.setattr("aios_core.tools.codex_job.subprocess.Popen", lambda *a, **k: popen)
+def _patch(monkeypatch, process: _FakeAppServer):
+    monkeypatch.setattr(
+        "aios_core.tools.codex_job.subprocess.Popen", lambda *args, **kwargs: process
+    )
 
 
 @pytest.fixture
 def valid_path(tmp_path, monkeypatch):
-    monkeypatch.setattr("aios_core.tools.codex_job.resolve_chat_files_path", lambda p: tmp_path)
+    monkeypatch.setattr(
+        "aios_core.tools.codex_job.resolve_chat_files_path", lambda path: tmp_path
+    )
     return tmp_path
 
 
-def _wait_done(mgr, job_id, timeout=5.0):
-    end = time.time() + timeout
-    while time.time() < end:
-        res = mgr.poll(job_id, wait=0.5)
-        if res.get("status") != "running":
-            return res
-    return mgr.poll(job_id)
+def _wait_for(
+    mgr: CodexJobManager, job_id: str, status: str, timeout: float = 3
+) -> dict:
+    deadline = time.time() + timeout
+    result = mgr.poll(job_id)
+    while time.time() < deadline and result.get("status") != status:
+        time.sleep(0.01)
+        result = mgr.poll(job_id)
+    return result
 
 
-def _fixture_lines(name):
-    return [l + "\n" for l in (FIXTURES / name).read_text().splitlines() if l.strip()]
-
-
-def test_start_returns_job_id_immediately(valid_path, monkeypatch):
-    _patch(monkeypatch, _FakePopen(lines=_fixture_lines("command_read.jsonl")))
+def test_app_server_happy_path_streams_and_completes(valid_path, monkeypatch):
+    process = _FakeAppServer()
+    _patch(monkeypatch, process)
     mgr = CodexJobManager()
-    started = mgr.start("read the file", path=".")
-    assert started.get("status") == "running"
-    assert "job_id" in started
+
+    started = mgr.start("implement it", path=".")
+    result = _wait_for(mgr, started["job_id"], "done")
+
+    assert result["status"] == "done"
+    assert result["thread_id"] == "thread-1"
+    assert result["turn_id"] == "turn-1"
+    assert result["result"] == "Implemented it."
+    assert [event["kind"] for event in result["events"]] == ["tool_start", "tool_end"]
+    assert process.stdin is not None
+    assert any(message.get("method") == "initialize" for message in process.received)
+    assert any(message.get("method") == "thread/start" for message in process.received)
+    assert any(message.get("method") == "turn/start" for message in process.received)
 
 
-def test_poll_reaches_done_with_result_and_events(valid_path, monkeypatch):
-    _patch(monkeypatch, _FakePopen(lines=_fixture_lines("command_read.jsonl"), returncode=0))
+def test_question_pauses_answer_resumes_same_turn(valid_path, monkeypatch):
+    process = _FakeAppServer(asks_question=True)
+    _patch(monkeypatch, process)
     mgr = CodexJobManager()
-    started = mgr.start("read the file", path=".")
-    res = _wait_done(mgr, started["job_id"])
-    assert res["status"] == "done"
-    assert res["result"] and res["result"].strip()
-    kinds = [e["kind"] for e in res["events"]]
-    assert "tool_start" in kinds and "tool_end" in kinds  # command activity streamed
+    started = mgr.start("build it", path=".", session_id="chat-1")
+
+    paused = _wait_for(mgr, started["job_id"], "awaiting_input")
+    assert paused["error"] is None
+    assert paused["pending_input"]["questions"][0]["id"] == "framework"
+    assert paused["events"][-1]["kind"] == "input_requested"
+
+    answered = mgr.answer(started["job_id"], {"framework": "FastAPI"})
+    assert answered["status"] in {"running", "done"}
+    result = _wait_for(mgr, started["job_id"], "done")
+    assert result["result"] == "Implemented it."
+    assert process.answer == {"answers": {"framework": {"answers": ["FastAPI"]}}}
 
 
-def test_poll_cursor_advances(valid_path, monkeypatch):
-    _patch(monkeypatch, _FakePopen(lines=_fixture_lines("command_read.jsonl"), returncode=0))
+def test_answer_requires_all_questions(valid_path, monkeypatch):
+    process = _FakeAppServer(asks_question=True)
+    _patch(monkeypatch, process)
     mgr = CodexJobManager()
-    started = mgr.start("x", path=".")
-    final = _wait_done(mgr, started["job_id"])
-    # Polling again from the final cursor yields no further events.
-    again = mgr.poll(started["job_id"], cursor=final["cursor"])
-    assert again["events"] == []
+    started = mgr.start("build it", path=".")
+    _wait_for(mgr, started["job_id"], "awaiting_input")
+    assert "missing answers" in mgr.answer(started["job_id"], {"other": "x"})["error"]
 
 
-def test_nonzero_exit_becomes_error(valid_path, monkeypatch):
-    _patch(monkeypatch, _FakePopen(lines=[], returncode=1, stderr_text="boom"))
+def test_initialize_error_is_preserved(valid_path, monkeypatch):
+    process = _FakeAppServer(fail_initialize=True)
+    _patch(monkeypatch, process)
     mgr = CodexJobManager()
     started = mgr.start("fail", path=".")
-    res = _wait_done(mgr, started["job_id"])
-    assert res["status"] == "error"
-    assert "boom" in res["error"]
+    result = _wait_for(mgr, started["job_id"], "error")
+    assert "boom" in result["error"]
 
 
-def test_stop_kills_running_job(valid_path, monkeypatch):
-    block = threading.Event()
-    popen = _FakePopen(block=block)
-    _patch(monkeypatch, popen)
+def test_stop_interrupts_and_cancels(valid_path, monkeypatch):
+    process = _FakeAppServer(asks_question=True)
+    _patch(monkeypatch, process)
     mgr = CodexJobManager()
-    started = mgr.start("hang", path=".")
-    time.sleep(0.2)
-    mgr.stop(started["job_id"])
-    assert popen.killed is True
-    res = _wait_done(mgr, started["job_id"])
-    assert res["status"] == "error"
+    started = mgr.start("wait", path=".")
+    _wait_for(mgr, started["job_id"], "awaiting_input")
+    result = mgr.stop(started["job_id"])
+    assert result["status"] == "cancelled"
+    assert process.killed is True
 
 
-def test_start_validation(valid_path):
+def test_progress_sink_emits_input_and_completion(valid_path, monkeypatch):
+    from aios_core.tools import codex_job as module
+
+    process = _FakeAppServer(asks_question=True)
+    _patch(monkeypatch, process)
+    captured: list[tuple[str, str, dict]] = []
+    module.set_progress_sink(
+        lambda session_id, kind, payload: captured.append((session_id, kind, payload))
+    )
+    try:
+        mgr = CodexJobManager()
+        started = mgr.start("build", path=".", session_id="chat-1")
+        _wait_for(mgr, started["job_id"], "awaiting_input")
+        mgr.answer(started["job_id"], {"framework": "FastAPI"})
+        _wait_for(mgr, started["job_id"], "done")
+    finally:
+        module.set_progress_sink(None)
+    kinds = [kind for _, kind, _ in captured]
+    assert "codex.started" in kinds
+    assert "codex.input.requested" in kinds
+    assert "codex.input.resolved" in kinds
+    assert "codex.completed" in kinds
+    assert all(session_id == "chat-1" for session_id, _, _ in captured)
+
+
+def test_validation_and_unknown_job(valid_path):
     mgr = CodexJobManager()
     assert "error" in mgr.start("", path=".")
     assert "error" in mgr.start("x", path="")
+    assert "error" in mgr.poll("missing")
+    assert "error" in mgr.answer("missing", {"x": "y"})
+
+
+def test_rejects_concurrent_jobs_in_same_workdir(valid_path, monkeypatch):
+    process = _FakeAppServer(asks_question=True)
+    _patch(monkeypatch, process)
+    mgr = CodexJobManager()
+    first = mgr.start("first", path=".")
+    _wait_for(mgr, first["job_id"], "awaiting_input")
+    second = mgr.start("second", path=".")
+    assert "already editing" in second["error"]
 
 
 def test_missing_path(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "aios_core.tools.codex_job.resolve_chat_files_path", lambda p: tmp_path / "nope"
+        "aios_core.tools.codex_job.resolve_chat_files_path",
+        lambda path: tmp_path / "missing",
     )
-    mgr = CodexJobManager()
-    assert "does not exist" in mgr.start("x", path="nope")["error"]
+    assert "does not exist" in CodexJobManager().start("x", path=".")["error"]
 
 
-def test_poll_unknown_job():
-    assert "error" in CodexJobManager().poll("does-not-exist")
-
-
-def test_progress_sink_emits_codex_events(valid_path, monkeypatch):
-    import time as _time
-
-    from aios_core.tools import codex_job as cj
-
-    _patch(monkeypatch, _FakePopen(lines=_fixture_lines("command_read.jsonl"), returncode=0))
-    captured: list[tuple[str, str, dict]] = []
-    cj.set_progress_sink(lambda sid, t, p: captured.append((sid, t, p)))
-    try:
-        mgr = CodexJobManager()
-        started = mgr.start("read the file", path=".", session_id="chatX", parent_tool_call_id="tc1")
-        _wait_done(mgr, started["job_id"])
-        _time.sleep(0.2)  # let the terminal codex.completed emit land
-    finally:
-        cj.set_progress_sink(None)
-
-    types = [t for _, t, _ in captured]
-    assert "codex.started" in types
-    assert "codex.progress" in types
-    assert "codex.completed" in types
-    assert all(sid == "chatX" for sid, _, _ in captured)  # keyed to the chat
-    assert all("job_id" in p for _, _, p in captured)
-
-
-def test_no_sink_or_no_session_is_silent(valid_path, monkeypatch):
-    # No session_id -> no progress emitted even with a sink installed.
-    from aios_core.tools import codex_job as cj
-
-    _patch(monkeypatch, _FakePopen(lines=_fixture_lines("command_read.jsonl"), returncode=0))
-    captured: list = []
-    cj.set_progress_sink(lambda sid, t, p: captured.append(t))
-    try:
-        mgr = CodexJobManager()
-        started = mgr.start("x", path=".")  # no session_id
-        _wait_done(mgr, started["job_id"])
-    finally:
-        cj.set_progress_sink(None)
-    assert captured == []
-
-
-def test_codex_missing_binary(valid_path, monkeypatch):
-    def _raise(*a, **k):
-        raise FileNotFoundError()
-
-    monkeypatch.setattr("aios_core.tools.codex_job.subprocess.Popen", _raise)
-    res = CodexJobManager().start("x", path=".")
-    assert "error" in res
-    assert "not installed" in res["error"] or "not on PATH" in res["error"]
+def test_missing_binary(valid_path, monkeypatch):
+    monkeypatch.setattr(
+        "aios_core.tools.codex_job.subprocess.Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError()),
+    )
+    assert "not installed" in CodexJobManager().start("x", path=".")["error"]

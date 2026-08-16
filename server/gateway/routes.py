@@ -18,6 +18,8 @@ from aios_core.sessions import (
     update_chat_status,
     update_chat_title,
 )
+from aios_core.tools.codex_job import CodexJob
+from aios_core.tools.codex_job import _manager as codex_job_manager
 from server.execution.runtime import get_runs_service
 from server.types.chat import AssistantMessage, ChatMetadata, UserMessage
 from server.types.run import RunCreateRequest
@@ -25,6 +27,7 @@ from server.updater import require_accepting_work
 
 from .bus import get_gateway_bus
 from .schemas import (
+    CodexAnswers,
     EventOut,
     MessageCreate,
     MessageOut,
@@ -244,3 +247,41 @@ async def interrupt_session(session_id: str) -> dict[str, Any]:
 
     stopped = await runs_service.stop_run(target.runId)
     return {"status": "interrupted" if stopped else "idle", "hermes": None}
+
+
+def _codex_job_for_session(session_id: str, job_id: str) -> CodexJob:
+    _get_chat_or_404(session_id)
+    job = codex_job_manager.get(job_id)
+    if job is None or job.session_id != session_id:
+        raise HTTPException(
+            status_code=404, detail="Codex job not found for this session"
+        )
+    return job
+
+
+@router.get("/sessions/{session_id}/codex-jobs/{job_id}")
+async def get_codex_job(session_id: str, job_id: str) -> dict[str, Any]:
+    return _codex_job_for_session(session_id, job_id).poll()
+
+
+@router.get("/sessions/{session_id}/codex-jobs")
+async def list_codex_jobs(session_id: str) -> list[dict[str, Any]]:
+    _get_chat_or_404(session_id)
+    return codex_job_manager.list_for_session(session_id)
+
+
+@router.post("/sessions/{session_id}/codex-jobs/{job_id}/answers")
+async def answer_codex_job(
+    session_id: str, job_id: str, body: CodexAnswers
+) -> dict[str, Any]:
+    result = _codex_job_for_session(session_id, job_id).answer(body.answers)
+    if "error" in result:
+        raise HTTPException(status_code=409, detail=result["error"])
+    return result
+
+
+@router.post("/sessions/{session_id}/codex-jobs/{job_id}/cancel")
+async def cancel_codex_job(session_id: str, job_id: str) -> dict[str, Any]:
+    job = _codex_job_for_session(session_id, job_id)
+    job.stop()
+    return {"job_id": job_id, "status": job.status}

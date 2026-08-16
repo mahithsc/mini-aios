@@ -1,5 +1,9 @@
 # Deploy Supervisor — build plan & loop spec
 
+> **Status:** superseded for production deployment by
+> [`cloud-deploy-implementation-PLAN.md`](cloud-deploy-implementation-PLAN.md).
+> This document remains the record of the original local Docker supervisor work.
+
 This is the north star for the autonomous build loop. Each iteration: read this,
 run the e2e suite, build the next failing piece, update the Progress Log, commit.
 
@@ -29,7 +33,7 @@ and log why in the Progress Log — do not fake it.
   Reconciler auto-restarts `status=running` projects on boot.
 - **Public exposure**: ONE cloudflared tunnel per box + a reverse proxy that maps
   `<slug>.apps.<zone>` → the container's loopback port. Supervisor adds/removes the route on
-  start/stop. Zone = `trywink.io` (Cloudflare). (Security TODO: move CF token to cloud service.)
+  start/stop. Zone = `winkapiserver.org` (Cloudflare). (Security TODO: move CF token to cloud service.)
 - **One subagent**: async Codex job (`codex_start`/`codex_poll`, already built) given a
   `deploy` MCP tool that calls the Supervisor and returns real feedback (build errors, boot
   logs, health, url) so Codex iterates in-session until healthy.
@@ -44,7 +48,7 @@ and log why in the Progress Log — do not fake it.
   package does not import it.
 
 ## Env / secrets (gitignored .env; rotate after)
-- Box `.env`: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE=trywink.io`.
+- Box `.env`: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE=winkapiserver.org`.
 - Cloud `.env`: AIOS_CLOUD_*, DATABASE_URL, SUPABASE_*, CLOUDFLARE_*.
 - Requires Docker (Docker Desktop present on the test machine) + cloudflared.
 
@@ -65,13 +69,13 @@ and log why in the Progress Log — do not fake it.
       - [~] 4b **cloudflared tunnel** — `tunnel.py` built. Quick-tunnel path (no auth) works
             (manual curl = 200), but a FRESH trycloudflare subdomain is slow/flaky to become
             DNS-resolvable (30-90s+) → opt-in live test only (`DEPLOY_TUNNEL_TEST=1`), not the
-            reliable suite. Named-tunnel + stable `*.apps.trywink.io` DNS avoids this and is the
+            reliable suite. Named-tunnel + stable `*.apps.winkapiserver.org` DNS avoids this and is the
             durable path — but it is **⛔ BLOCKED**:
             ### 🔴 USER ACTION NEEDED
             The provided `CLOUDFLARE_API_TOKEN` is **invalid** (`/tokens/verify` → "Invalid API
             Token"; it's 53 chars with a `cfat_` prefix — real CF tokens are 40 chars, no prefix).
             Reliable public exposure needs a **valid CF API token** (scopes: Zone→DNS→Edit +
-            Account→Cloudflare Tunnel→Edit for zone `trywink.io`) so we can create the named
+            Account→Cloudflare Tunnel→Edit for zone `winkapiserver.org`) so we can create the named
             tunnel + wildcard DNS. Until then, public URL e2e stays blocked; local URLs work.
 - [~] 5. **`deploy` tool Codex invokes** — feedback loop. Split:
       - [x] 5a **deploy core** — ✅ DONE — `deployer.py::deploy(slug, source_dir)`: reads
@@ -95,7 +99,7 @@ and log why in the Progress Log — do not fake it.
 ## E2E success criteria (the definition of done)
 All tests in `tests/test_deploy_e2e.py` pass with Docker+cloudflared available (they skip only
 when the runtime is genuinely absent, never to dodge a real failure). The full e2e must show a
-Codex-authored app answering a real HTTP request at its public `https://<slug>.apps.trywink.io/`.
+Codex-authored app answering a real HTTP request at its public `https://<slug>.apps.winkapiserver.org/`.
 
 ## Progress Log (append newest first)
 - Container hardening (partial) ✅ — Supervisor now runs containers with `--cap-drop ALL`,
@@ -137,18 +141,18 @@ Codex-authored app answering a real HTTP request at its public `https://<slug>.a
 - Step 4b PARTIAL + BLOCKER 🔴 — `tunnel.py` built (quick-tunnel mode). Diagnosed the live-test
   failure honestly: fresh trycloudflare subdomains are slow to resolve via DNS (`[Errno 8]
   nodename nor servname`), so quick tunnels are flaky → opt-in only. The RELIABLE path (named
-  tunnel + stable `*.apps.trywink.io`) is BLOCKED on a valid Cloudflare token (provided one is
+  tunnel + stable `*.apps.winkapiserver.org`) is BLOCKED on a valid Cloudflare token (provided one is
   invalid — see USER ACTION above). Pivoting the loop to the UNBLOCKED core: step 5 (deploy MCP
   tool) + step 7 full loop with LOCAL urls (public URL grafts in once a valid token arrives).
 - Step 4a DONE ✅ — reverse proxy (`proxy.py`): Host-based slug routing, register/unregister,
   404/502 handling; integration e2e proves a real container is reachable THROUGH the proxy.
   10 deploy tests pass vs live Docker. Next: 4b — front the proxy with ONE cloudflared tunnel +
-  DNS `*.apps.trywink.io`, wire Supervisor.start to register the route + return the public URL,
+  DNS `*.apps.winkapiserver.org`, wire Supervisor.start to register the route + return the public URL,
   and a real public-GET reachability test. CF token/account/zone in box .env.
 - Steps 2 & 3 DONE ✅ — durable `ProjectStore` (JSON, atomic) + `reconcile()`; 6 deploy tests
   pass vs live Docker (store roundtrip/persist, supervisor, reconciler restarts a killed
   container and re-serves). Next: step 4 (public exposure — cloudflared tunnel + reverse proxy
-  → https://<slug>.apps.trywink.io). CF creds are in box .env. Consider a per-app quick-tunnel
+  → https://<slug>.apps.winkapiserver.org). CF creds are in box .env. Consider a per-app quick-tunnel
   for the first reachability test before wiring the proxy.
 - Step 1 DONE ✅ — Supervisor core validated vs LIVE Docker (3 e2e passed, 8.7s): real
   container serves real HTTP, stop/restart/failure-detection honest. Docker Desktop must be

@@ -40,7 +40,7 @@ class RouteRegistry:
 
 
 def slug_from_host(host: str, apps_domain: str) -> str | None:
-    """`one.apps.trywink.io[:port]` with apps_domain=`apps.trywink.io` -> `one`."""
+    """`one.apps.winkapiserver.org[:port]` with apps_domain=`apps.winkapiserver.org` -> `one`."""
     host = (host or "").split(":")[0].strip().lower()
     suffix = "." + apps_domain.strip().lower()
     if not host.endswith(suffix):
@@ -105,7 +105,7 @@ def _make_handler(registry: RouteRegistry, apps_domain: str):
 
 
 class ReverseProxy:
-    def __init__(self, apps_domain: str = "apps.trywink.io", port: int = 0) -> None:
+    def __init__(self, apps_domain: str = "apps.winkapiserver.org", port: int = 0) -> None:
         self.apps_domain = apps_domain
         self.registry = RouteRegistry()
         self._server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler(self.registry, apps_domain))

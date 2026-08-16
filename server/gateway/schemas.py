@@ -50,6 +50,10 @@ class MessageSubmitOut(BaseModel):
     hermes: dict[str, Any] | None = None
 
 
+class CodexAnswers(BaseModel):
+    answers: dict[str, Any] = Field(min_length=1)
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 

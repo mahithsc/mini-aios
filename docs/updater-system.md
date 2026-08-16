@@ -128,7 +128,7 @@ Compose uses `image: ${AIOS_IMAGE}` and never uses `build:` on an appliance.
 
 ## 5. Trust and release metadata
 
-Use The Update Framework (TUF) metadata for production. TUF supplies signed targets, key rotation, expiry, rollback protection, and protection against a frozen update feed. HTTPS remains required, but is not the root of release trust. The concrete source pipeline uses the public repository at `github.com/mahithsc/mini-aios`, public image bytes at `ghcr.io/mahithsc/mini-aios`, signed metadata at `updates.trywink.io`, and rollout assignments from `computer.trywink.io`.
+Use The Update Framework (TUF) metadata for production. TUF supplies signed targets, key rotation, expiry, rollback protection, and protection against a frozen update feed. HTTPS remains required, but is not the root of release trust. The concrete source pipeline uses the public repository at `github.com/mahithsc/mini-aios`, public image bytes at `ghcr.io/mahithsc/mini-aios`, signed metadata at `updates.winkapiserver.org`, and rollout assignments from `computer.winkapiserver.org`.
 
 The trusted TUF root is installed with the appliance image. Root-key changes require the normal TUF threshold/rotation process. Online release automation signs delegated channel targets; offline root keys do not live in CI.
 

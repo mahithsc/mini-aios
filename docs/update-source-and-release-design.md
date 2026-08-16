@@ -13,8 +13,8 @@ Use four deliberately separate sources:
 |---|---|---|
 | Source code | `github.com/mahithsc/mini-aios` | Input to the build, not directly trusted by devices |
 | Image bytes | `ghcr.io/mahithsc/mini-aios@sha256:<digest>` | Untrusted transport; digest is verified |
-| Release authorization | `https://updates.trywink.io/tuf/` | Trusted only after TUF signature verification |
-| Device rollout assignment | `https://computer.trywink.io/v1/device-updates/assignment` | Authenticated policy/eligibility signal, not release trust |
+| Release authorization | `https://updates.winkapiserver.org/tuf/` | Trusted only after TUF signature verification |
+| Device rollout assignment | `https://computer.winkapiserver.org/v1/device-updates/assignment` | Authenticated policy/eligibility signal, not release trust |
 
 In plain terms, updates originate from a reviewed Git commit, are built once by GitHub Actions, stored in GitHub Container Registry (GHCR), authorized by signed TUF metadata, and offered gradually by the AIOS control plane.
 
@@ -27,9 +27,9 @@ flowchart LR
     GHCR --> Promote["Protected release promotion"]
     Provenance --> Promote
     Promote --> TUF["Signed TUF release manifest"]
-    TUF --> R2["updates.trywink.io"]
+    TUF --> R2["updates.winkapiserver.org"]
     R2 --> Device["Host updater"]
-    Cloud["computer.trywink.io assignment API"] --> Device
+    Cloud["computer.winkapiserver.org assignment API"] --> Device
     GHCR --> Device
 ```
 
@@ -63,7 +63,7 @@ Use `tuf-on-ci` to create and maintain the repository rather than implementing s
 
 ### The control plane schedules, but does not sign, normal releases
 
-`computer.trywink.io` already serves the box's cloud pairing and relay flow. Add the assignment and event APIs there. It decides whether a device is in the current rollout cohort, maintenance window, and channel.
+`computer.winkapiserver.org` already serves the box's cloud pairing and relay flow. Add the assignment and event APIs there. It decides whether a device is in the current rollout cohort, maintenance window, and channel.
 
 Compromise of the assignment service could prematurely offer an already authorized release or withhold updates, but it cannot authorize a new image digest. Keeping the TUF signing path separate from the runtime control plane limits the control plane's update authority.
 
@@ -190,7 +190,7 @@ The stable signing identity should be inaccessible to pull-request workflows. If
 Recommended production URL:
 
 ```text
-https://updates.trywink.io/tuf/
+https://updates.winkapiserver.org/tuf/
 ```
 
 Store the repository in a dedicated Cloudflare R2 bucket and serve it through a Worker bound to that bucket. The Worker is only a transport layer; clients verify all TUF metadata and targets.
@@ -307,7 +307,7 @@ No architecture prevents an authorized maintainer from approving malicious code.
 2. Add protected `main`, required CI, and `stable-release` environment rules.
 3. Add a multi-platform candidate-build workflow with digest output, SBOM, and GitHub attestation.
 4. Create a separate TUF repository from the `tuf-on-ci` template and perform the offline root ceremony.
-5. Provision `updates.trywink.io`, its R2 bucket, Worker, and path-specific cache rules.
+5. Provision `updates.winkapiserver.org`, its R2 bucket, Worker, and path-specific cache rules.
 6. Add the protected promotion workflow that verifies, generates, signs, and publishes the checked-in manifest format.
 7. Add assignment and event endpoints to the AIOS cloud.
 8. Implement the host updater with `go-tuf/v2` and an anonymous GHCR digest pull.

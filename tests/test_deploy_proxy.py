@@ -14,7 +14,7 @@ import pytest
 
 from aios_core.deploy.proxy import ReverseProxy, slug_from_host
 
-APPS_DOMAIN = "apps.trywink.io"
+APPS_DOMAIN = "apps.winkapiserver.org"
 
 
 def _backend(body: bytes):
@@ -43,10 +43,10 @@ def _get(port: int, host: str) -> tuple[int, str]:
 
 
 def test_slug_from_host():
-    assert slug_from_host("one.apps.trywink.io", APPS_DOMAIN) == "one"
-    assert slug_from_host("two.apps.trywink.io:443", APPS_DOMAIN) == "two"
-    assert slug_from_host("apps.trywink.io", APPS_DOMAIN) is None       # no slug label
-    assert slug_from_host("a.b.apps.trywink.io", APPS_DOMAIN) is None   # too many labels
+    assert slug_from_host("one.apps.winkapiserver.org", APPS_DOMAIN) == "one"
+    assert slug_from_host("two.apps.winkapiserver.org:443", APPS_DOMAIN) == "two"
+    assert slug_from_host("apps.winkapiserver.org", APPS_DOMAIN) is None       # no slug label
+    assert slug_from_host("a.b.apps.winkapiserver.org", APPS_DOMAIN) is None   # too many labels
     assert slug_from_host("evil.com", APPS_DOMAIN) is None
 
 
@@ -58,16 +58,16 @@ def test_proxy_routes_by_host():
     try:
         url1 = proxy.register("one", p1)
         proxy.register("two", p2)
-        assert url1 == "https://one.apps.trywink.io/"
+        assert url1 == "https://one.apps.winkapiserver.org/"
 
-        assert _get(proxy.port, "one.apps.trywink.io") == (200, "APP-ONE")
-        assert _get(proxy.port, "two.apps.trywink.io") == (200, "APP-TWO")
+        assert _get(proxy.port, "one.apps.winkapiserver.org") == (200, "APP-ONE")
+        assert _get(proxy.port, "two.apps.winkapiserver.org") == (200, "APP-TWO")
 
         # unknown slug -> 404
-        assert _get(proxy.port, "nope.apps.trywink.io")[0] == 404
+        assert _get(proxy.port, "nope.apps.winkapiserver.org")[0] == 404
         # unregister removes the route
         proxy.unregister("one")
-        assert _get(proxy.port, "one.apps.trywink.io")[0] == 404
+        assert _get(proxy.port, "one.apps.winkapiserver.org")[0] == 404
     finally:
         proxy.shutdown()
         b1.shutdown()
@@ -80,7 +80,7 @@ def test_proxy_502_when_backend_down():
     try:
         # register a route to a port with nothing listening
         proxy.register("dead", 59999)
-        code, _ = _get(proxy.port, "dead.apps.trywink.io")
+        code, _ = _get(proxy.port, "dead.apps.winkapiserver.org")
         assert code == 502
     finally:
         proxy.shutdown()

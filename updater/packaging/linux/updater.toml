@@ -1,5 +1,5 @@
 channel = "stable"
-feed_url = "https://updates.trywink.io/channels/stable.json"
+feed_url = "https://updates.winkapiserver.org/channels/stable.json"
 public_key_path = "/etc/mini-aios/update-signing-public.pem"
 allowed_image_repository = "ghcr.io/mahithsc/mini-aios"
 compose_project_dir = "/opt/mini-aios"

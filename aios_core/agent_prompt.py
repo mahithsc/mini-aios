@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Mapping, Sequence
+from typing import Any
 from zoneinfo import ZoneInfo
 
 _BASE_TOOLS_BLOCK = """
@@ -93,13 +94,21 @@ _BASE_TOOLS_BLOCK = """
     codex_start,
 ),
 "codex_poll": (
-    "Check a Codex job from codex_start. Returns status (running|done|error), new "
+    "Check a Codex job from codex_start. Returns status "
+    "(running|awaiting_input|done|error|cancelled), new "
     "activity events since `cursor` (commands run, files changed), the updated "
-    "cursor, and — when done — Codex's final result. Pass `wait` (seconds) to "
-    "block briefly for new progress. Poll until status is not 'running'.",
+    "cursor, and — when done — Codex's final result. If status is "
+    "awaiting_input, ask the user the structured pending_input questions and "
+    "submit their reply with codex_answer. Pass `wait` (seconds) to block briefly.",
     {"job_id": "string", "cursor": "number? (from the previous poll)",
      "wait": "number? (seconds to block for progress; default 0)"},
     codex_poll,
+),
+"codex_answer": (
+    "Resume a Codex job that is awaiting_input. Copy each pending_input question "
+    "id to an answers object; each value may be a string or list of strings.",
+    {"job_id": "string", "answers": "object keyed by question id"},
+    codex_answer,
 ),
 "codex_stop": (
     "Stop a running Codex job started with codex_start.",
@@ -122,6 +131,24 @@ _BASE_TOOLS_BLOCK = """
     {"task": "string", "timeout": "number?", "model": "string?",
      "path": "string? (working directory; default '.')"},
     codex,
+),
+"app_create": (
+    "Reserve a cloud app identity before asking Codex to build a deployable app. "
+    "Put the returned app_id in the artifact's aios.deploy.yaml manifest.",
+    {"name": "string (human-readable app name)"},
+    app_create,
+),
+"app_info": (
+    "Get a cloud app's metadata and the active URL plus latest deployment state "
+    "for its database, server, and frontend components.",
+    {"app_id": "string"},
+    app_info,
+),
+"secrets_list": (
+    "List the user's cloud secret references, labels, kinds, versions, and configured "
+    "state. This tool never returns secret values.",
+    {},
+    secrets_list,
 ),
 "apps_list": (
     "List the apps you've deployed (slug, status, whether the container is running). "
@@ -327,14 +354,16 @@ def build_agent_prompt(
             "writing_code",
             """
             A big part of your job is writing code.
-            Use `codex_start` to delegate coding tasks — implementing, editing, refactoring, or building apps — to the Codex coding agent; it runs in the background, so poll it with `codex_poll` for progress and the result. Hand it a clear, self-contained task that names the target files and includes the context it needs (it cannot see this chat).
+            Use `codex_start` to delegate coding tasks — implementing, editing, refactoring, or building apps — to the Codex coding agent; it runs in the background, so poll it with `codex_poll` for progress and the result. Hand it a clear, self-contained task that names the target files and includes the context it needs (it cannot see this chat). If Codex returns `awaiting_input`, surface its questions to the user and pass their answers to `codex_answer`; do not treat that state as a failure.
             Do simple, quick edits yourself with the file tools; reserve `codex_start` for real coding work rather than trivial one-liners.
 
-            Building runnable apps — AUTO-DEPLOY: when the user EXPLICITLY asks you to build an app that runs (a website, web server, dashboard, API, or similar runnable app), instruct Codex in the very same task to DEPLOY it after building — Codex has a `deploy` tool that builds and runs the app in a container and returns a live URL. Also tell Codex to create a `project.json` (the run command + port) that deploy needs. Deliver the running app and its URL; the user should NOT have to separately ask you to start or run it.
-            CRITICAL — the deploy runtime is PYTHON-ONLY (a `python:3.12-slim` container with pip; NO Node/npm). Only build things it can actually run: either a static site (plain HTML/CSS/JS, no build step) served by a tiny Python stdlib server, or a Python app (Flask / FastAPI / stdlib `http.server`). Do NOT use React, Vue, Angular, Next, or anything that needs `npm`, a build step, or Node — Codex cannot scaffold those reliably in non-interactive mode and the runtime cannot run them. E.g. a weather app or dashboard should be plain HTML + vanilla JS calling the API client-side, served by a small Python server; `project.json` runs that Python server on a port.
+            Building runnable apps — AUTO-DEPLOY: when the user EXPLICITLY asks you to build an app that runs (a website, web server, dashboard, API, or similar runnable app), first call `app_create` to reserve its cloud identity. Include the returned `app_id` in the self-contained Codex task. Tell Codex to create `aios.deploy.yaml` at the app root, declare only the components the app actually has, and call the matching cloud tools after building: `deploy_database` for Supabase migrations, `deploy_server` for a Dockerized backend on DigitalOcean, and `deploy_frontend` for a frontend on Vercel. If components depend on one another, deploy the database before the server and the server before the frontend. A cloud deploy may return `queued`, `building`, or another nonterminal state with a deployment ID. In that case, call `get_deployment_status` until it becomes terminal, and use `get_deployment_events` for progress or a provider-safe failure summary. Use `get_app_info` whenever you need to rediscover the app's active backend or frontend URL. If a deployment returns `awaiting_secrets` or `awaiting_confirmation`, surface that action to the user instead of trying to read from stdin or asking Codex to invent a value. Never report a deployment as complete until its status is `active`.
+            The manifest contains secret references, never secret values. Call `secrets_list` when an app needs credentials, and pass Codex only the relevant secret reference IDs, kinds, labels, and configured state. Never ask for or expose their values. Do not place credentials in source files, Dockerfiles, build arguments, or the manifest. Server secret bindings must use `exposure: runtime`; build-time server secrets are unsupported. A Dockerfile may declare an empty `ENV NAME=""` stub so generated code knows the variable exists, but it must never contain a secret value or a secret `ARG`. A server component must include its Dockerfile at the path declared in the manifest, listen on the App Platform supplied `$PORT` (8080 by default), and implement its declared `health_path`. Frontends may use the framework appropriate to the app because Vercel performs their build.
+            Database migrations use ordered filenames such as `001_create_users.sql`. The initial cloud contract accepts additive PostgreSQL DDL only: create tables, indexes, enums, and sequences, plus allowlisted additive `ALTER TABLE` operations. Use unqualified lowercase table and column names. Do not emit role, schema, extension, function, arbitrary SELECT/DML, DROP, TRUNCATE, or destructive ALTER statements; the cloud provisions the schema, roles, extensions, RLS, and grants itself.
             Only auto-deploy when the user explicitly asked to build an app. For ordinary code edits, snippets, scripts, one-off programs, or library/package work, do NOT deploy.
 
-            When coding, explain the intended change before delegating, and summarize the outcome after Codex finishes — including the live URL when you built an app.
+            When coding, explain the intended change before delegating, and summarize the outcome after Codex finishes. Report the deployment status returned by the tool; include a live URL only when the deployment has actually completed and returned one.
+            Use `rollback_cloud_deployment` only when the user explicitly asks to restore a prior frontend or server release. It queues a new deployment and must be polled like any other deployment; database rollbacks are intentionally unsupported, so use a new additive migration instead. Use `delete_cloud_app` only after the user explicitly asks to permanently delete an app. Deletion is asynchronous and permanently removes its Vercel, DigitalOcean, Supabase schema/storage, and artifact resources.
             """,
         ),
         _section(
@@ -388,7 +417,7 @@ def build_agent_prompt(
         sections.append(
             _section(
                 "generative_ui",
-                f"""
+                """
                 You may create generative UI when a visual explanation or interactive artifact would materially help the user.
                 Use `generative_widget` for generative UI.
                 Call `generative_widget(function="documentation")` first when you need the widget guidelines.

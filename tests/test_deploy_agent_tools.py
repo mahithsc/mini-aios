@@ -30,7 +30,12 @@ def test_unknown_app_errors(temp_store):
 def test_apps_list(temp_store, monkeypatch):
     store, _ = temp_store
     store.save(
-        Project(slug="a", source_dir=Path("/x"), spec=Spec(run=["python", "app.py"], port=8000), status="running")
+        Project(
+            slug="a",
+            source_dir=Path("/x"),
+            spec=Spec(run=["python", "app.py"], port=8000),
+            status="running",
+        )
     )
 
     class FakeSup:
@@ -39,7 +44,69 @@ def test_apps_list(temp_store, monkeypatch):
 
     monkeypatch.setattr(agent_tools, "_sup", lambda: FakeSup())
     result = agent_tools.apps_list()
-    assert result["apps"] == [{"slug": "a", "status": "running", "running": False, "port": 8000}]
+    assert result["apps"] == [
+        {"slug": "a", "status": "running", "running": False, "port": 8000}
+    ]
+
+
+def test_app_create_uses_cloud_control_plane(monkeypatch):
+    class FakeCloud:
+        def create_app(self, name):
+            return {"id": "app_cloud123", "name": name}
+
+    monkeypatch.setattr(agent_tools, "_cloud", FakeCloud)
+    assert agent_tools.app_create("Example") == {
+        "id": "app_cloud123",
+        "name": "Example",
+    }
+
+
+def test_app_create_returns_configuration_error(monkeypatch):
+    def missing_cloud():
+        raise agent_tools.CloudDeployError("AIOS_CLOUD_URL is not configured")
+
+    monkeypatch.setattr(agent_tools, "_cloud", missing_cloud)
+    assert agent_tools.app_create("Example") == {
+        "error": "AIOS_CLOUD_URL is not configured"
+    }
+
+
+def test_app_info_uses_cloud_endpoint(monkeypatch):
+    class FakeCloud:
+        def get_app_info(self, app_id):
+            return {
+                "app": {"id": app_id},
+                "components": {
+                    "server": {"url": "https://server.example.test"}
+                },
+            }
+
+    monkeypatch.setattr(agent_tools, "_cloud", FakeCloud)
+    result = agent_tools.app_info("app_cloud123")
+    assert result["app"]["id"] == "app_cloud123"
+    assert result["components"]["server"]["url"] == (
+        "https://server.example.test"
+    )
+
+
+def test_secrets_list_returns_metadata_only(monkeypatch):
+    class FakeCloud:
+        def list_secret_metadata(self):
+            return {
+                "secrets": [
+                    {
+                        "id": "sec_cloud123",
+                        "kind": "api_key",
+                        "label": "Vendor",
+                        "configured": True,
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(agent_tools, "_cloud", FakeCloud)
+    result = agent_tools.secrets_list()
+    assert result["secrets"][0]["id"] == "sec_cloud123"
+    assert "value" not in result["secrets"][0]
 
 
 def _write_app(dir_path: Path):
@@ -56,7 +123,9 @@ def _write_app(dir_path: Path):
             """
         )
     )
-    (dir_path / "project.json").write_text('{"run": ["python", "app.py"], "port": 8000}')
+    (dir_path / "project.json").write_text(
+        '{"run": ["python", "app.py"], "port": 8000}'
+    )
 
 
 @pytest.mark.skipif(not docker_available(), reason="Docker not available")
@@ -66,7 +135,11 @@ def test_lifecycle_status_logs_stop_restart(temp_store):
     store, tmp_path = temp_store
     _write_app(tmp_path)
     assert deploy("life1", tmp_path, store=store)["status"] == "running"
-    project = Project(slug="life1", source_dir=tmp_path, spec=Spec(run=["python", "app.py"], port=8000))
+    project = Project(
+        slug="life1",
+        source_dir=tmp_path,
+        spec=Spec(run=["python", "app.py"], port=8000),
+    )
     try:
         assert agent_tools.app_status("life1")["running"] is True
         assert "logs" in agent_tools.app_logs("life1")

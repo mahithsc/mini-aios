@@ -133,9 +133,9 @@ Example `/etc/mini-aios/updater.toml`:
 
 ```toml
 channel = "stable"
-control_plane_url = "https://computer.trywink.io"
-tuf_metadata_url = "https://updates.trywink.io/tuf/metadata/"
-tuf_targets_url = "https://updates.trywink.io/tuf/targets/"
+control_plane_url = "https://computer.winkapiserver.org"
+tuf_metadata_url = "https://updates.winkapiserver.org/tuf/metadata/"
+tuf_targets_url = "https://updates.winkapiserver.org/tuf/targets/"
 compose_project_dir = "/opt/mini-aios"
 compose_service = "box"
 aios_data_dir = "/var/lib/mini-aios"

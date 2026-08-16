@@ -39,7 +39,9 @@ def _write_app(dir_path: Path):
             """
         )
     )
-    (dir_path / "project.json").write_text('{"run": ["python", "app.py"], "port": 8000}')
+    (dir_path / "project.json").write_text(
+        '{"run": ["python", "app.py"], "port": 8000}'
+    )
 
 
 def _extract(result) -> dict:
@@ -50,8 +52,8 @@ def _extract(result) -> dict:
         if getattr(c, "type", "") == "text":
             try:
                 return json.loads(c.text)
-            except Exception:
-                pass
+            except json.JSONDecodeError:
+                continue
     return {}
 
 
@@ -61,26 +63,45 @@ async def _deploy_via_mcp(cwd: str, slug: str):
 
     env = dict(os.environ)
     env["PYTHONPATH"] = REPO_ROOT
+    env["AIOS_ENABLE_LEGACY_LOCAL_DEPLOY"] = "1"
     params = StdioServerParameters(
         command=sys.executable,
         args=["-m", "aios_core.deploy.mcp_server"],
         cwd=cwd,
         env=env,
     )
-    async with stdio_client(params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            tools = await session.list_tools()
-            result = await session.call_tool("deploy", {"slug": slug})
-            return [t.name for t in tools.tools], _extract(result)
+    async with (
+        stdio_client(params) as (read, write),
+        ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        tools = await session.list_tools()
+        result = await session.call_tool("deploy", {"slug": slug})
+        return [t.name for t in tools.tools], _extract(result)
 
 
 def test_deploy_via_mcp_roundtrip(tmp_path):
     _write_app(tmp_path)
     tool_names, payload = asyncio.run(_deploy_via_mcp(str(tmp_path), "mcp1"))
-    project = Project(slug="mcp1", source_dir=tmp_path, spec=Spec(run=["python", "app.py"], port=8000))
+    project = Project(
+        slug="mcp1", source_dir=tmp_path, spec=Spec(run=["python", "app.py"], port=8000)
+    )
     try:
         assert "deploy" in tool_names  # Codex would see this tool
+        assert "deploy_database" in tool_names
+        assert "deploy_server" in tool_names
+        assert "deploy_frontend" in tool_names
+        assert "get_deployment_status" in tool_names
+        assert "get_deployment_events" in tool_names
+        assert "get_app_info" in tool_names
+        assert "cancel_cloud_deployment" in tool_names
+        assert "resume_cloud_deployment" in tool_names
+        assert "rollback_cloud_deployment" in tool_names
+        assert "delete_cloud_app" in tool_names
+        assert "list_database_tables" in tool_names
+        assert "inspect_database_table" in tool_names
+        assert "query_database_table" in tool_names
+        assert "list_database_migrations" in tool_names
         assert payload.get("status") == "running", payload
         import urllib.request
 

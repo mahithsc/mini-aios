@@ -126,7 +126,7 @@ def test_container_reachable_through_proxy(tmp_path):
     _write_min_app(tmp_path)
     project = Project(slug="proxied1", source_dir=tmp_path, spec=Spec(run=["python", "app.py"], port=8000))
     sup = Supervisor()
-    proxy = ReverseProxy(apps_domain="apps.trywink.io")
+    proxy = ReverseProxy(apps_domain="apps.winkapiserver.org")
     proxy.start()
     try:
         handle = sup.start(project)
@@ -134,10 +134,10 @@ def test_container_reachable_through_proxy(tmp_path):
         assert ok, sup.logs(project)
 
         public_url = proxy.register(project.slug, handle["host_port"])
-        assert public_url == "https://proxied1.apps.trywink.io/"
+        assert public_url == "https://proxied1.apps.winkapiserver.org/"
 
         req = urllib.request.Request(
-            f"http://127.0.0.1:{proxy.port}/", headers={"Host": "proxied1.apps.trywink.io"}
+            f"http://127.0.0.1:{proxy.port}/", headers={"Host": "proxied1.apps.winkapiserver.org"}
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             body = resp.read().decode()

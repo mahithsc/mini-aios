@@ -46,7 +46,7 @@ def test_quick_tunnel_starts_and_emits_public_url():
     trycloudflare subdomain is not reliably DNS-resolvable for 30-90s+ (verified:
     a 2.5-min wait still failed with `[Errno 8] nodename nor servname`), so gating
     on it would be flaky. End-to-end public reachability is validated by the NAMED
-    tunnel path (stable `*.apps.trywink.io` DNS) — see the plan's 4b USER ACTION.
+    tunnel path (stable `*.apps.winkapiserver.org` DNS) — see the plan's 4b USER ACTION.
     """
     srv, port = _backend(b"TUNNEL-OK-9f3c")
     tm = TunnelManager()

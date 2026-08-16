@@ -17,6 +17,8 @@ dependencies = [
     "ollama",
     "websockets>=12.0",
     "python-multipart>=0.0.22",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
     "adafruit-blinka>=9.0.4",
     "adafruit-circuitpython-neopixel-spi>=1.0.15",
     "jetson-gpio>=2.1.12",

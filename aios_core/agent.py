@@ -5,6 +5,16 @@ from agno.models.openai import OpenAIChat
 from dotenv import load_dotenv
 
 from .agent_prompt import build_agent_prompt
+from .deploy.agent_tools import (
+    app_create,
+    app_info,
+    app_logs,
+    app_restart,
+    app_status,
+    app_stop,
+    apps_list,
+    secrets_list,
+)
 from .memory import build_memory_prompt
 from .sessions import (
     get_chat_artifacts_dir,
@@ -28,9 +38,8 @@ from .tools import (
 )
 from .tools.canvas import show_canvas
 from .tools.codex import codex
+from .tools.codex_job import codex_answer, codex_poll, codex_start, codex_stop
 from .tools.codex_subagent import codex_subagent
-from .tools.codex_job import codex_poll, codex_start, codex_stop
-from .deploy.agent_tools import app_logs, app_restart, app_status, app_stop, apps_list
 from .tools.cron import cron
 from .tools.fetch import fetch
 from .tools.generative_widget import generative_widget
@@ -63,6 +72,7 @@ BASE_TOOLS = [
     codex_subagent,
     codex_start,
     codex_poll,
+    codex_answer,
     codex_stop,
     cron,
     show_canvas,
@@ -76,6 +86,9 @@ MAIN_TOOLS = [
     memory,
     session_search,
     subagent,
+    app_create,
+    app_info,
+    secrets_list,
     apps_list,
     app_status,
     app_logs,
@@ -127,6 +140,7 @@ def _create_agent_with_tools(
         tools=tools,
         model=OpenAIChat(id=DEFAULT_MODEL_ID),
     )
+
 
 def create_main_agent(chat_id: str | None = None):
     return _create_agent_with_tools(
