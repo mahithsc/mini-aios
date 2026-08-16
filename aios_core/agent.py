@@ -1,11 +1,11 @@
 import os
 
-from agno.agent import Agent
-from agno.models.openai import OpenAIChat
+from agents import Agent
 from dotenv import load_dotenv
 
 from .agent_prompt import build_agent_prompt
 from .memory import build_memory_prompt
+from .openai_runtime import as_function_tool
 from .sessions import (
     get_chat_artifacts_dir,
     get_chat_files_dir,
@@ -114,13 +114,18 @@ def _create_agent_with_tools(
     chat_id: str | None = None,
 ):
     return Agent(
-        system_message=_build_prompt(
+        name="AIOS" if include_subagent_tool else "AIOS subagent",
+        instructions=_build_prompt(
             include_subagent_tool=include_subagent_tool,
             chat_id=chat_id,
         ),
-        tools=tools,
-        model=OpenAIChat(id=DEFAULT_MODEL_ID),
+        tools=[
+            as_function_tool(tool, strict_mode=tool is not process_spawn)
+            for tool in tools
+        ],
+        model=DEFAULT_MODEL_ID,
     )
+
 
 def create_main_agent(chat_id: str | None = None):
     return _create_agent_with_tools(

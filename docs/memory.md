@@ -34,10 +34,10 @@ instruction-shaped payloads, invisible control characters, and common secret
 formats are rejected. Files are scanned again when building the prompt; unsafe
 entries placed on disk manually are replaced with a blocked marker.
 
-The snapshot is rebuilt when Mini AIOS constructs an agent for a turn. This is
-an intentional adaptation to the current runtime, which creates a fresh Agno
-agent for every message. A successful memory write is therefore visible on the
-next turn without changing the active model request midway through execution.
+The snapshot is rebuilt when Mini AIOS constructs an agent for a turn. The
+OpenAI Agents runtime creates a fresh agent for every message, so a successful
+memory write is visible on the next turn without changing the active model
+request midway through execution.
 
 ## Conversation recall
 

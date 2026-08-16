@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
 from pathlib import Path
+from typing import TypeAlias
 
-from agno.media import File, Image
-from agno.models.message import Message
 from aios_core.workspace import resolve_workspace_path
 from pydantic import TypeAdapter
 
@@ -13,11 +14,17 @@ from server.uploads import AUDIO_FILE_EXTENSIONS, AUDIO_MIME_TYPES, TEXT_FILE_EX
 
 CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
 
+ResponseContentPart: TypeAlias = dict[str, str]
+ResponseInputMessage: TypeAlias = dict[str, str | list[ResponseContentPart]]
+
 # Cap tool args/results when embedding in plain-text assistant content for the LLM.
 _MAX_TOOL_PAYLOAD_CHARS = 8_000
 _MAX_ATTACHMENT_TEXT_CHARS = 20_000
 _MAX_MESSAGE_CONTENT_CHARS = 40_000
 _MAX_HISTORY_CONTENT_CHARS = 120_000
+# Leave headroom under the Responses API's combined request limit after JSON
+# framing. Excess attachments remain available to the agent by workspace path.
+_MAX_INLINE_MEDIA_CHARS = 48 * 1024 * 1024
 
 
 def _truncate_text(text: str, max_chars: int, *, suffix: str = "... (truncated for context)") -> str:
@@ -106,9 +113,19 @@ def _read_attachment_preview(path: Path, attachment: MessageAttachment) -> str:
     return f"[Attached file: {attachment.name}]\n{text}"
 
 
-def _infer_media_format(path: Path) -> str | None:
-    suffix = path.suffix.lstrip(".").lower()
-    return suffix or None
+def _attachment_data_uri(path: Path, attachment: MessageAttachment) -> str | None:
+    try:
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    except OSError:
+        return None
+
+    mime_type = (
+        attachment.mimeType
+        or mimetypes.guess_type(attachment.name)[0]
+        or mimetypes.guess_type(path.name)[0]
+        or "application/octet-stream"
+    )
+    return f"data:{mime_type};base64,{encoded}"
 
 
 def _format_attachment_reference(
@@ -130,10 +147,30 @@ def _format_attachment_reference(
 
 def _message_content_with_attachments(
     message: UserMessage,
-) -> tuple[str, list[Image], list[File]]:
+) -> list[ResponseContentPart]:
     content_parts: list[str] = []
-    images: list[Image] = []
-    files: list[File] = []
+    media_parts: list[ResponseContentPart] = []
+    inline_media_chars = 0
+
+    def append_media(part: ResponseContentPart, data_key: str) -> bool:
+        nonlocal inline_media_chars
+        size = len(part[data_key])
+        if inline_media_chars + size > _MAX_INLINE_MEDIA_CHARS:
+            return False
+        media_parts.append(part)
+        inline_media_chars += size
+        return True
+
+    def note_omitted(attachment: MessageAttachment) -> None:
+        content_parts.append(
+            "\n".join(
+                [
+                    f"[Attachment omitted from inline model input: {attachment.name}]",
+                    f"Workspace path: {attachment.filePath}",
+                    "The combined inline attachment limit was reached; use workspace tools to inspect it.",
+                ]
+            )
+        )
 
     if message.content.strip():
         content_parts.append(message.content)
@@ -147,13 +184,17 @@ def _message_content_with_attachments(
 
         if attachment.kind == "image":
             content_parts.append(f"[Attached image: {attachment.name}]")
-            images.append(
-                Image(
-                    filepath=attachment_path,
-                    mime_type=attachment.mimeType,
-                    format=_infer_media_format(attachment_path),
-                )
-            )
+            data_uri = _attachment_data_uri(attachment_path, attachment)
+            if data_uri is not None:
+                if not append_media(
+                    {
+                        "type": "input_image",
+                        "detail": "auto",
+                        "image_url": data_uri,
+                    },
+                    "image_url",
+                ):
+                    note_omitted(attachment)
             continue
 
         if _is_audio_attachment(attachment):
@@ -175,53 +216,86 @@ def _message_content_with_attachments(
             continue
 
         content_parts.append(f"[Attached file: {attachment.name}]")
-        files.append(
-            File(
-                filepath=attachment_path,
-                mime_type=attachment.mimeType,
-                filename=attachment.name,
-                name=attachment.name,
-                format=_infer_media_format(attachment_path),
-            )
-        )
+        data_uri = _attachment_data_uri(attachment_path, attachment)
+        if data_uri is not None:
+            if not append_media(
+                {
+                    "type": "input_file",
+                    "file_data": data_uri,
+                    "filename": attachment.name,
+                },
+                "file_data",
+            ):
+                note_omitted(attachment)
 
-    return "\n\n".join(part for part in content_parts if part), images, files
+    text = _truncate_text(
+        "\n\n".join(part for part in content_parts if part),
+        _MAX_MESSAGE_CONTENT_CHARS,
+        suffix="... (user message truncated for context)",
+    )
+    return [{"type": "input_text", "text": text}, *media_parts]
 
 
-def _to_model_message(message: ChatMessage) -> Message:
+def _to_model_message(message: ChatMessage) -> ResponseInputMessage:
     if isinstance(message, UserMessage):
-        content, images, files = _message_content_with_attachments(message)
-        return Message(
-            role="user",
-            content=_truncate_text(
-                content or "",
-                _MAX_MESSAGE_CONTENT_CHARS,
-                suffix="... (user message truncated for context)",
-            ),
-            images=images or None,
-            files=files or None,
-        )
+        return {
+            "role": "user",
+            "content": _message_content_with_attachments(message),
+        }
 
     if isinstance(message, AssistantMessage):
-        return Message(
-            role="assistant",
-            content=_assistant_events_to_openai_content(message),
-        )
+        return {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": _assistant_events_to_openai_content(message),
+                }
+            ],
+        }
 
     raise TypeError(f"Unsupported chat message type: {type(message)!r}")
 
 
-def _truncate_message_history(messages: list[Message]) -> list[Message]:
-    kept_messages: list[Message] = []
+def _message_text(message: ResponseInputMessage) -> str:
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    return "".join(
+        part.get("text", "")
+        for part in content
+        if part.get("type") == "input_text"
+    )
+
+
+def _message_media_chars(message: ResponseInputMessage) -> int:
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return 0
+    return sum(
+        len(part.get("image_url", "")) + len(part.get("file_data", ""))
+        for part in content
+    )
+
+
+def _truncate_message_history(
+    messages: list[ResponseInputMessage],
+) -> list[ResponseInputMessage]:
+    kept_messages: list[ResponseInputMessage] = []
     total_chars = 0
+    total_media_chars = 0
 
     for message in reversed(messages):
-        content = message.content or ""
-        content_size = len(content)
-        if kept_messages and total_chars + content_size > _MAX_HISTORY_CONTENT_CHARS:
+        content_size = len(_message_text(message))
+        media_size = _message_media_chars(message)
+        if kept_messages and (
+            total_chars + content_size > _MAX_HISTORY_CONTENT_CHARS
+            or total_media_chars + media_size > _MAX_INLINE_MEDIA_CHARS
+        ):
             break
         kept_messages.append(message)
         total_chars += content_size
+        total_media_chars += media_size
 
     kept_messages.reverse()
     dropped_count = len(messages) - len(kept_messages)
@@ -229,18 +303,25 @@ def _truncate_message_history(messages: list[Message]) -> list[Message]:
         return kept_messages
 
     return [
-        Message(
-            role="assistant",
-            content=(
-                "[Earlier conversation truncated to fit the current context window. "
-                f"{dropped_count} older message(s) were omitted. "
-                "Focus on the recent messages and ask for missing details if needed.]"
-            ),
-        ),
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": (
+                        "[Earlier conversation truncated to fit the current context window. "
+                        f"{dropped_count} older message(s) were omitted. "
+                        "Focus on the recent messages and ask for missing details if needed.]"
+                    ),
+                }
+            ],
+        },
         *kept_messages,
     ]
 
 
-def format_chat_messages_to_model_messages(messages: list[ChatMessage]) -> list[Message]:
+def format_chat_messages_to_model_messages(
+    messages: list[ChatMessage],
+) -> list[ResponseInputMessage]:
     model_messages = [_to_model_message(CHAT_MESSAGE_ADAPTER.validate_python(message)) for message in messages]
     return _truncate_message_history(model_messages)
