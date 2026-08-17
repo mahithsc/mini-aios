@@ -29,3 +29,11 @@ def test_prompt_routes_app_work_to_durable_workspace() -> None:
     assert '"app_workspace": (' in prompt
     assert "Never fabricate replacement source" in prompt
     assert "path` set exactly to the returned `workspace_path`" in prompt
+
+
+def test_prompt_waits_for_deployment_prerequisites() -> None:
+    prompt = _prompt()
+
+    assert "wait for it to become `active`" in prompt
+    assert "does not make the prerequisite ready" in prompt
+    assert "do not enqueue its dependents" in prompt

@@ -334,6 +334,7 @@ def test_deploy_contract_calls_matching_tools_and_completes(valid_path, monkeypa
     assert "AIOS CLOUD DEPLOYMENT CONTRACT (MANDATORY)" in prompt
     assert "deploy_database" in prompt
     assert "deploy_server" in prompt
+    assert "wait until the database is active" in prompt
     assert not any(event["kind"] == "deployment_guard" for event in result["events"])
 
 
