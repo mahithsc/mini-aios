@@ -12,13 +12,16 @@ def _prompt() -> str:
     )
 
 
-def test_prompt_delegates_substantial_coding_to_codex() -> None:
+def test_prompt_routes_every_code_or_app_task_to_codex() -> None:
     prompt = _prompt()
 
-    assert "CODING DELEGATION GATE" in prompt
-    assert "more than one file" in prompt
-    assert "When uncertain, delegate" in prompt
-    assert "Do not begin a substantial implementation yourself" in prompt
+    assert "HARD CODEX ROUTING GATE — NON-OPTIONAL" in prompt
+    assert "even remotely about code" in prompt
+    assert "must not substitute `glob`, `grep`, `read`, `bash`" in prompt
+    assert "call `codex_start` in that same turn" in prompt
+    assert "explicit Codex request overrides" in prompt
+    assert "including incomplete device-only apps" in prompt
+    assert "Do not use the cloud app inventory" in prompt
     assert "independently inspect Codex's diff" in prompt
 
 

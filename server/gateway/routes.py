@@ -20,7 +20,13 @@ from aios_core.sessions import (
 )
 from aios_core.tools.codex_job import _manager as codex_job_manager
 from server.execution.runtime import get_runs_service
+from server.notifications.runtime import get_notification_service
 from server.types.chat import AssistantMessage, ChatMetadata, UserMessage
+from server.types.notification import (
+    Notification,
+    NotificationDismissRequest,
+    NotificationListResponse,
+)
 from server.types.run import RunCreateRequest
 from server.updater import require_accepting_work
 
@@ -56,6 +62,52 @@ def require_gateway_auth(authorization: str | None = Header(default=None)) -> No
 
 
 router = APIRouter(dependencies=[Depends(require_gateway_auth)])
+
+
+@router.get("/notifications", response_model=NotificationListResponse)
+async def list_notifications() -> NotificationListResponse:
+    return get_notification_service().list_notifications()
+
+
+@router.post("/notifications/dismiss", response_model=Notification)
+async def dismiss_notification(body: NotificationDismissRequest) -> Notification:
+    notification = get_notification_service().dismiss_notification(body.id)
+    if notification is None:
+        raise HTTPException(status_code=404, detail="notification not found")
+    return notification
+
+
+@router.get("/notifications/events")
+async def stream_notification_events() -> StreamingResponse:
+    service = get_notification_service()
+
+    async def event_source() -> AsyncIterator[str]:
+        queue = service.broadcaster.subscribe()
+        try:
+            while True:
+                try:
+                    message = await asyncio.wait_for(
+                        queue.get(), timeout=_SSE_KEEPALIVE_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield (
+                    f"event: {message['type']}\n"
+                    f"data: {json.dumps(message)}\n\n"
+                )
+        finally:
+            service.broadcaster.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _get_chat_or_404(session_id: str) -> ChatMetadata:

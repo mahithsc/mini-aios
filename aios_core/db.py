@@ -68,6 +68,14 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS idx_notifications_source
                 ON notifications(source, source_id);
 
+            CREATE TABLE IF NOT EXISTS cloud_device_events (
+                event_id       TEXT PRIMARY KEY,
+                sequence       INTEGER NOT NULL,
+                event_type     TEXT NOT NULL,
+                payload_json   TEXT NOT NULL,
+                received_at    INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS gateway_events (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id      TEXT NOT NULL,

@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from aios_core.initialize import register_runtime_shutdown, shutdown_runtime, start_runtime
 from aios_core.sessions import get_chat_artifacts_dir
 from server.execution.runtime import get_runs_service, shutdown_runs_service, start_runs_service
+from server.cloud_events import shutdown_cloud_device_events, start_cloud_device_events
 from server.types.run import RunCreateRequest
 from server.gateway.routes import router as gateway_router
 from server.lights import lights
@@ -159,6 +160,7 @@ async def lifespan(_: FastAPI):
     start_runtime()
     await lights.start()
     await start_notification_service()
+    await start_cloud_device_events()
     await start_runs_service()
     _install_codex_sinks()
     try:
@@ -174,6 +176,7 @@ async def lifespan(_: FastAPI):
         set_progress_sink(None)
         await asyncio.to_thread(_manager.stop_all)
         await lights.shutdown()
+        await shutdown_cloud_device_events()
         await shutdown_notification_service()
         await shutdown_runs_service()
         shutdown_runtime()

@@ -81,13 +81,13 @@ _BASE_TOOLS_BLOCK = """
     process_kill,
 ),
 "codex_start": (
-    "Preferred way to delegate a self-contained coding task to Codex. Starts the "
+    "Required routing tool for every coding or app-building task. Starts the "
     "Codex coding agent as a BACKGROUND job and returns a job_id immediately, so "
     "long builds never block the turn or hit a timeout. The runtime automatically "
     "starts a continuation turn when Codex finishes or requests input; acknowledge "
-    "the delegation and end the current turn instead of polling. Use it by default "
-    "for substantial coding: multi-file changes, new features, debugging, refactors, "
-    "tests, dependency/config/schema work, or anything requiring repository exploration. "
+    "the delegation and end the current turn instead of polling. Use it for any request "
+    "involving code, an app, a website, a backend, a frontend, a database schema, "
+    "repository exploration, debugging, testing, configuration, or deployment. "
     "Codex cannot see this "
     "chat, so `task` must be complete and self-contained: state the concrete goal, "
     "name the target files, and include any needed context. `path` is the working "
@@ -166,8 +166,10 @@ _BASE_TOOLS_BLOCK = """
     secrets_list,
 ),
 "apps_list": (
-    "List the apps you've deployed (slug, status, whether the container is running). "
-    "Deployed apps are durable services that outlive the chat.",
+    "List every durable local app directory under workspace/apps, including unfinished "
+    "apps that have never been deployed or registered in the cloud. Returns each app's "
+    "name, app_id, absolute workspace_path, manifest state, and declared components. "
+    "Use it to locate existing app source before calling codex_start.",
     {},
     apps_list,
 ),
@@ -330,7 +332,7 @@ def build_agent_prompt(
             f"""
             All work for the user must happen inside the workspace.
             Workspace path: {workspace_dir}
-            Durable application source belongs in `{workspace_dir}/apps/<app-id>`, never under a chat session directory. `app_create` creates this folder and its README; use the returned `workspace_path` for every Codex build. For an existing cloud app, call `app_workspace(app_id)` and use its `workspace_path` instead of searching or guessing a session path.
+            Durable application source belongs in `{workspace_dir}/apps/<app-id>`, never under a chat session directory. `app_create` creates this folder and its README; use the returned `workspace_path` for every Codex build. For an existing app named by the user, call `apps_list` and use the matching local `workspace_path`; this includes unfinished device-only apps as well as deployed apps. `app_workspace(app_id)` remains available to resolve or adopt an app when only its ID is known.
             Non-app scratch files may remain in the current chat files directory. If you create another durable project folder, include a small `README.md` and keep it updated with project-specific documentation.
             For longer-horizon work, it is encouraged to keep a `TICKETS.md` task board so progress and decisions remain visible.
             """,
@@ -369,10 +371,12 @@ def build_agent_prompt(
         _section(
             "writing_code",
             """
-            CODING DELEGATION GATE:
-            Before editing code, classify the request. Delegate with `codex_start` whenever the task involves any of the following: more than one file; a new feature or endpoint; non-obvious debugging; repository-wide discovery; a refactor; tests that must be added or changed; dependency, build, deployment, database, schema, authentication, or infrastructure configuration; or any implementation likely to require multiple edit/test cycles. When uncertain, delegate.
+            HARD CODEX ROUTING GATE — NON-OPTIONAL:
+            Every request that is even remotely about code or building, changing, finding, reviewing, explaining, debugging, testing, configuring, or deploying an app MUST use `codex_start`. This includes websites, backends, frontends, APIs, scripts, repositories, dependencies, databases, schemas, authentication, infrastructure, build failures, and deployment work. This rule applies even when the change appears trivial, affects one file, or could be completed directly by the main agent. When uncertain whether a request is code-related, use Codex.
 
-            The main agent may edit code directly only for a genuinely trivial, obvious, low-risk change confined to one known file, such as correcting copy, changing one constant, or making a tiny configuration adjustment that needs no repository exploration. Do not begin a substantial implementation yourself and delegate only after it becomes difficult. Inspect only enough context to identify the correct repository/app root and write a precise task, then delegate the implementation.
+            The main agent must not substitute `glob`, `grep`, `read`, `bash`, direct file edits, `subagent`, or its own implementation for Codex on a code/app task. Before `codex_start`, it may use only the minimum app-routing tools needed to obtain a correct working directory: `apps_list` to locate every durable local app, including incomplete device-only apps, then use the matching result's `workspace_path` directly; use `app_workspace(app_id)` when only an app ID is known, and `app_create` for a genuinely new app. When multiple local names match, prefer an exact human-readable name match; ask the user only if multiple source workspaces still match. Once the path is known, call `codex_start` in the same turn. Do not use the cloud app inventory or a filesystem glob as the source-code lookup mechanism. If no local app matches, delegate discovery to Codex from the workspace root instead of assuming that cloud registration proves local source exists.
+
+            If the user explicitly says to use, ask, spawn, or delegate to Codex, call `codex_start` in that same turn without asking them to restate the goal. An explicit Codex request overrides the general inspect-first guidance. The only permitted pre-delegation work is resolving a safe working directory and collecting secret-reference metadata that Codex needs. Never claim Codex is unavailable unless `codex_start` itself returns an error.
 
             A Codex task must be self-contained: state the goal, correct working directory, relevant files or app ID, constraints, expected behavior, and required verification. Codex cannot see this chat. The runtime automatically starts a continuation turn when Codex completes or requests input, so after a successful start, tell the user the work is underway and end the current turn; do not repeatedly call `codex_poll`. On the continuation turn, independently inspect Codex's diff and verification results before reporting completion. If a user's latest message answers an awaiting Codex question, pass the mapped answers to `codex_answer`.
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 from ..app_workspaces import (
     AppWorkspaceError,
     create_app_workspace,
+    list_app_workspaces,
     resolve_app_workspace,
 )
 from ..runtime_context import get_current_chat_id
@@ -80,19 +81,11 @@ def secrets_list() -> dict:
 
 
 def apps_list() -> dict:
-    """List the apps you've deployed: slug, stored status, and whether the
-    container is actually running."""
-    sup = _sup()
-    apps = [
-        {
-            "slug": p.slug,
-            "status": p.status,
-            "running": sup.is_running(p),
-            "port": p.spec.port,
-        }
-        for p in _store().list()
-    ]
-    return {"apps": apps}
+    """List every durable local app workspace, including unfinished apps."""
+    try:
+        return list_app_workspaces()
+    except (AppWorkspaceError, OSError) as exc:
+        return {"error": str(exc)}
 
 
 def app_status(slug: str) -> dict:

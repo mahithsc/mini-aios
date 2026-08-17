@@ -36,6 +36,46 @@ def test_cloud_client_explains_when_device_is_not_paired(
         CloudDeployClient()
 
 
+def test_cloud_client_enqueues_tiered_pipeline() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/v1/apps/app_cloud123/deployment-pipelines"
+        assert request.headers["authorization"] == "Bearer device-token"
+        assert request.headers["idempotency-key"] == "pipeline-key"
+        assert json.loads(request.content) == {
+            "artifact_id": "art_cloud123",
+            "components": ["database", "server", "frontend"],
+        }
+        return httpx.Response(
+            201,
+            json={
+                "id": "pip_cloud123",
+                "app_id": "app_cloud123",
+                "artifact_id": "art_cloud123",
+                "requested_components": ["database", "server", "frontend"],
+                "status": "running",
+                "deployments": [],
+                "created_at": 1,
+                "updated_at": 1,
+                "completed_at": None,
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    client = CloudDeployClient(
+        base_url="https://cloud.example",
+        device_token="device-token",
+        client_factory=lambda: httpx.Client(transport=transport),
+    )
+    result = client.enqueue_pipeline(
+        app_id="app_cloud123",
+        artifact_id="art_cloud123",
+        components=["database", "server", "frontend"],
+        idempotency_key="pipeline-key",
+    )
+    assert result["id"] == "pip_cloud123"
+
+
 def _write_app(root: Path) -> None:
     (root / "server").mkdir()
     (root / "server" / "Dockerfile").write_text("FROM python:3.12-slim\n")

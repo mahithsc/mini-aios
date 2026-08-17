@@ -27,25 +27,30 @@ def test_unknown_app_errors(temp_store):
     assert "error" in agent_tools.app_restart("nope")
 
 
-def test_apps_list(temp_store, monkeypatch):
-    store, _ = temp_store
-    store.save(
-        Project(
-            slug="a",
-            source_dir=Path("/x"),
-            spec=Spec(run=["python", "app.py"], port=8000),
-            status="running",
-        )
+def test_apps_list_uses_local_workspace_inventory(monkeypatch):
+    monkeypatch.setattr(
+        agent_tools,
+        "list_app_workspaces",
+        lambda: {
+            "apps_dir": "/workspace/apps",
+            "apps": [
+                {
+                    "app_id": "app_cloud123",
+                    "name": "Himmarshee Plastic Surgery",
+                    "workspace_path": "/workspace/apps/app_cloud123",
+                    "has_manifest": False,
+                }
+            ],
+        },
     )
-
-    class FakeSup:
-        def is_running(self, project):
-            return False
-
-    monkeypatch.setattr(agent_tools, "_sup", lambda: FakeSup())
     result = agent_tools.apps_list()
     assert result["apps"] == [
-        {"slug": "a", "status": "running", "running": False, "port": 8000}
+        {
+            "app_id": "app_cloud123",
+            "name": "Himmarshee Plastic Surgery",
+            "workspace_path": "/workspace/apps/app_cloud123",
+            "has_manifest": False,
+        }
     ]
 
 

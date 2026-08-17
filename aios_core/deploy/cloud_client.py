@@ -24,7 +24,7 @@ class CloudDeployError(RuntimeError):
     """A cloud deployment request could not be completed."""
 
 
-def _paired_device_token() -> str:
+def paired_device_token() -> str:
     """Load the token minted during device pairing from persistent storage."""
     from aios_core.db import get_db_connection
 
@@ -36,6 +36,9 @@ def _paired_device_token() -> str:
     except (sqlite3.Error, OSError):
         return ""
     return str(row[0]).strip() if row and row[0] else ""
+
+
+_paired_device_token = paired_device_token
 
 
 class CloudDeployClient:
@@ -105,6 +108,30 @@ class CloudDeployClient:
                 artifact_id=artifact_id,
             )
 
+    def deploy_pipeline(
+        self,
+        app_dir: str | Path,
+        *,
+        components: list[DeploymentComponent] | None = None,
+    ) -> dict[str, Any]:
+        """Upload once and enqueue an ordered, durable component pipeline."""
+        with tempfile.TemporaryDirectory(prefix="aios-artifact-") as directory:
+            archive = create_artifact_archive(
+                app_dir,
+                Path(directory) / "artifact.tar.gz",
+            )
+            requested = components or [
+                component
+                for component in ("database", "server", "frontend")
+                if getattr(archive.manifest, component) is not None
+            ]
+            artifact_id = self.upload_artifact(archive)
+            return self.enqueue_pipeline(
+                app_id=archive.manifest.app_id,
+                artifact_id=artifact_id,
+                components=requested,
+            )
+
     def upload_artifact(self, archive: ArtifactArchive) -> str:
         manifest = archive.manifest.model_dump(mode="json", exclude_none=True)
         registration = self._request_json(
@@ -165,6 +192,31 @@ class CloudDeployClient:
             f"/v1/apps/{app_id}/deployments/{component}",
             headers={"Idempotency-Key": key},
             json={"artifact_id": artifact_id},
+        )
+
+    def enqueue_pipeline(
+        self,
+        *,
+        app_id: str,
+        artifact_id: str,
+        components: list[DeploymentComponent],
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        if not components:
+            raise CloudDeployError(
+                "A deployment pipeline needs at least one component"
+            )
+        key = idempotency_key or f"device-{uuid.uuid4().hex}"
+        return self._request_json(
+            "POST",
+            f"/v1/apps/{app_id}/deployment-pipelines",
+            headers={"Idempotency-Key": key},
+            json={"artifact_id": artifact_id, "components": components},
+        )
+
+    def get_deployment_pipeline(self, pipeline_id: str) -> dict[str, Any]:
+        return self._request_json(
+            "GET", f"/v1/deployment-pipelines/{pipeline_id}"
         )
 
     def get_deployment(self, deployment_id: str) -> dict[str, Any]:

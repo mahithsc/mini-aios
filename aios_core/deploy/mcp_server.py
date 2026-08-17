@@ -89,6 +89,42 @@ def deploy_frontend() -> dict:
 
 
 @mcp.tool()
+def deploy_app_pipeline(
+    components: list[Literal["database", "server", "frontend"]] | None = None,
+) -> dict:
+    """Deploy declared app tiers in database -> server -> frontend order.
+
+    The artifact is uploaded once. The cloud keeps later tiers blocked until
+    every requested prerequisite reports active, and pushes durable completion
+    events back to this device.
+    """
+    try:
+        current_dir = os.getcwd()
+        app_dir = find_deployment_root(current_dir) or current_dir
+        result = CloudDeployClient().deploy_pipeline(
+            app_dir,
+            components=components,
+        )
+        pipeline_id = result.get("id")
+        if isinstance(pipeline_id, str) and result.get("status") == "running":
+            result["next_action"] = {
+                "tool": "get_deployment_pipeline_status",
+                "pipeline_id": pipeline_id,
+            }
+        return result
+    except (CloudDeployError, ManifestValidationError, OSError) as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+@mcp.tool()
+def get_deployment_pipeline_status(pipeline_id: str) -> dict:
+    """Read the fallback snapshot for a tiered deployment pipeline."""
+    return _cloud_read(
+        lambda client: client.get_deployment_pipeline(pipeline_id)
+    )
+
+
+@mcp.tool()
 def get_deployment_status(deployment_id: str) -> dict:
     """Get durable cloud deployment state, errors, and the live URL when ready."""
     return _cloud_read(lambda client: client.get_deployment(deployment_id))

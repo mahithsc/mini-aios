@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 
 from aios_core.db import DB_PATH, get_db_connection
 from server.notifications.broadcaster import NotificationBroadcaster
-from server.types.notification import Notification, NotificationListResponse, NotificationSource
+from server.types.notification import (
+    Notification,
+    NotificationListResponse,
+    NotificationSource,
+)
 
 DEFAULT_NOTIFICATION_LOOKBACK_DAYS = 7
 
@@ -20,6 +25,10 @@ class NotificationService:
     ) -> None:
         self._db_path = db_path
         self._broadcaster = broadcaster
+
+    @property
+    def broadcaster(self) -> NotificationBroadcaster:
+        return self._broadcaster
 
     async def start(self) -> None:
         return
@@ -76,6 +85,77 @@ class NotificationService:
                 ),
             )
 
+        self._broadcast(self._broadcaster.broadcast_created(notification))
+        return notification
+
+    def create_cloud_event_notification(
+        self,
+        *,
+        event_id: str,
+        sequence: int,
+        event_type: str,
+        payload: dict,
+        title: str,
+        body: str,
+        level: str = "info",
+    ) -> Notification | None:
+        """Persist one cloud event and its notification in one transaction."""
+        now = int(time.time() * 1000)
+        notification = Notification(
+            id=str(uuid.uuid4()),
+            source="system",
+            sourceId=event_id,
+            runId=(
+                str(payload["pipeline_id"])
+                if payload.get("pipeline_id") is not None
+                else None
+            ),
+            chatId=None,
+            level=level,
+            title=title,
+            body=body,
+            createdAt=now,
+            updatedAt=now,
+            dismissedAt=None,
+        )
+        with get_db_connection(self._db_path) as conn:
+            inserted = conn.execute(
+                """
+                INSERT OR IGNORE INTO cloud_device_events (
+                    event_id, sequence, event_type, payload_json, received_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    sequence,
+                    event_type,
+                    json.dumps(payload, separators=(",", ":"), sort_keys=True),
+                    now,
+                ),
+            )
+            if inserted.rowcount == 0:
+                return None
+            conn.execute(
+                """
+                INSERT INTO notifications (
+                    id, source, source_id, run_id, chat_id, level,
+                    title, body, created_at, updated_at, dismissed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    notification.id,
+                    notification.source,
+                    notification.sourceId,
+                    notification.runId,
+                    notification.chatId,
+                    notification.level,
+                    notification.title,
+                    notification.body,
+                    notification.createdAt,
+                    notification.updatedAt,
+                    notification.dismissedAt,
+                ),
+            )
         self._broadcast(self._broadcaster.broadcast_created(notification))
         return notification
 

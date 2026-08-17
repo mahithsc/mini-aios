@@ -51,6 +51,30 @@ def get_app_workspace_dir(
     return get_apps_dir(apps_dir) / app_id
 
 
+def list_app_workspaces(
+    *, apps_dir: str | Path | None = None
+) -> dict[str, Any]:
+    """List every durable local app directory, including unfinished apps.
+
+    This is deliberately a local, read-only inventory. A workspace does not
+    need to be registered in the cloud or have a complete deployment manifest
+    to appear here.
+    """
+
+    root = get_apps_dir(apps_dir)
+    apps: list[dict[str, Any]] = []
+    if root.is_dir():
+        try:
+            directories = [path for path in root.iterdir() if path.is_dir()]
+        except OSError as exc:
+            raise AppWorkspaceError(f"could not list app workspaces: {exc}") from exc
+        for workspace in directories:
+            apps.append(_local_workspace_summary(workspace))
+
+    apps.sort(key=lambda app: (str(app["name"]).casefold(), app["app_id"]))
+    return {"apps_dir": str(root.resolve()), "apps": apps}
+
+
 def create_app_workspace(
     app_id: str,
     name: str,
@@ -178,6 +202,71 @@ def _manifest_app_id(manifest_path: Path) -> str | None:
         return None
     value = raw.get("app_id")
     return value if isinstance(value, str) else None
+
+
+def _local_workspace_summary(root: Path) -> dict[str, Any]:
+    metadata = _read_mapping(root / APP_METADATA_NAME, json_format=True)
+    manifest = _read_mapping(root / "aios.deploy.yaml", json_format=False)
+
+    app_id = _nonempty_string(metadata.get("app_id"))
+    if app_id is None:
+        app_id = _nonempty_string(manifest.get("app_id"))
+    if app_id is None:
+        app_id = root.name
+
+    name = _nonempty_string(metadata.get("name"))
+    if name is None:
+        name = _read_readme_title(root / APP_README_NAME)
+    if name is None:
+        package = _read_mapping(root / "package.json", json_format=True)
+        name = _nonempty_string(package.get("name"))
+    if name is None:
+        name = root.name
+
+    components = [
+        component
+        for component in ("database", "server", "frontend")
+        if manifest.get(component) is not None
+    ]
+    return {
+        "id": app_id,
+        "app_id": app_id,
+        "name": name,
+        "workspace_path": str(root.resolve()),
+        "has_metadata": (root / APP_METADATA_NAME).is_file(),
+        "has_manifest": (root / "aios.deploy.yaml").is_file(),
+        "has_source": _workspace_has_source(root),
+        "components": components,
+    }
+
+
+def _read_mapping(path: Path, *, json_format: bool) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        text = path.read_text(encoding="utf-8")
+        raw = json.loads(text) if json_format else yaml.safe_load(text)
+    except (OSError, UnicodeError, json.JSONDecodeError, yaml.YAMLError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _read_readme_title(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("# "):
+                return _nonempty_string(line[2:])
+    except (OSError, UnicodeError):
+        pass
+    return None
+
+
+def _nonempty_string(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()
 
 
 def _legacy_score(root: Path) -> tuple[int, int, float]:

@@ -6,6 +6,7 @@ from pathlib import Path
 from aios_core.app_workspaces import (
     create_app_workspace,
     find_legacy_app_workspaces,
+    list_app_workspaces,
     resolve_app_workspace,
 )
 
@@ -61,6 +62,75 @@ def test_create_app_workspace_preserves_project_readme(tmp_path: Path) -> None:
     assert (root / "README.md").read_text(encoding="utf-8") == (
         "# Custom project docs\n"
     )
+
+
+def test_list_app_workspaces_includes_complete_and_unfinished_apps(
+    tmp_path: Path,
+) -> None:
+    apps_dir = tmp_path / "apps"
+    complete = apps_dir / APP_ID
+    complete.mkdir(parents=True)
+    (complete / ".aios-app.json").write_text(
+        json.dumps({"app_id": APP_ID, "name": "Complete App"}),
+        encoding="utf-8",
+    )
+    (complete / "aios.deploy.yaml").write_text(
+        f"version: 1\napp_id: {APP_ID}\ndatabase:\n  migrations: migrations\nserver:\n  source: server\n",
+        encoding="utf-8",
+    )
+
+    unfinished = apps_dir / "app_unfinished"
+    unfinished.mkdir()
+    (unfinished / "README.md").write_text(
+        "# Half Finished App\n\nStill being built.\n", encoding="utf-8"
+    )
+
+    result = list_app_workspaces(apps_dir=apps_dir)
+
+    assert result["apps_dir"] == str(apps_dir.resolve())
+    assert result["apps"] == [
+        {
+            "id": APP_ID,
+            "app_id": APP_ID,
+            "name": "Complete App",
+            "workspace_path": str(complete.resolve()),
+            "has_metadata": True,
+            "has_manifest": True,
+            "has_source": True,
+            "components": ["database", "server"],
+        },
+        {
+            "id": "app_unfinished",
+            "app_id": "app_unfinished",
+            "name": "Half Finished App",
+            "workspace_path": str(unfinished.resolve()),
+            "has_metadata": False,
+            "has_manifest": False,
+            "has_source": False,
+            "components": [],
+        },
+    ]
+
+
+def test_list_app_workspaces_uses_manifest_and_package_fallbacks(
+    tmp_path: Path,
+) -> None:
+    apps_dir = tmp_path / "apps"
+    manifest_only = apps_dir / "draft-backend"
+    manifest_only.mkdir(parents=True)
+    (manifest_only / "aios.deploy.yaml").write_text(
+        "version: 1\napp_id: app_manifest123\nfrontend:\n  source: frontend\n",
+        encoding="utf-8",
+    )
+    (manifest_only / "package.json").write_text(
+        json.dumps({"name": "manifest-package"}), encoding="utf-8"
+    )
+
+    app = list_app_workspaces(apps_dir=apps_dir)["apps"][0]
+
+    assert app["app_id"] == "app_manifest123"
+    assert app["name"] == "manifest-package"
+    assert app["components"] == ["frontend"]
 
 
 def test_resolve_app_workspace_adopts_richest_legacy_source(tmp_path: Path) -> None:
