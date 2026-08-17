@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from aios_core.app_workspaces import (
+    create_app_workspace,
+    find_legacy_app_workspaces,
+    resolve_app_workspace,
+)
+
+
+APP_ID = "app_cloud123"
+
+
+def _legacy_app(session_dir: Path, chat_id: str, relative: str, files: int) -> Path:
+    root = session_dir / chat_id / "files" / relative
+    root.mkdir(parents=True)
+    (root / "aios.deploy.yaml").write_text(
+        f"version: 1\napp_id: {APP_ID}\nfrontend:\n  source: frontend\n",
+        encoding="utf-8",
+    )
+    frontend = root / "frontend"
+    frontend.mkdir()
+    for index in range(files):
+        (frontend / f"source_{index}.js").write_text(
+            f"export const value{index} = {index};\n", encoding="utf-8"
+        )
+    return root
+
+
+def test_create_app_workspace_adds_metadata_and_readmes(tmp_path: Path) -> None:
+    apps_dir = tmp_path / "apps"
+
+    result = create_app_workspace(
+        APP_ID,
+        "Example App",
+        origin_chat_id="chat-1",
+        apps_dir=apps_dir,
+    )
+
+    root = apps_dir / APP_ID
+    assert result["workspace_path"] == str(root.resolve())
+    assert result["created"] is True
+    assert "Example App" in (root / "README.md").read_text(encoding="utf-8")
+    assert "durable source-of-truth" in (apps_dir / "README.md").read_text(
+        encoding="utf-8"
+    )
+    metadata = json.loads((root / ".aios-app.json").read_text(encoding="utf-8"))
+    assert metadata["app_id"] == APP_ID
+    assert metadata["origin_chat_id"] == "chat-1"
+
+
+def test_create_app_workspace_preserves_project_readme(tmp_path: Path) -> None:
+    root = tmp_path / "apps" / APP_ID
+    root.mkdir(parents=True)
+    (root / "README.md").write_text("# Custom project docs\n", encoding="utf-8")
+
+    create_app_workspace(APP_ID, "Example App", apps_dir=tmp_path / "apps")
+
+    assert (root / "README.md").read_text(encoding="utf-8") == (
+        "# Custom project docs\n"
+    )
+
+
+def test_resolve_app_workspace_adopts_richest_legacy_source(tmp_path: Path) -> None:
+    sessions = tmp_path / "session"
+    sparse = _legacy_app(sessions, "chat-new", "replacement", files=1)
+    rich = _legacy_app(sessions, "chat-original", "real-project", files=5)
+
+    candidates = find_legacy_app_workspaces(APP_ID, session_dir=sessions)
+    result = resolve_app_workspace(
+        APP_ID,
+        name="Example App",
+        apps_dir=tmp_path / "apps",
+        session_dir=sessions,
+    )
+
+    assert candidates == [rich, sparse]
+    assert result["found"] is True
+    assert result["migrated_from"] == str(rich.resolve())
+    adopted = Path(result["workspace_path"])
+    assert (adopted / "frontend/source_4.js").is_file()
+    metadata = json.loads(
+        (adopted / ".aios-app.json").read_text(encoding="utf-8")
+    )
+    assert metadata["origin_chat_id"] == "chat-original"
+
+
+def test_resolve_app_workspace_does_not_fabricate_missing_source(
+    tmp_path: Path,
+) -> None:
+    result = resolve_app_workspace(
+        APP_ID,
+        apps_dir=tmp_path / "apps",
+        session_dir=tmp_path / "session",
+    )
+
+    assert result["found"] is False
+    assert "Do not fabricate" in result["error"]
+    assert not (tmp_path / "apps" / APP_ID).exists()

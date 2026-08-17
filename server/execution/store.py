@@ -24,6 +24,15 @@ class RunStore:
     def get_run(self, run_id: str, *, user_id: str | None = None) -> Run | None:
         raise NotImplementedError
 
+    def find_run_by_source(
+        self,
+        source_id: str,
+        turn_id: str | None,
+        *,
+        user_id: str | None = None,
+    ) -> Run | None:
+        raise NotImplementedError
+
     def save_run(self, run: Run) -> Run:
         raise NotImplementedError
 
@@ -102,6 +111,25 @@ class FileRunStore(RunStore):
         if user_id is not None and run.userId != user_id:
             return None
         return run
+
+    def find_run_by_source(
+        self,
+        source_id: str,
+        turn_id: str | None,
+        *,
+        user_id: str | None = None,
+    ) -> Run | None:
+        for path in self._metadata_dir.glob("*.json"):
+            try:
+                run = Run.model_validate(json.loads(path.read_text(encoding="utf-8")))
+            except (ValidationError, json.JSONDecodeError, OSError):
+                continue
+            if run.sourceId != source_id or run.turnId != turn_id:
+                continue
+            if user_id is not None and run.userId != user_id:
+                continue
+            return run
+        return None
 
     def save_run(self, run: Run) -> Run:
         self._metadata_path(run.id).write_text(

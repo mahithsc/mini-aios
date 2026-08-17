@@ -55,9 +55,22 @@ def test_app_create_uses_cloud_control_plane(monkeypatch):
             return {"id": "app_cloud123", "name": name}
 
     monkeypatch.setattr(agent_tools, "_cloud", FakeCloud)
+    monkeypatch.setattr(
+        agent_tools,
+        "create_app_workspace",
+        lambda app_id, name, origin_chat_id=None: {
+            "app_id": app_id,
+            "name": name,
+            "found": True,
+            "workspace_path": f"/workspace/apps/{app_id}",
+        },
+    )
     assert agent_tools.app_create("Example") == {
         "id": "app_cloud123",
+        "app_id": "app_cloud123",
         "name": "Example",
+        "found": True,
+        "workspace_path": "/workspace/apps/app_cloud123",
     }
 
 
@@ -68,6 +81,24 @@ def test_app_create_returns_configuration_error(monkeypatch):
     monkeypatch.setattr(agent_tools, "_cloud", missing_cloud)
     assert agent_tools.app_create("Example") == {
         "error": "AIOS_CLOUD_URL is not configured"
+    }
+
+
+def test_app_workspace_resolves_durable_source(monkeypatch):
+    monkeypatch.setattr(
+        agent_tools,
+        "resolve_app_workspace",
+        lambda app_id, origin_chat_id=None: {
+            "app_id": app_id,
+            "found": True,
+            "workspace_path": f"/workspace/apps/{app_id}",
+        },
+    )
+
+    assert agent_tools.app_workspace("app_cloud123") == {
+        "app_id": "app_cloud123",
+        "found": True,
+        "workspace_path": "/workspace/apps/app_cloud123",
     }
 
 

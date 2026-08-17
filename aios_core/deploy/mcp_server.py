@@ -18,7 +18,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .cloud_client import CloudDeployClient, CloudDeployError
 from .deployer import deploy as _deploy
-from .manifest import ManifestValidationError
+from .manifest import ManifestValidationError, find_deployment_root
 from .store import ProjectStore
 
 mcp = FastMCP("aios-deploy")
@@ -50,7 +50,9 @@ def deploy(slug: str) -> dict:
 
 def _deploy_cloud(component: Literal["database", "server", "frontend"]) -> dict:
     try:
-        result = CloudDeployClient().deploy(component, os.getcwd())
+        current_dir = os.getcwd()
+        app_dir = find_deployment_root(current_dir) or current_dir
+        result = CloudDeployClient().deploy(component, app_dir)
         deployment_id = result.get("id")
         if isinstance(deployment_id, str) and result.get("status") not in {
             "active",
@@ -107,6 +109,17 @@ def get_app_info(app_id: str) -> dict:
 
 
 @mcp.tool()
+def check_app_status(app_id: str) -> dict:
+    """Check every deploy pipeline and its artifact upload/verification state.
+
+    Returns normalized phases such as queued, in_process, action_required,
+    completed, or failed; the raw latest deployment and event; active URLs; and
+    whether each artifact was uploaded to and verified in private cloud storage.
+    """
+    return _cloud_read(lambda client: client.check_app_status(app_id))
+
+
+@mcp.tool()
 def cancel_cloud_deployment(deployment_id: str) -> dict:
     """Cancel a queued or running cloud deployment."""
     return _cloud_read(lambda client: client.cancel_deployment(deployment_id))
@@ -128,6 +141,56 @@ def rollback_cloud_deployment(deployment_id: str) -> dict:
 def delete_cloud_app(app_id: str) -> dict:
     """Queue permanent cleanup of an app and all of its provider resources."""
     return _cloud_read(lambda client: client.delete_app(app_id))
+
+
+@mcp.tool()
+def upload_app_media(
+    app_id: str,
+    local_path: str,
+    destination: str | None = None,
+    content_type: str | None = None,
+) -> dict:
+    """Upload workspace media through aios-cloud into the app's private storage.
+
+    The file must be inside the current app workspace. Provider credentials are
+    never exposed; aios-cloud issues a short-lived object-scoped upload URL.
+    """
+    try:
+        current_dir = os.getcwd()
+        app_root = find_deployment_root(current_dir) or current_dir
+        return CloudDeployClient().upload_app_media(
+            app_id,
+            local_path,
+            destination=destination,
+            content_type=content_type,
+            allowed_root=app_root,
+        )
+    except (CloudDeployError, OSError) as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+@mcp.tool()
+def list_app_media(app_id: str) -> dict:
+    """List verified media objects stored for an app."""
+    return _cloud_read(lambda client: client.list_app_media(app_id))
+
+
+@mcp.tool()
+def get_app_media_url(
+    app_id: str, media_id: str, expires_in: int = 3600
+) -> dict:
+    """Create a temporary private download URL for an app media object."""
+    return _cloud_read(
+        lambda client: client.get_app_media_url(
+            app_id, media_id, expires_in=expires_in
+        )
+    )
+
+
+@mcp.tool()
+def delete_app_media(app_id: str, media_id: str) -> dict:
+    """Delete an app media object through aios-cloud."""
+    return _cloud_read(lambda client: client.delete_app_media(app_id, media_id))
 
 
 def _cloud_read(operation) -> dict:

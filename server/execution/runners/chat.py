@@ -4,6 +4,7 @@ import ast
 import json
 
 from agno.agent import RunEvent as AgentRunEvent
+from agno.models.message import Message
 
 from aios_core.agent import create_agent
 from aios_core.runtime_context import (
@@ -11,6 +12,7 @@ from aios_core.runtime_context import (
     push_chat_runtime_context,
 )
 from aios_core.sessions import load_chat_session
+from aios_core.tools.codex_job import _manager as codex_job_manager
 from server.execution.service import RunsService, build_run_event
 from server.lights import lights
 from server.types.run import Run
@@ -32,6 +34,56 @@ def _normalize_tool_result(tool_name: str, result: object) -> object:
         return result
 
 
+def _codex_context_messages(run: Run) -> list[Message]:
+    records: list[dict] = []
+    if run.sourceId and run.sourceId.startswith("codex:"):
+        job_id = run.sourceId.split(":", 1)[1]
+        record = codex_job_manager.store.get(job_id)
+        if record is not None:
+            records.append(record)
+    elif run.chatId:
+        records.extend(
+            record
+            for record in codex_job_manager.list_for_session(run.chatId)
+            if record.get("status") == "awaiting_input"
+        )
+
+    messages: list[Message] = []
+    for record in records[:3]:
+        status = str(record.get("status") or run.turnId or "unknown")
+        common = (
+            "This is trusted runtime context for a Codex child run. "
+            f"Job id: {record.get('job_id')}. Status: {status}. "
+            f"Delegated task: {record.get('task')}. "
+            f"Working directory: {record.get('workdir')}. "
+        )
+        if status == "done":
+            instruction = (
+                f"Codex reported: {record.get('result') or '(empty)'}. "
+                "Inspect the resulting files, run proportionate verification, and "
+                "then give the user a concise verified final response. Do not merely "
+                "repeat Codex's claim."
+            )
+        elif status == "awaiting_input":
+            instruction = (
+                "Codex is waiting for user input. Ask the user the following "
+                "questions faithfully and do not invent answers: "
+                f"{json.dumps(record.get('pending_input'), default=str)}. "
+                "If the latest user message already supplies the answers, call "
+                "codex_answer with this job id and the matching question ids."
+            )
+        elif status == "error":
+            instruction = (
+                f"Codex failed: {record.get('error') or 'unknown error'}. "
+                "Inspect any partial work if useful, then explain the failure and "
+                "the safest next step to the user."
+            )
+        else:
+            instruction = "Use this state only as context for the user's latest request."
+        messages.append(Message(role="system", content=common + instruction))
+    return messages
+
+
 class ChatRunner:
     kind = "chat"
 
@@ -50,6 +102,7 @@ class ChatRunner:
             return
 
         messages = format_chat_messages_to_model_messages(load_chat_session(chat_id))
+        messages.extend(_codex_context_messages(run))
         await runs_service.emit_event(
             run.id,
             build_run_event(
@@ -60,7 +113,7 @@ class ChatRunner:
         )
 
         produced_output = False
-        runtime_context_tokens = push_chat_runtime_context(chat_id)
+        runtime_context_tokens = push_chat_runtime_context(chat_id, run.id)
 
         try:
             await lights.set_mode("thinking")

@@ -83,18 +83,23 @@ _BASE_TOOLS_BLOCK = """
 "codex_start": (
     "Preferred way to delegate a self-contained coding task to Codex. Starts the "
     "Codex coding agent as a BACKGROUND job and returns a job_id immediately, so "
-    "long builds never block the turn or hit a timeout. Use for implementing, "
-    "editing, refactoring, or building code in a directory. Codex cannot see this "
+    "long builds never block the turn or hit a timeout. The runtime automatically "
+    "starts a continuation turn when Codex finishes or requests input; acknowledge "
+    "the delegation and end the current turn instead of polling. Use it by default "
+    "for substantial coding: multi-file changes, new features, debugging, refactors, "
+    "tests, dependency/config/schema work, or anything requiring repository exploration. "
+    "Codex cannot see this "
     "chat, so `task` must be complete and self-contained: state the concrete goal, "
     "name the target files, and include any needed context. `path` is the working "
-    "directory. After starting, call codex_poll to watch progress and get the "
-    "result; you may keep working while it runs.",
+    "directory. Set deploy=true only when the user explicitly requested deployment.",
     {"task": "string (self-contained instruction, incl. target files/context)",
-     "model": "string?", "path": "string? (working directory; default '.')"},
+     "model": "string?", "path": "string? (working directory; default '.')",
+     "deploy": "boolean? (default false; explicit deployment requests only)"},
     codex_start,
 ),
 "codex_poll": (
-    "Check a Codex job from codex_start. Returns status "
+    "Diagnostic inspection for a Codex job. Normal delegation is resumed "
+    "automatically by the runtime, so do not repeatedly poll after codex_start. Returns status "
     "(running|awaiting_input|done|error|cancelled), new "
     "activity events since `cursor` (commands run, files changed), the updated "
     "cursor, and — when done — Codex's final result. If status is "
@@ -134,9 +139,19 @@ _BASE_TOOLS_BLOCK = """
 ),
 "app_create": (
     "Reserve a cloud app identity before asking Codex to build a deployable app. "
-    "Put the returned app_id in the artifact's aios.deploy.yaml manifest.",
+    "Creates the durable workspace/apps/<app-id> source directory and returns its "
+    "workspace_path. Put the returned app_id in aios.deploy.yaml and run Codex at "
+    "the returned workspace_path.",
     {"name": "string (human-readable app name)"},
     app_create,
+),
+"app_workspace": (
+    "Resolve an existing cloud app to its durable local source directory. If the "
+    "app only exists in a legacy chat session, safely adopts the richest matching "
+    "source tree into workspace/apps/<app-id>. Never fabricate replacement source "
+    "when found=false.",
+    {"app_id": "string"},
+    app_workspace,
 ),
 "app_info": (
     "Get a cloud app's metadata and the active URL plus latest deployment state "
@@ -315,7 +330,8 @@ def build_agent_prompt(
             f"""
             All work for the user must happen inside the workspace.
             Workspace path: {workspace_dir}
-            If you create a new project folder, create a `WORKSPACE.md` file in that folder and keep it updated with project-specific documentation.
+            Durable application source belongs in `{workspace_dir}/apps/<app-id>`, never under a chat session directory. `app_create` creates this folder and its README; use the returned `workspace_path` for every Codex build. For an existing cloud app, call `app_workspace(app_id)` and use its `workspace_path` instead of searching or guessing a session path.
+            Non-app scratch files may remain in the current chat files directory. If you create another durable project folder, include a small `README.md` and keep it updated with project-specific documentation.
             For longer-horizon work, it is encouraged to keep a `TICKETS.md` task board so progress and decisions remain visible.
             """,
         ),
@@ -353,11 +369,14 @@ def build_agent_prompt(
         _section(
             "writing_code",
             """
-            A big part of your job is writing code.
-            Use `codex_start` to delegate coding tasks — implementing, editing, refactoring, or building apps — to the Codex coding agent; it runs in the background, so poll it with `codex_poll` for progress and the result. Hand it a clear, self-contained task that names the target files and includes the context it needs (it cannot see this chat). If Codex returns `awaiting_input`, surface its questions to the user and pass their answers to `codex_answer`; do not treat that state as a failure.
-            Do simple, quick edits yourself with the file tools; reserve `codex_start` for real coding work rather than trivial one-liners.
+            CODING DELEGATION GATE:
+            Before editing code, classify the request. Delegate with `codex_start` whenever the task involves any of the following: more than one file; a new feature or endpoint; non-obvious debugging; repository-wide discovery; a refactor; tests that must be added or changed; dependency, build, deployment, database, schema, authentication, or infrastructure configuration; or any implementation likely to require multiple edit/test cycles. When uncertain, delegate.
 
-            Building runnable apps — AUTO-DEPLOY: when the user EXPLICITLY asks you to build an app that runs (a website, web server, dashboard, API, or similar runnable app), first call `app_create` to reserve its cloud identity. Include the returned `app_id` in the self-contained Codex task. Tell Codex to create `aios.deploy.yaml` at the app root, declare only the components the app actually has, and call the matching cloud tools after building: `deploy_database` for Supabase migrations, `deploy_server` for a Dockerized backend on DigitalOcean, and `deploy_frontend` for a frontend on Vercel. If components depend on one another, deploy the database before the server and the server before the frontend. A cloud deploy may return `queued`, `building`, or another nonterminal state with a deployment ID. In that case, call `get_deployment_status` until it becomes terminal, and use `get_deployment_events` for progress or a provider-safe failure summary. Use `get_app_info` whenever you need to rediscover the app's active backend or frontend URL. If a deployment returns `awaiting_secrets` or `awaiting_confirmation`, surface that action to the user instead of trying to read from stdin or asking Codex to invent a value. Never report a deployment as complete until its status is `active`.
+            The main agent may edit code directly only for a genuinely trivial, obvious, low-risk change confined to one known file, such as correcting copy, changing one constant, or making a tiny configuration adjustment that needs no repository exploration. Do not begin a substantial implementation yourself and delegate only after it becomes difficult. Inspect only enough context to identify the correct repository/app root and write a precise task, then delegate the implementation.
+
+            A Codex task must be self-contained: state the goal, correct working directory, relevant files or app ID, constraints, expected behavior, and required verification. Codex cannot see this chat. The runtime automatically starts a continuation turn when Codex completes or requests input, so after a successful start, tell the user the work is underway and end the current turn; do not repeatedly call `codex_poll`. On the continuation turn, independently inspect Codex's diff and verification results before reporting completion. If a user's latest message answers an awaiting Codex question, pass the mapped answers to `codex_answer`.
+
+            Building runnable apps — AUTO-DEPLOY: when the user EXPLICITLY asks you to build an app that runs (a website, web server, dashboard, API, or similar runnable app), first call `app_create` to reserve its cloud identity and durable source directory. Include the returned `app_id` in the self-contained Codex task and call `codex_start` with `path` set exactly to the returned `workspace_path` and deploy=true. For changes or redeployments of an existing app, call `app_workspace(app_id)` first and use its returned `workspace_path`; if it returns found=false, stop and report that the original source must be restored instead of inventing replacement code. Tell Codex to create `aios.deploy.yaml` at the app root, declare only the components the app actually has, and call the matching cloud tools after building: `deploy_database` for Supabase migrations, `deploy_server` for a Dockerized backend on DigitalOcean, and `deploy_frontend` for a frontend on Vercel. If components depend on one another, deploy the database before the server and the server before the frontend. A cloud deploy may return `queued`, `building`, or another nonterminal state with a deployment ID. In that case, call `check_app_status` with the reserved app ID to inspect every component phase and artifact upload/verification state; use `get_deployment_status` and `get_deployment_events` for deeper per-job progress or provider-safe failure details. Use `get_app_info` whenever you need to rediscover the app's active backend or frontend URL. If a deployment returns `awaiting_secrets` or `awaiting_confirmation`, surface that action to the user instead of trying to read from stdin or asking Codex to invent a value. Never report a deployment as complete until its status is `active`.
             The manifest contains secret references, never secret values. Call `secrets_list` when an app needs credentials, and pass Codex only the relevant secret reference IDs, kinds, labels, and configured state. Never ask for or expose their values. Do not place credentials in source files, Dockerfiles, build arguments, or the manifest. Server secret bindings must use `exposure: runtime`; build-time server secrets are unsupported. A Dockerfile may declare an empty `ENV NAME=""` stub so generated code knows the variable exists, but it must never contain a secret value or a secret `ARG`. A server component must include its Dockerfile at the path declared in the manifest, listen on the App Platform supplied `$PORT` (8080 by default), and implement its declared `health_path`. Frontends may use the framework appropriate to the app because Vercel performs their build.
             Database migrations use ordered filenames such as `001_create_users.sql`. The initial cloud contract accepts additive PostgreSQL DDL only: create tables, indexes, enums, and sequences, plus allowlisted additive `ALTER TABLE` operations. Use unqualified lowercase table and column names. Do not emit role, schema, extension, function, arbitrary SELECT/DML, DROP, TRUNCATE, or destructive ALTER statements; the cloud provisions the schema, roles, extensions, RLS, and grants itself.
             Only auto-deploy when the user explicitly asked to build an app. For ordinary code edits, snippets, scripts, one-off programs, or library/package work, do NOT deploy.
@@ -410,7 +429,7 @@ def build_agent_prompt(
                 Default chat artifacts directory: {current_chat_artifacts_dir}
                 {artifact_url_line}
                 Relative paths for file tools, search tools, shell commands, PTY sessions, and Codex default to the chat files directory.
-                Use explicit workspace-relative paths like `session/...` or `runs/...` only when you intentionally want to work outside the chat files directory.
+                Chat files are scratch space, not durable application source. Use `app_create` or `app_workspace` to obtain the canonical `apps/<app-id>` path for app work. Use explicit workspace-relative paths like `apps/...`, `session/...`, or `runs/...` only when you intentionally want to work outside the chat files directory.
                 """,
             )
         )

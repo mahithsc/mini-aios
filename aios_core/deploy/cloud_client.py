@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import mimetypes
 import os
+import sqlite3
 import tempfile
 import uuid
 from collections.abc import Callable, Iterator
@@ -14,10 +17,25 @@ import httpx
 from .archive import ArtifactArchive, create_artifact_archive
 
 DeploymentComponent = Literal["database", "server", "frontend"]
+DEFAULT_CLOUD_URL = "https://computer.winkapiserver.org"
 
 
 class CloudDeployError(RuntimeError):
     """A cloud deployment request could not be completed."""
+
+
+def _paired_device_token() -> str:
+    """Load the token minted during device pairing from persistent storage."""
+    from aios_core.db import get_db_connection
+
+    try:
+        with get_db_connection() as connection:
+            row = connection.execute(
+                "SELECT device_token FROM device_link WHERE id = 1"
+            ).fetchone()
+    except (sqlite3.Error, OSError):
+        return ""
+    return str(row[0]).strip() if row and row[0] else ""
 
 
 class CloudDeployClient:
@@ -28,15 +46,21 @@ class CloudDeployClient:
         device_token: str | None = None,
         client_factory: Callable[[], httpx.Client] | None = None,
     ) -> None:
-        self._base_url = (base_url or os.getenv("AIOS_CLOUD_URL", "")).rstrip("/")
-        self._device_token = device_token or os.getenv("AIOS_CLOUD_DEVICE_TOKEN", "")
+        self._base_url = (
+            base_url or os.getenv("AIOS_CLOUD_URL") or DEFAULT_CLOUD_URL
+        ).rstrip("/")
+        self._device_token = (
+            device_token
+            or os.getenv("AIOS_CLOUD_DEVICE_TOKEN", "")
+            or _paired_device_token()
+        )
         self._client_factory = client_factory or (
             lambda: httpx.Client(timeout=httpx.Timeout(60.0, read=300.0))
         )
-        if not self._base_url:
-            raise CloudDeployError("AIOS_CLOUD_URL is not configured")
         if not self._device_token:
-            raise CloudDeployError("AIOS_CLOUD_DEVICE_TOKEN is not configured")
+            raise CloudDeployError(
+                "Device is not paired with aios-cloud; pair the device before deploying"
+            )
 
     def create_app(self, name: str) -> dict[str, Any]:
         """Reserve an app identity before Codex creates its deploy manifest."""
@@ -52,6 +76,10 @@ class CloudDeployClient:
     def get_app_info(self, app_id: str) -> dict[str, Any]:
         """Get durable app metadata and current component endpoints."""
         return self._request_json("GET", f"/v1/apps/{app_id}/info")
+
+    def check_app_status(self, app_id: str) -> dict[str, Any]:
+        """Get the app's component pipelines and artifact upload state."""
+        return self._request_json("GET", f"/v1/apps/{app_id}/status")
 
     def delete_app(self, app_id: str) -> dict[str, Any]:
         return self._request_json("DELETE", f"/v1/apps/{app_id}")
@@ -208,6 +236,90 @@ class CloudDeployClient:
             f"/v1/apps/{app_id}/database/migrations",
         )
 
+    def upload_app_media(
+        self,
+        app_id: str,
+        local_path: str | Path,
+        *,
+        destination: str | None = None,
+        content_type: str | None = None,
+        allowed_root: str | Path | None = None,
+    ) -> dict[str, Any]:
+        path = Path(local_path).expanduser().resolve(strict=True)
+        root = Path(allowed_root or os.getcwd()).expanduser().resolve(strict=True)
+        if not path.is_file() or not path.is_relative_to(root):
+            raise CloudDeployError("Media file must be inside the current app workspace")
+        size = path.stat().st_size
+        if size <= 0 or size > 100 * 1024 * 1024:
+            raise CloudDeployError("Media file must be between 1 byte and 100 MB")
+        detected_type = (
+            content_type or mimetypes.guess_type(path.name)[0] or ""
+        ).split(";", 1)[0].strip().lower()
+        if not detected_type.startswith(("image/", "video/", "audio/")):
+            raise CloudDeployError("Only image, video, or audio files can be uploaded")
+        digest = _file_sha256(path)
+        registration = self._request_json(
+            "POST",
+            f"/v1/apps/{app_id}/media/uploads",
+            json={
+                "filename": path.name,
+                "content_type": detected_type,
+                "size": size,
+                "sha256": digest,
+                "destination": destination,
+            },
+        )
+        media = registration.get("media")
+        upload_url = registration.get("upload_url")
+        if (
+            not isinstance(media, dict)
+            or not isinstance(media.get("id"), str)
+            or not isinstance(upload_url, str)
+            or not upload_url
+        ):
+            raise CloudDeployError("Cloud returned an invalid media upload registration")
+        with self._client_factory() as client:
+            response = client.put(
+                upload_url,
+                headers={
+                    "Content-Type": detected_type,
+                    "Cache-Control": "max-age=31536000, immutable",
+                    "x-upsert": "false",
+                    "Content-Length": str(size),
+                },
+                content=_file_chunks(path),
+            )
+        self._raise_for_status(response, "Media upload failed")
+        completed = self._request_json(
+            "POST",
+            f"/v1/apps/{app_id}/media/{media['id']}/complete",
+        )
+        completed_media = completed.get("media")
+        if (
+            not isinstance(completed_media, dict)
+            or completed_media.get("status") != "ready"
+        ):
+            raise CloudDeployError("Cloud did not mark the media object ready")
+        return completed_media
+
+    def list_app_media(self, app_id: str) -> dict[str, Any]:
+        return self._request_json("GET", f"/v1/apps/{app_id}/media")
+
+    def get_app_media_url(
+        self, app_id: str, media_id: str, *, expires_in: int = 3600
+    ) -> dict[str, Any]:
+        return self._request_json(
+            "GET",
+            f"/v1/apps/{app_id}/media/{media_id}/url",
+            params={"expires_in": expires_in},
+        )
+
+    def delete_app_media(self, app_id: str, media_id: str) -> dict[str, Any]:
+        return self._request_json(
+            "DELETE",
+            f"/v1/apps/{app_id}/media/{media_id}",
+        )
+
     def _request_json(
         self,
         method: str,
@@ -283,3 +395,10 @@ def _file_chunks(path: Path) -> Iterator[bytes]:
     with path.open("rb") as handle:
         while chunk := handle.read(1024 * 1024):
             yield chunk
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    for chunk in _file_chunks(path):
+        digest.update(chunk)
+    return digest.hexdigest()

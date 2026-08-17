@@ -1,6 +1,10 @@
 import subprocess
 
-from ..runtime_context import resolve_chat_files_path
+from ..runtime_context import resolve_codex_workdir
+
+
+def resolve_chat_files_path(path: str):
+    return resolve_codex_workdir(path)
 
 
 def codex(
@@ -24,7 +28,10 @@ def codex(
 
     if not isinstance(path, str) or not path.strip():
         return "error: path must be a non-empty string"
-    workdir = resolve_chat_files_path(path.strip())
+    try:
+        workdir = resolve_chat_files_path(path.strip()).resolve()
+    except ValueError as exc:
+        return f"error: {exc}"
     if not workdir.exists():
         return f"error: path does not exist: {workdir}"
     if not workdir.is_dir():

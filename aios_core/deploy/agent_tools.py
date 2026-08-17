@@ -8,6 +8,12 @@ for tests.
 
 from __future__ import annotations
 
+from ..app_workspaces import (
+    AppWorkspaceError,
+    create_app_workspace,
+    resolve_app_workspace,
+)
+from ..runtime_context import get_current_chat_id
 from .cloud_client import CloudDeployClient, CloudDeployError
 from .store import ProjectStore
 from .supervisor import Supervisor
@@ -26,11 +32,35 @@ def _cloud() -> CloudDeployClient:
 
 
 def app_create(name: str) -> dict:
-    """Reserve a cloud app ID for an artifact's ``aios.deploy.yaml`` manifest."""
+    """Reserve a cloud app ID and its durable local source workspace."""
     try:
-        return _cloud().create_app(name)
+        app = _cloud().create_app(name)
     except CloudDeployError as exc:
         return {"error": str(exc)}
+
+    app_id = app.get("id")
+    if not isinstance(app_id, str):
+        return {**app, "workspace_error": "Cloud response did not include an app ID"}
+    try:
+        workspace = create_app_workspace(
+            app_id,
+            str(app.get("name") or name),
+            origin_chat_id=get_current_chat_id(),
+        )
+        return {**app, **workspace}
+    except (AppWorkspaceError, OSError) as exc:
+        return {**app, "workspace_error": str(exc)}
+
+
+def app_workspace(app_id: str) -> dict:
+    """Resolve or adopt an app's durable local source workspace."""
+    try:
+        return resolve_app_workspace(
+            app_id,
+            origin_chat_id=get_current_chat_id(),
+        )
+    except (AppWorkspaceError, OSError) as exc:
+        return {"app_id": app_id, "found": False, "error": str(exc)}
 
 
 def app_info(app_id: str) -> dict:

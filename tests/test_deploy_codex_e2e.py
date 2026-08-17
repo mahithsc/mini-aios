@@ -40,7 +40,7 @@ def test_codex_builds_and_deploys(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cj, "resolve_chat_files_path", lambda p: tmp_path)
 
-    started = cj.codex_start(task=_TASK, path=".")
+    started = cj.codex_start(task=_TASK, path=".", deploy=True)
     assert "job_id" in started, started
     job_id = started["job_id"]
 

@@ -94,10 +94,15 @@ def test_deploy_via_mcp_roundtrip(tmp_path):
         assert "get_deployment_status" in tool_names
         assert "get_deployment_events" in tool_names
         assert "get_app_info" in tool_names
+        assert "check_app_status" in tool_names
         assert "cancel_cloud_deployment" in tool_names
         assert "resume_cloud_deployment" in tool_names
         assert "rollback_cloud_deployment" in tool_names
         assert "delete_cloud_app" in tool_names
+        assert "upload_app_media" in tool_names
+        assert "list_app_media" in tool_names
+        assert "get_app_media_url" in tool_names
+        assert "delete_app_media" in tool_names
         assert "list_database_tables" in tool_names
         assert "inspect_database_table" in tool_names
         assert "query_database_table" in tool_names

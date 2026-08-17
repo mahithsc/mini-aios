@@ -36,13 +36,27 @@ def insert_gateway_event(
 ) -> dict[str, Any]:
     created_at = utc_now_iso()
     payload_json = json.dumps(payload, default=str)
+    source_event_id = payload.get("codex_event_id")
+    if not isinstance(source_event_id, str) or not source_event_id:
+        source_event_id = None
     with get_db_connection(db_path) as conn:
         cursor = conn.execute(
-            "INSERT INTO gateway_events (session_id, type, payload_json, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (session_id, event_type, payload_json, created_at),
+            "INSERT OR IGNORE INTO gateway_events "
+            "(session_id, type, payload_json, source_event_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (session_id, event_type, payload_json, source_event_id, created_at),
         )
-        event_id = cursor.lastrowid
+        if cursor.rowcount == 1:
+            event_id = cursor.lastrowid
+        else:
+            row = conn.execute(
+                "SELECT id, session_id, type, payload_json, created_at "
+                "FROM gateway_events WHERE source_event_id = ?",
+                (source_event_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("gateway event deduplication lookup failed")
+            return _shape_event_row(row)
     return _shape_event_row((event_id, session_id, event_type, payload_json, created_at))
 
 

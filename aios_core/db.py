@@ -73,12 +73,23 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
                 session_id      TEXT NOT NULL,
                 type            TEXT NOT NULL,
                 payload_json    TEXT NOT NULL,
+                source_event_id TEXT,
                 created_at      TEXT NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_gateway_events_session_id_id
                 ON gateway_events(session_id, id);
         """)
+        gateway_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(gateway_events)").fetchall()
+        }
+        if "source_event_id" not in gateway_columns:
+            conn.execute("ALTER TABLE gateway_events ADD COLUMN source_event_id TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_gateway_events_source_event_id "
+            "ON gateway_events(source_event_id) WHERE source_event_id IS NOT NULL"
+        )
         conn.execute(
             """
             INSERT OR IGNORE INTO schema_migrations (

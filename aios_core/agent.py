@@ -12,6 +12,7 @@ from .deploy.agent_tools import (
     app_restart,
     app_status,
     app_stop,
+    app_workspace,
     apps_list,
     secrets_list,
 )
@@ -87,6 +88,7 @@ MAIN_TOOLS = [
     session_search,
     subagent,
     app_create,
+    app_workspace,
     app_info,
     secrets_list,
     apps_list,

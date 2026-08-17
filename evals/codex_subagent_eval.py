@@ -95,23 +95,30 @@ BUDGET = _Budget()
 
 
 # --------------------------------------------------------------------------- #
-# Agent construction with a recording stub for codex_subagent
+# Agent construction with a recording stub for the preferred codex_start path
 # --------------------------------------------------------------------------- #
 
 
 def _make_recording_codex(sink: list[dict]) -> Callable:
-    """A stand-in for codex_subagent that records the args the agent passes and
+    """A stand-in for codex_start that records the args the agent passes and
     returns a canned success — so decision/instruction cases don't pay for a
     real Codex run. Mirrors the real tool's name + docstring + signature so the
     model's view of the tool is identical."""
-    from aios_core.tools.codex_subagent import codex_subagent as real
+    from aios_core.tools.codex_job import codex_start as real
 
-    def codex_subagent(task=None, timeout=180, model=None, path=".", fc=None):
-        sink.append({"task": task, "timeout": timeout, "model": model, "path": path})
-        return "Completed the delegated task. (recording stub)"
+    def codex_start(task=None, path=".", model=None, deploy=False, fc=None):
+        sink.append(
+            {"task": task, "model": model, "path": path, "deploy": deploy}
+        )
+        return {
+            "job_id": "recording-job",
+            "status": "running",
+            "workdir": path,
+            "auto_continuation": True,
+        }
 
-    codex_subagent.__doc__ = real.__doc__
-    return codex_subagent
+    codex_start.__doc__ = real.__doc__
+    return codex_start
 
 
 def _build_agent(record_sink: list[dict] | None) -> Agent:
@@ -119,7 +126,7 @@ def _build_agent(record_sink: list[dict] | None) -> Agent:
 
     tools = []
     for tool in MAIN_TOOLS:
-        if getattr(tool, "__name__", "") == "codex_subagent" and record_sink is not None:
+        if getattr(tool, "__name__", "") == "codex_start" and record_sink is not None:
             tools.append(_make_recording_codex(record_sink))
         else:
             tools.append(tool)
@@ -139,10 +146,10 @@ def _run_messages(agent: Agent, messages: list[dict]) -> tuple[list[dict], str]:
     final_chunks: list[str] = []
     for event in agent.run(messages, stream=True, stream_events=True):
         if event.event == AgentRunEvent.tool_call_started and event.tool is not None:
-            if event.tool.tool_name == "codex_subagent":
+            if event.tool.tool_name in {"codex_start", "codex_subagent"}:
                 calls.append({"args": event.tool.tool_args, "result": None})
         elif event.event == AgentRunEvent.tool_call_completed and event.tool is not None:
-            if event.tool.tool_name == "codex_subagent" and calls:
+            if event.tool.tool_name in {"codex_start", "codex_subagent"} and calls:
                 calls[-1]["result"] = str(event.tool.result)[:400]
         elif event.event == AgentRunEvent.run_content and event.content is not None:
             final_chunks.append(str(event.content))
@@ -222,7 +229,7 @@ class CaseResult:
 
 
 POSITIVE_PROMPT = (
-    "Use the codex subagent to implement a function add(a, b) that returns their "
+    "Use your Codex coding agent to implement a function add(a, b) that returns their "
     "sum, written to a file calc.py in the current directory."
 )
 NEGATIVE_PROMPTS = [

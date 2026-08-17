@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from typing import Protocol
@@ -11,6 +12,7 @@ from server.types.run import Run, RunCreateRequest, RunEvent, RunEventType, RunK
 from aios_core.runtime_control import get_runtime_control
 
 _STALE_RUN_ERROR_MESSAGE = "Server restarted before run completed."
+log = logging.getLogger(__name__)
 
 
 class RunExecutor(Protocol):
@@ -43,6 +45,8 @@ class RunsService:
         self._runners: dict[str, RunExecutor] = {}
         self._workers: list[asyncio.Task[None]] = []
         self._lock = asyncio.Lock()
+        self._chat_locks: dict[str, asyncio.Lock] = {}
+        self._chat_lock_users: dict[str, int] = {}
         self._started = False
 
     async def start(self) -> None:
@@ -77,9 +81,16 @@ class RunsService:
         user_id: str | None = None,
     ) -> Run:
         get_runtime_control().ensure_accepting_work()
-        run = self._store.create_run(request, user_id=user_id)
-
         async with self._lock:
+            if request.sourceId:
+                existing = self._store.find_run_by_source(
+                    request.sourceId,
+                    request.turnId,
+                    user_id=user_id,
+                )
+                if existing is not None:
+                    return existing
+            run = self._store.create_run(request, user_id=user_id)
             self._active_runs[run.id] = ActiveRun(run=run)
 
         self._store.save_snapshot(run.id, status="queued", last_sequence=0)
@@ -165,13 +176,61 @@ class RunsService:
 
         self._sync_active_run(snapshot)
         await self._broadcaster.broadcast_run_event(persisted_event)
+        self._update_codex_verification(run, persisted_event)
         return persisted_event
+
+    @staticmethod
+    def _update_codex_verification(run: Run, event: RunEvent) -> None:
+        if not run.sourceId or not run.sourceId.startswith("codex:"):
+            return
+        mapping = {
+            "started": "running",
+            "completed": "completed",
+            "error": "error",
+            "cancelled": "cancelled",
+        }
+        verification_status = mapping.get(event.event.type)
+        if verification_status is None:
+            return
+        from aios_core.tools.codex_job import _manager as codex_job_manager
+
+        job_id = run.sourceId.split(":", 1)[1]
+        if codex_job_manager.store.get(job_id) is None:
+            log.warning("Codex verification record %s no longer exists", job_id)
+            return
+        try:
+            codex_job_manager.store.update(
+                job_id, verification_status=verification_status
+            )
+            codex_job_manager.emit_status(
+                job_id,
+                f"codex.verification.{verification_status}",
+                {"status": verification_status, "continuation_run_id": run.id},
+            )
+        except Exception:
+            log.exception("Failed to persist Codex verification state for %s", job_id)
 
     async def _reconcile_stale_runs(self) -> None:
         stale_snapshots = self._store.list_snapshots(statuses=["queued", "running"])
         for snapshot in stale_snapshots:
             run = self._store.get_run(snapshot.runId)
             if run is None:
+                continue
+
+            if run.sourceId and run.sourceId.startswith("codex:"):
+                requeued = run.model_copy(
+                    update={"status": "queued", "updatedAt": int(time.time() * 1000)}
+                )
+                self._store.save_run(requeued)
+                self._store.save_snapshot(
+                    run.id,
+                    status="queued",
+                    last_sequence=snapshot.lastSequence,
+                    preview=snapshot.preview,
+                    active_step="recovered continuation",
+                )
+                self._active_runs[run.id] = ActiveRun(run=requeued)
+                await self._queue.put(run.id)
                 continue
 
             await self.emit_event(
@@ -281,7 +340,7 @@ class RunsService:
                         continue
 
                     execution_task = asyncio.create_task(
-                        runner.execute(active.run, self),
+                        self._execute_serialized(runner, active.run),
                         name=f"run-execute-{run_id}",
                     )
                     active.execution_task = execution_task
@@ -316,6 +375,27 @@ class RunsService:
                         active.execution_task = None
             finally:
                 self._queue.task_done()
+
+    async def _execute_serialized(self, runner: RunExecutor, run: Run) -> None:
+        """Keep turns for one chat ordered while retaining cross-chat concurrency."""
+
+        if not run.chatId:
+            await runner.execute(run, self)
+            return
+        chat_id = run.chatId
+        lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
+        self._chat_lock_users[chat_id] = self._chat_lock_users.get(chat_id, 0) + 1
+        try:
+            async with lock:
+                await runner.execute(run, self)
+        finally:
+            remaining = self._chat_lock_users.get(chat_id, 1) - 1
+            if remaining <= 0:
+                self._chat_lock_users.pop(chat_id, None)
+                if self._chat_locks.get(chat_id) is lock:
+                    self._chat_locks.pop(chat_id, None)
+            else:
+                self._chat_lock_users[chat_id] = remaining
 
     def _sync_active_run(self, snapshot: RunSnapshot) -> None:
         active = self._active_runs.get(snapshot.runId)

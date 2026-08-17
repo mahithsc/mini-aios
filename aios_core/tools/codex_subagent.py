@@ -23,14 +23,21 @@ from __future__ import annotations
 import json
 import os
 import queue
+import signal
 import subprocess
 import threading
 from time import monotonic
 from typing import Any, Iterator
 from uuid import uuid4
 
-from ..runtime_context import resolve_chat_files_path
+from ..runtime_context import resolve_codex_workdir
 from .subagent_events import SubagentStreamEvent, build_subagent_stream_event
+
+
+def resolve_chat_files_path(path: str) -> Any:
+    """Compatibility wrapper around the contained Codex path resolver."""
+
+    return resolve_codex_workdir(path)
 
 
 def _summarize_input(item: dict[str, Any]) -> str:
@@ -43,6 +50,14 @@ def _summarize_input(item: dict[str, Any]) -> str:
             path = change.get("path") or ""
             parts.append(f"{change.get('kind', 'edit')} {os.path.basename(path)}".strip())
         return ", ".join(parts) or "file change"
+    if itype == "mcp_tool_call":
+        server = str(item.get("server") or "mcp")
+        tool = str(item.get("tool") or item.get("name") or "tool")
+        arguments = item.get("arguments")
+        suffix = ""
+        if arguments not in (None, {}, ""):
+            suffix = f" {json.dumps(arguments, default=str, sort_keys=True)}"
+        return f"{server}.{tool}{suffix}"
     # Best-effort for unknown item types (reasoning, web_search, mcp_tool_call...).
     return str(item.get("command") or item.get("query") or item.get("name") or itype or "tool")
 
@@ -59,6 +74,16 @@ def _summarize_output(item: dict[str, Any]) -> str:
         summary = _summarize_input(item)
         status = item.get("status")
         return f"{summary} ({status})" if status else summary
+    if itype == "mcp_tool_call":
+        if item.get("error") not in (None, ""):
+            return str(item["error"])
+        result = item.get("result")
+        if result not in (None, ""):
+            return (
+                result
+                if isinstance(result, str)
+                else json.dumps(result, default=str, sort_keys=True)
+            )
     return str(item.get("status") or "done")
 
 
@@ -142,7 +167,11 @@ def codex_subagent(
         yield "error: path must be a non-empty string"
         return
 
-    workdir = resolve_chat_files_path(path.strip())
+    try:
+        workdir = resolve_chat_files_path(path.strip()).resolve()
+    except ValueError as exc:
+        yield f"error: {exc}"
+        return
     if not workdir.exists():
         yield f"error: path does not exist: {workdir}"
         return
@@ -186,6 +215,7 @@ def codex_subagent(
             text=True,
             bufsize=1,
             cwd=str(workdir),
+            start_new_session=True,
         )
     except FileNotFoundError:
         yield event("stream_error", error="codex CLI is not installed or not on PATH")
@@ -251,7 +281,14 @@ def codex_subagent(
             for out_event in _drain(translate_codex_event(obj)):
                 yield out_event
     except TimeoutError:
-        process.kill()
+        try:
+            pid = getattr(process, "pid", None)
+            if isinstance(pid, int):
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+            else:
+                process.kill()
+        except Exception:
+            process.kill()
         yield event("stream_error", error=f"Codex timed out after {timeout_value:g}s.")
         yield f"error: codex timed out after {timeout_value:g}s"
         return

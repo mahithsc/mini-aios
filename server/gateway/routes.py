@@ -18,7 +18,6 @@ from aios_core.sessions import (
     update_chat_status,
     update_chat_title,
 )
-from aios_core.tools.codex_job import CodexJob
 from aios_core.tools.codex_job import _manager as codex_job_manager
 from server.execution.runtime import get_runs_service
 from server.types.chat import AssistantMessage, ChatMetadata, UserMessage
@@ -242,26 +241,26 @@ async def interrupt_session(session_id: str) -> dict[str, Any]:
     runs_service = get_runs_service()
     active = runs_service.list_active_runs(kinds=["chat"])
     target = next((snapshot for snapshot in active if snapshot.chatId == session_id), None)
+    stopped_jobs = await asyncio.to_thread(
+        codex_job_manager.stop_for_session, session_id
+    )
     if target is None:
-        return {"status": "idle", "hermes": None}
+        return {
+            "status": "interrupted" if stopped_jobs else "idle",
+            "hermes": None,
+        }
 
     stopped = await runs_service.stop_run(target.runId)
     return {"status": "interrupted" if stopped else "idle", "hermes": None}
 
 
-def _codex_job_for_session(session_id: str, job_id: str) -> CodexJob:
-    _get_chat_or_404(session_id)
-    job = codex_job_manager.get(job_id)
-    if job is None or job.session_id != session_id:
-        raise HTTPException(
-            status_code=404, detail="Codex job not found for this session"
-        )
-    return job
-
-
 @router.get("/sessions/{session_id}/codex-jobs/{job_id}")
 async def get_codex_job(session_id: str, job_id: str) -> dict[str, Any]:
-    return _codex_job_for_session(session_id, job_id).poll()
+    _get_chat_or_404(session_id)
+    result = codex_job_manager.poll(job_id, session_id=session_id)
+    if "error" in result and result.get("status") is None:
+        raise HTTPException(status_code=404, detail="Codex job not found for this session")
+    return result
 
 
 @router.get("/sessions/{session_id}/codex-jobs")
@@ -274,7 +273,10 @@ async def list_codex_jobs(session_id: str) -> list[dict[str, Any]]:
 async def answer_codex_job(
     session_id: str, job_id: str, body: CodexAnswers
 ) -> dict[str, Any]:
-    result = _codex_job_for_session(session_id, job_id).answer(body.answers)
+    _get_chat_or_404(session_id)
+    result = await asyncio.to_thread(
+        codex_job_manager.answer, job_id, body.answers, session_id
+    )
     if "error" in result:
         raise HTTPException(status_code=409, detail=result["error"])
     return result
@@ -282,6 +284,15 @@ async def answer_codex_job(
 
 @router.post("/sessions/{session_id}/codex-jobs/{job_id}/cancel")
 async def cancel_codex_job(session_id: str, job_id: str) -> dict[str, Any]:
-    job = _codex_job_for_session(session_id, job_id)
-    job.stop()
-    return {"job_id": job_id, "status": job.status}
+    _get_chat_or_404(session_id)
+    result = await asyncio.to_thread(
+        codex_job_manager.stop, job_id, session_id
+    )
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.get("/codex-metrics")
+async def get_codex_metrics() -> dict[str, Any]:
+    return codex_job_manager.metrics()

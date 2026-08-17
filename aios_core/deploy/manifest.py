@@ -31,6 +31,14 @@ _IGNORED_PARTS = {
     "__pycache__",
     "node_modules",
 }
+_IGNORED_RUNTIME_FILES = {
+    "aios.db",
+    "aios.db-shm",
+    "aios.db-wal",
+    "crons.db",
+    "crons.db-shm",
+    "crons.db-wal",
+}
 _SAFE_ENV_TEMPLATES = {".env.example", ".env.sample", ".env.template"}
 _FORBIDDEN_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}
 _HIGH_CONFIDENCE_SECRET_PATTERNS = (
@@ -167,6 +175,24 @@ class ArtifactInventory(BaseModel):
     total_bytes: int
 
 
+def find_deployment_root(start: str | Path) -> Path | None:
+    """Return the nearest ancestor containing an AIOS deployment manifest.
+
+    Codex is often launched in a component directory such as ``app/backend``
+    while the artifact manifest intentionally lives at ``app``.  Deployment
+    tools must package that manifest root, not whichever nested directory the
+    shell happens to be using.
+    """
+
+    current = Path(start).resolve()
+    if current.is_file():
+        current = current.parent
+    for candidate in (current, *current.parents):
+        if (candidate / MANIFEST_NAME).is_file():
+            return candidate
+    return None
+
+
 def load_deployment_manifest(app_dir: str | Path) -> DeploymentManifest:
     root = Path(app_dir).resolve()
     manifest_path = root / MANIFEST_NAME
@@ -243,6 +269,8 @@ def artifact_file_paths(app_dir: str | Path) -> list[Path]:
     for path in sorted(root.rglob("*"), key=lambda candidate: candidate.as_posix()):
         relative = path.relative_to(root)
         if any(part in _IGNORED_PARTS for part in relative.parts):
+            continue
+        if relative.name in _IGNORED_RUNTIME_FILES:
             continue
         if path.is_symlink():
             raise ManifestValidationError(f"Symbolic links are not allowed: {relative}")

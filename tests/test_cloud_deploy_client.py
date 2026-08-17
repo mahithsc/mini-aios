@@ -6,9 +6,34 @@ import tarfile
 from pathlib import Path
 
 import httpx
+import pytest
 
-from aios_core.deploy.cloud_client import CloudDeployClient
-from aios_core.deploy import mcp_server
+from aios_core.deploy import cloud_client, mcp_server
+from aios_core.deploy.cloud_client import CloudDeployClient, CloudDeployError
+
+
+def test_cloud_client_uses_production_url_and_paired_device_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AIOS_CLOUD_URL", raising=False)
+    monkeypatch.delenv("AIOS_CLOUD_DEVICE_TOKEN", raising=False)
+    monkeypatch.setattr(cloud_client, "_paired_device_token", lambda: "paired-token")
+
+    client = CloudDeployClient()
+
+    assert client._base_url == "https://computer.winkapiserver.org"
+    assert client._device_token == "paired-token"
+
+
+def test_cloud_client_explains_when_device_is_not_paired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AIOS_CLOUD_URL", raising=False)
+    monkeypatch.delenv("AIOS_CLOUD_DEVICE_TOKEN", raising=False)
+    monkeypatch.setattr(cloud_client, "_paired_device_token", lambda: "")
+
+    with pytest.raises(CloudDeployError, match="not paired"):
+        CloudDeployClient()
 
 
 def _write_app(root: Path) -> None:
@@ -49,6 +74,21 @@ def test_cloud_client_creates_and_lists_apps() -> None:
                     },
                 },
             )
+        if request.url.path == "/v1/apps/app_cloud123/status":
+            return httpx.Response(
+                200,
+                json={
+                    "app": {"id": "app_cloud123"},
+                    "overall_status": "in_process",
+                    "components": {
+                        "server": {
+                            "phase": "in_process",
+                            "artifact_uploaded": True,
+                            "artifact_verified": True,
+                        }
+                    },
+                },
+            )
         return httpx.Response(
             200,
             json=[
@@ -73,13 +113,95 @@ def test_cloud_client_creates_and_lists_apps() -> None:
     assert client.get_app_info("app_cloud123")["components"]["server"]["url"] == (
         "https://server.example.test"
     )
+    status = client.check_app_status("app_cloud123")
+    assert status["overall_status"] == "in_process"
+    assert status["components"]["server"]["artifact_verified"] is True
     assert client.list_secret_metadata()["secrets"][0]["id"] == "sec_cloud123"
     assert requests == [
         ("POST", "/v1/apps"),
         ("GET", "/v1/apps"),
         ("GET", "/v1/apps/app_cloud123/info"),
+        ("GET", "/v1/apps/app_cloud123/status"),
         ("GET", "/v1/device/secrets"),
     ]
+
+
+def test_cloud_client_uploads_app_media_with_scoped_signed_url(tmp_path: Path) -> None:
+    media_path = tmp_path / "hero.png"
+    media_path.write_bytes(b"png-bytes")
+    requests: list[tuple[str, str, bool]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(
+            (
+                request.method,
+                request.url.path,
+                "authorization" in request.headers,
+            )
+        )
+        if request.url.path == "/v1/apps/app_cloud123/media/uploads":
+            payload = json.loads(request.content)
+            assert payload["filename"] == "hero.png"
+            assert payload["content_type"] == "image/png"
+            assert payload["destination"] == "marketing/hero.png"
+            return httpx.Response(
+                201,
+                json={
+                    "media": {"id": "med_cloud123", "status": "pending_upload"},
+                    "upload_url": "https://uploads.example/media-token",
+                    "expires_in": 7200,
+                },
+            )
+        if request.url.host == "uploads.example":
+            assert request.headers["content-type"] == "image/png"
+            return httpx.Response(200)
+        if request.url.path.endswith("/med_cloud123/complete"):
+            return httpx.Response(
+                200,
+                json={
+                    "media": {
+                        "id": "med_cloud123",
+                        "app_id": "app_cloud123",
+                        "object_key": "app_cloud123/marketing/hero.png",
+                        "status": "ready",
+                    }
+                },
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    client = CloudDeployClient(
+        base_url="https://cloud.example",
+        device_token="device-token",
+        client_factory=lambda: httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = client.upload_app_media(
+        "app_cloud123",
+        media_path,
+        destination="marketing/hero.png",
+        allowed_root=tmp_path,
+    )
+
+    assert result["status"] == "ready"
+    assert requests == [
+        ("POST", "/v1/apps/app_cloud123/media/uploads", True),
+        ("PUT", "/media-token", False),
+        ("POST", "/v1/apps/app_cloud123/media/med_cloud123/complete", True),
+    ]
+
+
+def test_cloud_client_rejects_media_outside_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "private.png"
+    outside.write_bytes(b"not allowed")
+    client = CloudDeployClient(
+        base_url="https://cloud.example",
+        device_token="device-token",
+    )
+
+    with pytest.raises(CloudDeployError, match="inside the current app workspace"):
+        client.upload_app_media("app_cloud123", outside, allowed_root=workspace)
 
 
 def test_cloud_client_uploads_full_archive_and_enqueues_component(
@@ -266,6 +388,34 @@ def test_legacy_local_deploy_is_disabled_by_default(
     assert "disabled" in result["error"]
 
 
+def test_cloud_mcp_deploys_nearest_manifest_root_from_nested_component(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app_root = tmp_path / "app"
+    backend = app_root / "backend"
+    backend.mkdir(parents=True)
+    (app_root / "aios.deploy.yaml").write_text(
+        "version: 1\napp_id: app_cloud123\nserver: {}\n"
+    )
+    captured: list[tuple[str, Path]] = []
+
+    class FakeCloudClient:
+        def deploy(self, component: str, app_dir: str | Path) -> dict:
+            captured.append((component, Path(app_dir)))
+            return {"id": "dep_cloud123", "status": "queued"}
+
+    monkeypatch.chdir(backend)
+    monkeypatch.setattr(mcp_server, "CloudDeployClient", FakeCloudClient)
+
+    result = mcp_server.deploy_server()
+
+    assert captured == [("server", app_root)]
+    assert result["next_action"] == {
+        "tool": "get_deployment_status",
+        "deployment_id": "dep_cloud123",
+    }
+
+
 def test_mcp_get_app_info_returns_cloud_endpoint_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -288,3 +438,28 @@ def test_mcp_get_app_info_returns_cloud_endpoint_registry(
     assert result["components"]["frontend"]["url"] == (
         "https://frontend.example.test"
     )
+
+
+def test_mcp_check_app_status_returns_deploy_and_artifact_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeCloudClient:
+        def check_app_status(self, app_id: str) -> dict:
+            return {
+                "app": {"id": app_id},
+                "overall_status": "queued",
+                "components": {
+                    "server": {
+                        "phase": "queued",
+                        "artifact_uploaded": True,
+                        "artifact_verified": True,
+                    }
+                },
+            }
+
+    monkeypatch.setattr(mcp_server, "CloudDeployClient", FakeCloudClient)
+
+    result = mcp_server.check_app_status("app_cloud123")
+
+    assert result["overall_status"] == "queued"
+    assert result["components"]["server"]["artifact_uploaded"] is True
