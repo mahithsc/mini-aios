@@ -89,9 +89,19 @@ Privileges are constrained even though the service is root:
 /var/lib/mini-aios-updater/metadata/
 /var/lib/mini-aios-updater/backups/
 /var/lib/mini-aios/state/aios.db
+/var/lib/mini-aios/projects/
+/var/lib/mini-aios/sessions/
+/var/lib/mini-aios/uploads/
+/var/lib/mini-aios/artifacts/
+/var/lib/mini-aios/runs/
 /var/lib/mini-aios/skills/
-/var/lib/mini-aios/workspace/
+/var/lib/mini-aios/memories/
+/var/lib/mini-aios/deployments/
 ```
+
+`/var/lib/mini-aios` is mounted at `/root/.mini-aios` in the box container, so
+these are the same directories described by the production
+[`~/.mini-aios` storage contract](./storage-layout.md), not a second copy.
 
 Permissions:
 
@@ -139,6 +149,7 @@ tuf_targets_url = "https://updates.trywink.io/tuf/targets/"
 compose_project_dir = "/opt/mini-aios"
 compose_service = "box"
 aios_data_dir = "/var/lib/mini-aios"
+database_relative_path = "state/aios.db"
 state_dir = "/var/lib/mini-aios-updater"
 
 poll_interval = "30m"
@@ -342,7 +353,8 @@ on post-backup failure:
   mark rolled_back or recovery_required
 ```
 
-The transaction never deletes workspace files, skills, pairing state, or cron definitions.
+The transaction never deletes projects, session scratch files, uploads,
+artifacts, skills, memories, pairing state, or cron definitions.
 
 ## 13. Updater self-update
 

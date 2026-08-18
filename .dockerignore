@@ -15,20 +15,26 @@ __pycache__
 *.log
 *.log.*
 
-# Local runtime state. Mount a volume for these in production instead.
-aios.db
-crons.db
-workspace/
-session/
-runs/
-skills/
-assistants/
-cron_logs/
-heartbeat_logs/
-uploads/
-logs/
-downloads/
-transcripts/
+# Canonical local runtime data. Production mounts the data root separately.
+.mini-aios/
+
+# Legacy runtime locations retained only as migration inputs.
+/aios.db
+/crons.db
+/workspace/
+/session/
+/runs/
+/skills/
+/memories/
+/state/
+/assistants/
+/cron_logs/
+/heartbeat_logs/
+/uploads/
+/artifacts/
+/logs/
+/downloads/
+/transcripts/
 
 # Local/editor files.
 .cursor/

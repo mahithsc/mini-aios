@@ -6,6 +6,17 @@ Features:
 - Crons
 - Learning and dreaming: agent does a longer horizon task and when your not using the computer, it compacts the process through tool call chain into a skill for next time.
 
+## Runtime data
+
+Development data lives in `<repository>/.mini-aios/`. Production data lives in
+`~/.mini-aios/`; the appliance mounts `/var/lib/mini-aios` at
+`/root/.mini-aios` inside the box container.
+
+The data root separates durable projects, chat scratch files, uploads,
+artifacts, runs, skills, memories, deployments, and service state. See
+[the runtime storage layout](docs/storage-layout.md) for the complete contract
+and legacy migration boundary.
+
 ## Signed updater
 
 The repository includes a signed release publisher and host updater for Linux appliances, plus a Docker Desktop test path for macOS:

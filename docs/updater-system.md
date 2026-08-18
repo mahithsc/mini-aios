@@ -30,8 +30,9 @@ The first implementation should be a single static Go binary installed as a `sys
 
 The current repository already has several useful boundaries:
 
-- production data lives below `~/.mini-aios` through `AIOS_HOME`;
-- `state/aios.db`, `skills/`, and `workspace/` are separate from application code;
+- production data lives below `~/.mini-aios`;
+- `state/aios.db`, projects, session scratch files, uploads, artifacts, runs,
+  skills, memories, and deployments are separate from application code;
 - `/health` provides a basic liveness check;
 - the box is packaged as a Docker image and run with Docker Compose;
 - device identity and pairing credentials survive container restarts in SQLite.
@@ -102,8 +103,15 @@ Use explicit host paths in production:
   release.env                  # active image digest and release metadata
 /var/lib/mini-aios/
   state/
+    aios.db
+  projects/<project-id>/
+  sessions/<chat-id>/scratch/
+  uploads/<chat-id>/
+  artifacts/<chat-id>/
+  runs/
   skills/
-  workspace/
+  memories/
+  deployments/
 /var/lib/mini-aios-updater/
   state.json                   # durable updater state
   update.lock                  # single-update lock
@@ -115,7 +123,11 @@ Use explicit host paths in production:
 /usr/local/bin/mini-aios-updater
 ```
 
-`/var/lib/mini-aios` replaces the production named volume. It is mounted at `/root/.mini-aios` in the box container. Ownership is fixed at installation and validated before every update. The updater refuses to operate if any resolved path escapes the configured roots.
+`/var/lib/mini-aios` replaces the production named volume. It is mounted at
+`/root/.mini-aios` in the box container and therefore implements the
+production [`~/.mini-aios` storage contract](./storage-layout.md). Ownership is
+fixed at installation and validated before every update. The updater refuses
+to operate if any resolved path escapes the configured roots.
 
 `release.env` contains an immutable reference:
 
@@ -273,7 +285,11 @@ After the application is quiescent:
 4. write `backup.json` with source release, schema, SHA-256, size, and timestamp; and
 5. fsync the backup file and parent directory before activation.
 
-The updater backs up `state/aios.db`, not the entire workspace. Skills and workspace data remain on the persistent host path and are never deleted by an application update. A future release that transforms filesystem state must declare and implement its own journaled migration and backup plan.
+The updater backs up `state/aios.db`, not the entire data root. Projects,
+session scratch files, uploads, artifacts, skills, memories, and deployment
+data remain on the persistent host path and are never deleted by an application
+update. A future release that transforms filesystem state must declare and
+implement its own journaled migration and backup plan.
 
 Keep the last two successful pre-update database backups plus any backup referenced by a non-terminal update. Prune only after commit.
 
@@ -416,7 +432,8 @@ mini-aios-updater doctor
 | Previous release also unhealthy | Enter recovery-required; never alternate indefinitely |
 | Clock far outside trusted metadata window | Keep current release and require time synchronization/local repair |
 
-An update failure must never unpair the box, delete user workspace files, reset skills, or erase queued crons.
+An update failure must never unpair the box, delete projects, scratch files,
+uploads, artifacts, or memories, reset skills, or erase queued crons.
 
 ## 14. Security requirements
 
@@ -479,12 +496,13 @@ The updater is ready for stable rollout when all are true:
 7. Database compatibility is checked before activation, and the old app never opens a schema newer than it supports.
 8. The AIOS process and agent tools cannot reach Docker, updater credentials, trusted signing material, or the updater control socket.
 9. Rollout can be paused globally within one poll interval, while currently healthy devices continue serving.
-10. Update telemetry contains no tokens, prompts, chats, workspace paths, or file contents.
+10. Update telemetry contains no tokens, prompts, chats, project or scratch
+    paths, or file contents.
 
 ## 17. Deliberate non-goals
 
 - Updating the host kernel, Docker Engine, bootloader, or operating system. Use the appliance OS's A/B or package update mechanism for those.
-- Synchronizing or backing up the entire user workspace to the cloud.
+- Synchronizing or backing up the entire user data root to the cloud.
 - Letting the AI agent decide whether, when, or from where to install a release.
 - Supporting arbitrary third-party images or registries.
 - Zero-downtime database migrations. A short, controlled drain is safer for a single-device SQLite appliance.

@@ -1,10 +1,11 @@
 # Cloud device events
 
-Deployment notifications are persisted transactionally in `aios.db`, projected
-to the notification service, and exposed through the notification list,
-dismiss, and SSE routes. Every SSE connection begins with an active-notification
-snapshot before live bounded-queue events, so reconnecting clients can
-resynchronize without relying on an in-memory replay buffer.
+Deployment notifications are persisted transactionally in
+`<data-root>/state/aios.db`, projected to the notification service, and exposed
+through the notification list, dismiss, and SSE routes. Every SSE connection
+begins with an active-notification snapshot before live bounded-queue events,
+so reconnecting clients can resynchronize without relying on an in-memory
+replay buffer.
 
 The cloud receiver is staged and disabled by default. Do not set
 `AIOS_CLOUD_DEVICE_EVENTS_ENABLED=true` against the current `/ws/device`

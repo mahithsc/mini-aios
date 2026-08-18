@@ -14,8 +14,12 @@ and SQLite architecture.
 
 Curated memory lives outside individual chat directories:
 
-- Development: `<project>/memories/`
+- Development: `<repository>/.mini-aios/memories/`
 - Production: `~/.mini-aios/memories/`
+
+Both follow [the canonical runtime storage layout](./storage-layout.md). The
+development directory is runtime data and is ignored by Git; it is not part of
+the repository's source tree.
 
 The two stores are:
 
@@ -42,8 +46,9 @@ request midway through execution.
 ## Conversation recall
 
 Every persisted user and assistant message is projected into
-`chat_search_documents` in the existing `aios.db`. SQLite FTS5 indexes the text
-when available; a bounded `LIKE` search is used as a compatibility fallback.
+`chat_search_documents` in `<data-root>/state/aios.db`. SQLite FTS5 indexes the
+text when available; a bounded `LIKE` search is used as a compatibility
+fallback.
 
 The `session_search` tool supports three modes:
 

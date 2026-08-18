@@ -19,17 +19,25 @@ aios_core/agent/
 `AgentRuntime.run(AgentRunRequest)` is the public execution boundary. It yields
 `AgentEvent` values and owns when conversation turns, native provider events,
 and tool lifecycle records are persisted. `ConversationStore` owns how those
-records are written to SQLite. Cron and dream jobs use the same module's
-one-shot completion helper instead of importing the provider SDK themselves.
+records are written to `<data-root>/state/aios.db`. Cron and dream jobs use the
+same module's one-shot completion helper instead of importing the provider SDK
+themselves.
 
 `aios_core/execution` owns queued runs and durable run projections. Its chat
 runner consumes `AgentEvent` values and translates them into run events. It
-does not import or drive the OpenAI SDK.
+does not import or drive the OpenAI SDK. Run metadata, events, and snapshots
+live beneath `<data-root>/runs/`.
 
 `server` owns transport and process composition: HTTP routes, SSE delivery,
 authentication, startup/shutdown, and hardware presentation state. Server code
 does not implement the agent loop.
 
-Domain implementations such as memory, cron scheduling, app workspaces, and
+Domain implementations such as memory, cron scheduling, project storage, and
 deployment remain outside `agent`. Their files under `agent/tools` are only the
 model-facing adapters.
+
+The runtime receives resolved paths through its run context rather than
+choosing a storage root itself. Ordinary relative tool paths default to
+`<data-root>/sessions/<chat-id>/scratch/`; uploads, user-visible artifacts, and
+durable projects live in their separate canonical roots. See
+[the runtime storage contract](./storage-layout.md).

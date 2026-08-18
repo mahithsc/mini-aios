@@ -107,7 +107,7 @@ printf '%s\n' \
   'compose_service = "box"' \
   "release_env_path = \"${RELEASE_ENV}\"" \
   "aios_data_dir = \"${DATA_DIR}\"" \
-  'database_relative_path = "workspace/aios.db"' \
+  'database_relative_path = "state/aios.db"' \
   "state_dir = \"${UPDATER_STATE_DIR}\"" \
   'health_url = "http://127.0.0.1:8765/internal/updater"' \
   "updater_token_file = \"${TOKEN_FILE}\"" \

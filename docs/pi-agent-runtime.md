@@ -52,14 +52,14 @@ extension backed by a finite one-shot Python bridge. The bridge exposes:
 
 - `deploy` plus durable pipeline and component status/lifecycle tools;
 - cloud app information and status;
-- workspace-confined app media upload/list/URL/delete operations; and
+- project-confined app media upload/list/URL/delete operations; and
 - structured, policy-checked database table inspection and read-only queries.
 
-`deploy` is locked to Pi's current manifest-rooted workspace, validates and
+`deploy` is locked to Pi's current manifest-rooted project, validates and
 uploads one artifact, and asks aios-cloud to orchestrate database, server, and
 frontend tiers in dependency order. Its Pi tool-call-derived operation ID makes
 one invocation idempotent; the cloud client rejects pipeline calls without a
-stable operation key. Durable workspace metadata must match the manifest and is
+stable operation key. Durable project metadata must match the manifest and is
 never included in the artifact. Dependency/cache trees, credential files, local
 database files, and high-confidence embedded credentials are also excluded or
 rejected before upload. Pipeline status prevents Pi from mistaking an
@@ -77,7 +77,7 @@ environment to an allowlist, caps concurrent jobs and retained output, drains
 stderr concurrently, uses an independent watchdog, and starts each worker in a
 new process group. Production deployments that need a stronger trust boundary
 must run workers as a restricted OS user or in a dedicated container with only
-the target workspace mounted writable. The filtered worker environment contains
+the target project mounted writable. The filtered worker environment contains
 model-provider authentication and the device-scoped aios-cloud credential needed
 by the trusted bridge; because Pi also has a shell, these credentials are inside
 the same OS trust boundary even though application and infrastructure-provider

@@ -7,33 +7,26 @@ __pycache__/
 .venv/
 .dev/
 dist/
+/.mini-aios/
+
+# Legacy runtime locations. These remain ignored while the one-time storage
+# migration can import data created by releases that predate .mini-aios/.
+/session/
+/skills/
+/memories/
+/runs/
+/state/
 /uploads/
+/artifacts/
 /downloads/
 /assistants/
 /heartbeat_logs/
 /logs/
 /transcripts/
-
-# sessions
-session/
-
-# skills
-skills/
-
-# curated agent memory
-memories/
-
-# runtime state
-runs/
-state/
-
-# local db
-aios.db
-crons.db
-cron_logs/
-
-# local workspace
-workspace/
+/aios.db
+/crons.db
+/cron_logs/
+/workspace/
 evals/scorecard.json
 
 # git linked worktrees
