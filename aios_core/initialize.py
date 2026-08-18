@@ -5,19 +5,22 @@ from datetime import datetime
 
 from .crons import cron_manager
 from .db import initialize_app_db
-from .workspace import ensure_workspace_dir, get_memories_dir
+from .workspace import (
+    ensure_data_dir,
+    get_memories_dir,
+    get_runs_dir,
+    get_sessions_dir,
+    get_skills_dir,
+)
 
 RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
     "\033[0m", "\033[1m", "\033[2m", "\033[36m", "\033[32m", "\033[33m"
 )
 
-SKILLS_DIR = "skills"
-SESSION_DIR = "session"
-RUNS_DIR = "runs"
-WORKSPACE_DIR = ensure_workspace_dir()
-SKILLS_DIR = str(WORKSPACE_DIR / SKILLS_DIR)
-SESSION_DIR = str(WORKSPACE_DIR / SESSION_DIR)
-RUNS_DIR = str(WORKSPACE_DIR / RUNS_DIR)
+DATA_DIR = ensure_data_dir()
+SKILLS_DIR = str(get_skills_dir())
+SESSION_DIR = str(get_sessions_dir())
+RUNS_DIR = str(get_runs_dir())
 RUNS_METADATA_DIR = f"{RUNS_DIR}/metadata"
 RUNS_SNAPSHOTS_DIR = f"{RUNS_DIR}/snapshots"
 RUNS_EVENTS_DIR = f"{RUNS_DIR}/events"
@@ -178,7 +181,6 @@ def start_runtime(start_crons: bool = True):
     if _RUNTIME_STARTED:
         return
 
-    os.chdir(WORKSPACE_DIR)
     initialize_files()
     if start_crons:
         cron_manager.start()

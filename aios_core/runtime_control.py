@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .workspace import ensure_workspace_dir
+from .workspace import get_state_dir
 
 
 class RuntimeDrainingError(RuntimeError):
@@ -128,6 +128,6 @@ def get_runtime_control() -> RuntimeControl:
         with _runtime_control_lock:
             if _runtime_control is None:
                 _runtime_control = RuntimeControl(
-                    ensure_workspace_dir() / "update-drain.json"
+                    get_state_dir() / "update-drain.json"
                 )
     return _runtime_control

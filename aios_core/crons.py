@@ -1,8 +1,11 @@
 import logging
 import os
+import sqlite3
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -12,12 +15,140 @@ from apscheduler.triggers.date import DateTrigger
 from .agent.prompts import render_prompt
 from .agent.runtime import run_agent_to_completion
 from .db import DB_PATH, get_db_connection, initialize_app_db
-from .workspace import ensure_workspace_dir
+from .workspace import get_cron_logs_dir, get_legacy_state_db_path
 
-_WORKSPACE_DIR = ensure_workspace_dir()
-CRON_LOG_DIR = str(_WORKSPACE_DIR / "cron_logs")
+CRON_LOG_DIR = str(get_cron_logs_dir())
 DEFAULT_CRON_TIMEZONE = os.getenv("AIOS_DEFAULT_TIMEZONE", "America/New_York")
 log = logging.getLogger(__name__)
+
+
+def _import_legacy_crons(connection: sqlite3.Connection, db_path: str) -> None:
+    """Merge archived cron history once, keeping canonical cron definitions."""
+
+    if Path(db_path).expanduser().resolve() != Path(DB_PATH).expanduser().resolve():
+        return
+    source_path = get_legacy_state_db_path()
+    if not source_path.is_file() or source_path.resolve() == Path(db_path).resolve():
+        return
+    source_key = str(source_path.resolve())
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS legacy_cron_imports (
+            source_path TEXT PRIMARY KEY,
+            imported_at INTEGER NOT NULL,
+            cron_count INTEGER NOT NULL,
+            run_count INTEGER NOT NULL
+        )
+        """
+    )
+    if connection.execute(
+        "SELECT 1 FROM legacy_cron_imports WHERE source_path = ?", (source_key,)
+    ).fetchone():
+        return
+
+    source_uri = f"{source_path.resolve().as_uri()}?mode=ro"
+    try:
+        with sqlite3.connect(source_uri, uri=True) as source:
+            tables = {
+                row[0]
+                for row in source.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            if "crons" not in tables:
+                return
+            cron_columns = {
+                row[1] for row in source.execute("PRAGMA table_info(crons)")
+            }
+            required_cron_columns = {
+                "id",
+                "name",
+                "description",
+                "instructions",
+                "schedule",
+                "status",
+                "created_at",
+                "last_run_at",
+            }
+            if not required_cron_columns.issubset(cron_columns):
+                log.warning("Legacy cron database has an incomplete cron schema")
+                return
+            timezone_expression = (
+                "schedule_timezone" if "schedule_timezone" in cron_columns else "NULL"
+            )
+            run_at_expression = "run_at_utc" if "run_at_utc" in cron_columns else "NULL"
+            cron_rows = source.execute(
+                "SELECT id, name, description, instructions, schedule, status, "
+                f"created_at, last_run_at, {timezone_expression}, {run_at_expression} "
+                "FROM crons"
+            ).fetchall()
+
+            run_rows: list[tuple[object, ...]] = []
+            if "cron_runs" in tables:
+                run_columns = {
+                    row[1] for row in source.execute("PRAGMA table_info(cron_runs)")
+                }
+                required_run_columns = {
+                    "cron_id",
+                    "started_at",
+                    "finished_at",
+                    "output",
+                    "status",
+                }
+                if required_run_columns.issubset(run_columns):
+                    run_rows = source.execute(
+                        "SELECT cron_id, started_at, finished_at, output, status "
+                        "FROM cron_runs ORDER BY id"
+                    ).fetchall()
+    except sqlite3.Error as exc:
+        log.warning("Could not read legacy cron database: %s", exc)
+        return
+
+    cron_count = 0
+    for row in cron_rows:
+        before = connection.total_changes
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO crons (
+                id, name, description, instructions, schedule, status,
+                created_at, last_run_at, schedule_timezone, run_at_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            row,
+        )
+        cron_count += connection.total_changes - before
+
+    run_count = 0
+    for row in run_rows:
+        existing = connection.execute(
+            """
+            SELECT 1 FROM cron_runs
+            WHERE cron_id = ? AND started_at = ?
+              AND finished_at IS ? AND output IS ? AND status = ?
+            LIMIT 1
+            """,
+            row,
+        ).fetchone()
+        if existing is not None:
+            continue
+        connection.execute(
+            """
+            INSERT INTO cron_runs (cron_id, started_at, finished_at, output, status)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            row,
+        )
+        run_count += 1
+
+    connection.execute(
+        """
+        INSERT INTO legacy_cron_imports (
+            source_path, imported_at, cron_count, run_count
+        ) VALUES (?, ?, ?, ?)
+        """,
+        (source_key, int(time.time() * 1000), cron_count, run_count),
+    )
 
 
 class CronManager:
@@ -74,6 +205,7 @@ class CronManager:
                 "WHERE (schedule_timezone IS NULL OR schedule_timezone = '') AND schedule != ''",
                 (DEFAULT_CRON_TIMEZONE,),
             )
+            _import_legacy_crons(conn, self.db_path)
 
     @staticmethod
     def _get_timezone(timezone_name: str | None) -> ZoneInfo:

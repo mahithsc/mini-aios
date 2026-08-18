@@ -35,20 +35,20 @@ def test_updater_api_auth_drain_ready_and_resume(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    for name in ("skills", "session", "runs"):
-        (workspace / name).mkdir()
-    database = workspace / "aios.db"
+    data_dir = tmp_path / ".mini-aios"
+    data_dir.mkdir()
+    for name in ("state", "skills", "sessions", "runs"):
+        (data_dir / name).mkdir()
+    database = data_dir / "state" / "aios.db"
     initialize_app_db(str(database))
 
-    control = RuntimeControl(workspace / "update-drain.json")
+    control = RuntimeControl(data_dir / "state" / "update-drain.json")
     monkeypatch.setattr(runtime_control, "_runtime_control", control)
-    monkeypatch.setattr(
-        updater,
-        "ensure_workspace_dir",
-        lambda: workspace,
-    )
+    monkeypatch.setattr(updater, "ensure_data_dir", lambda: data_dir)
+    monkeypatch.setattr(updater, "get_state_dir", lambda: data_dir / "state")
+    monkeypatch.setattr(updater, "get_skills_dir", lambda: data_dir / "skills")
+    monkeypatch.setattr(updater, "get_sessions_dir", lambda: data_dir / "sessions")
+    monkeypatch.setattr(updater, "get_runs_dir", lambda: data_dir / "runs")
     monkeypatch.setattr(
         updater,
         "get_db_connection",
@@ -88,18 +88,22 @@ def test_updater_ready_rejects_migration_checksum_mismatch(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    for name in ("skills", "session", "runs"):
-        (workspace / name).mkdir()
-    database = workspace / "aios.db"
+    data_dir = tmp_path / ".mini-aios"
+    data_dir.mkdir()
+    for name in ("state", "skills", "sessions", "runs"):
+        (data_dir / name).mkdir()
+    database = data_dir / "state" / "aios.db"
     initialize_app_db(str(database))
     with sqlite3.connect(database) as connection:
         connection.execute(
             "UPDATE schema_migrations SET checksum = 'wrong' WHERE version = 5"
         )
 
-    monkeypatch.setattr(updater, "ensure_workspace_dir", lambda: workspace)
+    monkeypatch.setattr(updater, "ensure_data_dir", lambda: data_dir)
+    monkeypatch.setattr(updater, "get_state_dir", lambda: data_dir / "state")
+    monkeypatch.setattr(updater, "get_skills_dir", lambda: data_dir / "skills")
+    monkeypatch.setattr(updater, "get_sessions_dir", lambda: data_dir / "sessions")
+    monkeypatch.setattr(updater, "get_runs_dir", lambda: data_dir / "runs")
     monkeypatch.setattr(
         updater,
         "get_db_connection",

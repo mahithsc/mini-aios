@@ -154,6 +154,7 @@ _ENV_ALLOWLIST = {
     "AIOS_ENV",
     "APP_ENV",
     "ENV",
+    "AIOS_DATA_DIR",
     "AIOS_CLOUD_URL",
     # This device-scoped control-plane credential is required only by the
     # trusted deploy extension. Application/database secrets remain excluded.

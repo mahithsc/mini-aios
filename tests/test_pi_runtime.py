@@ -654,6 +654,7 @@ def test_environment_is_minimal_but_keeps_provider_auth() -> None:
             "APP_ENV": "production",
             "AIOS_ENV": "prod",
             "ENV": "production",
+            "AIOS_DATA_DIR": "/var/lib/mini-aios",
             "AIOS_CLOUD_DEVICE_TOKEN": "device-control-plane-token",
             "DATABASE_URL": "must-not-leak",
             "RANDOM_APP_SECRET": "must-not-leak",
@@ -663,6 +664,7 @@ def test_environment_is_minimal_but_keeps_provider_auth() -> None:
     assert env["APP_ENV"] == "production"
     assert env["AIOS_ENV"] == "prod"
     assert env["ENV"] == "production"
+    assert env["AIOS_DATA_DIR"] == "/var/lib/mini-aios"
     assert env["AIOS_CLOUD_DEVICE_TOKEN"] == "device-control-plane-token"
     assert env["AIOS_PYTHON"]
     assert "DATABASE_URL" not in env

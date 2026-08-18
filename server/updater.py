@@ -11,7 +11,13 @@ from aios_core.db import get_db_connection, validate_app_db_schema
 from aios_core.execution.runtime import get_runs_service
 from aios_core.release import get_release_info
 from aios_core.runtime_control import RuntimeDrainingError, get_runtime_control
-from aios_core.workspace import ensure_workspace_dir
+from aios_core.workspace import (
+    ensure_data_dir,
+    get_runs_dir,
+    get_sessions_dir,
+    get_skills_dir,
+    get_state_dir,
+)
 
 router = APIRouter(prefix="/internal/updater", tags=["updater"])
 
@@ -76,7 +82,7 @@ async def updater_ready(
     x_updater_token: str | None = Header(default=None),
 ) -> dict[str, object]:
     await require_updater_token(authorization, x_updater_token)
-    workspace = ensure_workspace_dir()
+    data_dir = ensure_data_dir()
     checks: dict[str, str] = {}
     status = "ready"
     migration_state = "error"
@@ -92,10 +98,11 @@ async def updater_ready(
         checks["databaseSchema"] = "error"
     try:
         required = (
-            workspace,
-            workspace / "skills",
-            workspace / "session",
-            workspace / "runs",
+            data_dir,
+            get_state_dir(),
+            get_skills_dir(),
+            get_sessions_dir(),
+            get_runs_dir(),
         )
         checks["runtimeDirectories"] = (
             "ok"

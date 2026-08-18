@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import sqlite3
@@ -7,11 +8,11 @@ import time
 from pathlib import Path
 
 from .release import DATABASE_SCHEMA_VERSION
-from .workspace import ensure_workspace_dir
+from .workspace import ensure_data_dir, get_legacy_state_db_path, get_state_dir
 
-_WORKSPACE_DIR = ensure_workspace_dir()
-DB_PATH = str(_WORKSPACE_DIR / "aios.db")
-LEGACY_DB_PATH = str(_WORKSPACE_DIR / "crons.db")
+ensure_data_dir()
+DB_PATH = str(get_state_dir() / "aios.db")
+LEGACY_DB_PATH = str(get_state_dir() / "crons.db")
 _EXPECTED_SCHEMA_MIGRATIONS = {
     1: ("baseline", "baseline-v1"),
     2: ("chat_sqlite_storage", "chat-sqlite-v1"),
@@ -19,6 +20,7 @@ _EXPECTED_SCHEMA_MIGRATIONS = {
     4: ("conversation_rail_metadata", "conversation-v2"),
     5: ("cloud_deployment_runtime", "cloud-deploy-v1"),
 }
+log = logging.getLogger(__name__)
 
 if max(_EXPECTED_SCHEMA_MIGRATIONS) != DATABASE_SCHEMA_VERSION:
     raise RuntimeError(
@@ -38,11 +40,43 @@ def _migrate_legacy_db_if_needed(db_path: str) -> None:
 
 def get_db_connection(db_path: str = DB_PATH) -> sqlite3.Connection:
     _migrate_legacy_db_if_needed(db_path)
+    Path(db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=5.0, uri=True)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA synchronous = NORMAL")
     return conn
+
+
+def _import_legacy_device_link(connection: sqlite3.Connection, db_path: str) -> None:
+    """Restore pairing only when the canonical database has no pairing."""
+
+    if Path(db_path).expanduser().resolve() != Path(DB_PATH).expanduser().resolve():
+        return
+    if connection.execute("SELECT 1 FROM device_link WHERE id = 1").fetchone():
+        return
+    source_path = get_legacy_state_db_path()
+    if not source_path.is_file() or source_path.resolve() == Path(db_path).resolve():
+        return
+
+    source_uri = f"{source_path.resolve().as_uri()}?mode=ro"
+    try:
+        with sqlite3.connect(source_uri, uri=True) as source:
+            table_exists = source.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'device_link'"
+            ).fetchone()
+            if table_exists is None:
+                return
+            row = source.execute(
+                "SELECT id, device_token FROM device_link WHERE id = 1"
+            ).fetchone()
+        if row is not None:
+            connection.execute(
+                "INSERT OR IGNORE INTO device_link (id, device_token) VALUES (?, ?)",
+                row,
+            )
+    except sqlite3.Error as exc:
+        log.warning("Could not import pairing from legacy state database: %s", exc)
 
 
 def validate_app_db_schema(
@@ -524,4 +558,5 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
                 os.getenv("AIOS_RELEASE_ID", "development"),
             ),
         )
+        _import_legacy_device_link(conn, db_path)
         validate_app_db_schema(conn)
