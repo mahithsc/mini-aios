@@ -24,6 +24,16 @@ PROJECT_NAME_LIMIT = 200
 _PROJECT_ID = re.compile(r"^proj_[0-9a-f]{32}$")
 
 
+def _initial_project_document(name: str) -> str:
+    return (
+        f"# {name}\n\n"
+        "This file is the living description and running documentation for "
+        "this project.\n"
+        "Keep it updated with the project's purpose, important decisions, "
+        "current state, and notes that will help future work.\n"
+    )
+
+
 class ProjectError(RuntimeError):
     """A project lifecycle operation could not be completed safely."""
 
@@ -129,7 +139,7 @@ def create_project(
     temporary_dir = projects_root / f".{project_id}.{uuid4().hex}.tmp"
     temporary_dir.mkdir()
     (temporary_dir / PROJECT_DOCUMENT_NAME).write_text(
-        f"# {normalized_name}\n",
+        _initial_project_document(normalized_name),
         encoding="utf-8",
     )
 

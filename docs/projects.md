@@ -42,9 +42,11 @@ Mini AIOS creates only `project.md`. It does not create source, data,
 attachments, worktree, or framework-specific folders. The agent chooses the
 implementation structure that fits the project.
 
-`project.md` is durable, agent-maintained documentation. The agent should read
-it before working and keep useful project context, decisions, and notes there.
-Renaming the database record does not overwrite this file.
+`project.md` starts by identifying itself as the project's living description
+and running documentation. It is durable and agent-maintained: the agent should
+read it before working and keep the project's purpose, current state, important
+decisions, and useful notes there. Renaming the database record does not
+overwrite this file.
 
 ## Deployment boundary
 

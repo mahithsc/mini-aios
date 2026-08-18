@@ -26,7 +26,11 @@ def test_project_create_is_minimal_and_sqlite_owned(tmp_path: Path) -> None:
 
     assert sorted(path.name for path in project_dir.iterdir()) == ["project.md"]
     assert (project_dir / "project.md").read_text(encoding="utf-8") == (
-        "# Example Website\n"
+        "# Example Website\n\n"
+        "This file is the living description and running documentation for "
+        "this project.\n"
+        "Keep it updated with the project's purpose, important decisions, "
+        "current state, and notes that will help future work.\n"
     )
     with sqlite3.connect(db_path) as connection:
         row = connection.execute(
@@ -70,7 +74,11 @@ def test_project_get_list_and_update_only_change_database_metadata(
     assert updated["project"]["name"] == "Renamed Project"
     # project.md is agent-owned documentation; metadata updates do not rewrite it.
     assert (projects_dir / project_id / "project.md").read_text(encoding="utf-8") == (
-        "# Original Name\n"
+        "# Original Name\n\n"
+        "This file is the living description and running documentation for "
+        "this project.\n"
+        "Keep it updated with the project's purpose, important decisions, "
+        "current state, and notes that will help future work.\n"
     )
 
 
