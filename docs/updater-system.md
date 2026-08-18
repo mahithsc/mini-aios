@@ -285,11 +285,14 @@ After the application is quiescent:
 4. write `backup.json` with source release, schema, SHA-256, size, and timestamp; and
 5. fsync the backup file and parent directory before activation.
 
-The updater backs up `state/aios.db`, not the entire data root. Projects,
-session scratch files, uploads, artifacts, skills, memories, and deployment
-data remain on the persistent host path and are never deleted by an application
-update. A future release that transforms filesystem state must declare and
-implement its own journaled migration and backup plan.
+The updater normally backs up `state/aios.db`, not the entire data root. During
+the one-time canonical-layout upgrade it first checks for the active legacy
+`workspace/aios.db`; that path takes precedence over a stale `state/aios.db`
+and is recorded in `backup.json`. Projects, session scratch files, uploads,
+artifacts, skills, memories, and deployment data remain on the persistent host
+path and are never deleted by an application update. A future release that
+transforms filesystem state must declare and implement its own journaled
+migration and backup plan.
 
 Keep the last two successful pre-update database backups plus any backup referenced by a non-terminal update. Prune only after commit.
 
@@ -309,6 +312,12 @@ Rollback is allowed only according to the release's signed database policy.
 
 - If startup failed before migration, restore `release.env` and restart the previous digest.
 - If a migration ran and `restoreBackupOnRollback` is true, stop the new container, atomically restore the verified pre-update database, and restart the previous digest.
+- If the pre-update backup came from `workspace/aios.db`, reverse the completed
+  or in-progress `storage-layout-v1` journal and restore that database even
+  when the schema is otherwise backward-compatible. A root-owned rollback
+  cursor beside the backup makes each reversed action restartable after a
+  power loss. This puts projects, session files, uploads, artifacts, and the
+  database back where the previous release expects them.
 - If the new schema is explicitly readable by the previous release, the backup need not be restored.
 - If neither condition is true, do not loop between releases. Stop the service, enter `recovery_required`, and surface a local diagnostic.
 

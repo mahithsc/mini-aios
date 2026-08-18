@@ -290,7 +290,16 @@ func (e *Engine) rollback(ctx context.Context, state *State, cause error) error 
 		return err
 	}
 	_ = e.System.Stop(ctx)
-	if state.RestoreBackupOnRollback {
+	restoreBackup, err := e.System.BackupRestoreRequired(
+		state.BackupDir,
+		state.RestoreBackupOnRollback,
+	)
+	if err != nil {
+		state.LastError = fmt.Sprintf("%v; determine database restore policy: %v", cause, err)
+		_ = e.transition(state, "recovery_required")
+		return fmt.Errorf("update failed and rollback policy could not be determined: %w", err)
+	}
+	if restoreBackup {
 		if err := e.System.Restore(state.BackupDir); err != nil {
 			state.LastError = fmt.Sprintf("%v; database restore failed: %v", cause, err)
 			_ = e.transition(state, "recovery_required")

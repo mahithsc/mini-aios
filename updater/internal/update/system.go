@@ -20,6 +20,13 @@ import (
 
 const maximumCommandOutput = 256 * 1024
 
+const (
+	legacyDatabaseRelativePath               = "workspace/aios.db"
+	storageLayoutMigrationName               = "storage-layout-v1"
+	storageLayoutMigrationReportRelativePath = "state/migrations/storage-layout-v1.json"
+	storageLayoutRollbackJournalName         = "storage-layout-v1-rollback.json"
+)
+
 type cappedBuffer struct {
 	buffer bytes.Buffer
 }
@@ -325,9 +332,10 @@ func (s System) Observe(ctx context.Context, release ReleaseRef, duration time.D
 }
 
 type backupMetadata struct {
-	ReleaseID string            `json:"releaseId"`
-	CreatedAt time.Time         `json:"createdAt"`
-	Files     map[string]string `json:"files"`
+	ReleaseID            string            `json:"releaseId"`
+	CreatedAt            time.Time         `json:"createdAt"`
+	DatabaseRelativePath string            `json:"databaseRelativePath,omitempty"`
+	Files                map[string]string `json:"files"`
 }
 
 func (s System) Backup(releaseID string) (string, error) {
@@ -335,12 +343,34 @@ func (s System) Backup(releaseID string) (string, error) {
 	if err := os.MkdirAll(backupDir, 0o700); err != nil {
 		return "", err
 	}
-	database := filepath.Join(s.Config.AIOSDataDir, s.Config.DatabaseRelativePath)
-	metadata := backupMetadata{ReleaseID: releaseID, CreatedAt: time.Now().UTC(), Files: map[string]string{}}
+	if err := os.Remove(filepath.Join(backupDir, storageLayoutRollbackJournalName)); err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	databaseRelativePath, err := s.activeDatabaseRelativePath()
+	if err != nil {
+		return "", err
+	}
+	database := filepath.Join(s.Config.AIOSDataDir, databaseRelativePath)
+	if err := rejectSymlinkParents(s.Config.AIOSDataDir, database); err != nil {
+		return "", err
+	}
+	metadata := backupMetadata{
+		ReleaseID:            releaseID,
+		CreatedAt:            time.Now().UTC(),
+		DatabaseRelativePath: filepath.ToSlash(databaseRelativePath),
+		Files:                map[string]string{},
+	}
 	for _, suffix := range []string{"", "-wal"} {
 		source := database + suffix
-		if _, err := os.Stat(source); os.IsNotExist(err) && suffix != "" {
+		info, statErr := os.Lstat(source)
+		if os.IsNotExist(statErr) && suffix != "" {
 			continue
+		}
+		if statErr != nil {
+			return "", statErr
+		}
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("database backup source is not a regular file: %s", source)
 		}
 		destination := filepath.Join(backupDir, filepath.Base(source))
 		digest, err := copyAndHash(source, destination)
@@ -359,16 +389,47 @@ func (s System) Backup(releaseID string) (string, error) {
 	return backupDir, nil
 }
 
+// BackupRestoreRequired extends the signed database policy for the one-time
+// storage-layout transition. A backup taken from workspace/aios.db must be
+// restored even when the schema is backward-compatible, because the previous
+// release also needs its legacy filesystem layout put back.
+func (s System) BackupRestoreRequired(backupDir string, policyRequiresRestore bool) (bool, error) {
+	if policyRequiresRestore {
+		return true, nil
+	}
+	metadata, err := readBackupMetadata(backupDir)
+	if err != nil {
+		return false, err
+	}
+	databaseRelativePath, err := s.backupDatabaseRelativePath(metadata)
+	if err != nil {
+		return false, err
+	}
+	return filepath.ToSlash(databaseRelativePath) == legacyDatabaseRelativePath, nil
+}
+
 func (s System) Restore(backupDir string) error {
-	metadataData, err := os.ReadFile(filepath.Join(backupDir, "backup.json"))
+	metadata, err := readBackupMetadata(backupDir)
 	if err != nil {
 		return err
 	}
-	var metadata backupMetadata
-	if err := json.Unmarshal(metadataData, &metadata); err != nil {
+	databaseRelativePath, err := s.backupDatabaseRelativePath(metadata)
+	if err != nil {
 		return err
 	}
-	database := filepath.Join(s.Config.AIOSDataDir, s.Config.DatabaseRelativePath)
+	databaseBase := filepath.Base(databaseRelativePath)
+	if err := verifyBackupFiles(backupDir, databaseBase, metadata.Files); err != nil {
+		return err
+	}
+	if filepath.ToSlash(databaseRelativePath) == legacyDatabaseRelativePath {
+		if err := s.reverseStorageLayoutMigration(backupDir); err != nil {
+			return fmt.Errorf("reverse storage layout migration: %w", err)
+		}
+	}
+	database := filepath.Join(s.Config.AIOSDataDir, databaseRelativePath)
+	if err := rejectSymlinkParents(s.Config.AIOSDataDir, database); err != nil {
+		return err
+	}
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		_ = os.Remove(database + suffix)
 	}
@@ -384,6 +445,428 @@ func (s System) Restore(backupDir string) error {
 		}
 	}
 	return nil
+}
+
+func cleanDatabaseRelativePath(path string) (string, error) {
+	cleaned := filepath.Clean(filepath.FromSlash(path))
+	if cleaned == "." || filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("must stay beneath aios_data_dir: %q", path)
+	}
+	return cleaned, nil
+}
+
+func (s System) activeDatabaseRelativePath() (string, error) {
+	configured, err := cleanDatabaseRelativePath(s.Config.DatabaseRelativePath)
+	if err != nil {
+		return "", err
+	}
+	canonical := filepath.FromSlash(canonicalDatabaseRelativePath)
+	legacy := filepath.FromSlash(legacyDatabaseRelativePath)
+	candidates := []string{configured, legacy}
+	if configured == canonical {
+		// workspace/aios.db was the active database in the release immediately
+		// before the canonical layout. It wins when both legacy workspace and
+		// stale state databases exist, matching the application migration.
+		candidates = []string{legacy, configured}
+	}
+	seen := map[string]bool{}
+	checked := make([]string, 0, len(candidates))
+	for _, relativePath := range candidates {
+		if seen[relativePath] {
+			continue
+		}
+		seen[relativePath] = true
+		checked = append(checked, filepath.ToSlash(relativePath))
+		databasePath := filepath.Join(s.Config.AIOSDataDir, relativePath)
+		if err := rejectSymlinkParents(s.Config.AIOSDataDir, databasePath); err != nil {
+			return "", err
+		}
+		info, statErr := os.Lstat(databasePath)
+		if os.IsNotExist(statErr) {
+			continue
+		}
+		if statErr != nil {
+			return "", statErr
+		}
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("database path %s is not a regular file", filepath.ToSlash(relativePath))
+		}
+		return relativePath, nil
+	}
+	return "", fmt.Errorf("database not found beneath aios_data_dir (checked %s)", strings.Join(checked, ", "))
+}
+
+func readBackupMetadata(backupDir string) (backupMetadata, error) {
+	metadataData, err := os.ReadFile(filepath.Join(backupDir, "backup.json"))
+	if err != nil {
+		return backupMetadata{}, err
+	}
+	var metadata backupMetadata
+	if err := json.Unmarshal(metadataData, &metadata); err != nil {
+		return backupMetadata{}, err
+	}
+	return metadata, nil
+}
+
+func verifyBackupFiles(backupDir, databaseBase string, files map[string]string) error {
+	if len(files) == 0 {
+		return fmt.Errorf("database backup metadata contains no files")
+	}
+	for name, expectedDigest := range files {
+		if name != databaseBase && name != databaseBase+"-wal" {
+			return fmt.Errorf("backup contains unexpected database file %q", name)
+		}
+		digest, err := hashFile(filepath.Join(backupDir, name))
+		if err != nil {
+			return err
+		}
+		if digest != expectedDigest {
+			return fmt.Errorf("backup file %s failed hash verification", name)
+		}
+	}
+	return nil
+}
+
+func hashFile(path string) (string, error) {
+	input, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer input.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, input); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func (s System) backupDatabaseRelativePath(metadata backupMetadata) (string, error) {
+	relativePath := metadata.DatabaseRelativePath
+	if relativePath == "" {
+		// Backups made by an older updater did not include the source path and
+		// always restore to the configured location for backward compatibility.
+		relativePath = s.Config.DatabaseRelativePath
+	}
+	return cleanDatabaseRelativePath(relativePath)
+}
+
+type storageLayoutMigrationReport struct {
+	Version   int                            `json:"version"`
+	Migration string                         `json:"migration"`
+	DataRoot  string                         `json:"dataRoot"`
+	Status    string                         `json:"status"`
+	Actions   []storageLayoutMigrationAction `json:"actions"`
+}
+
+type storageLayoutMigrationAction struct {
+	Action      string `json:"action"`
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	Status      string `json:"status,omitempty"`
+	Project     string `json:"project,omitempty"`
+	Registry    string `json:"registry,omitempty"`
+}
+
+type storageLayoutRollbackJournal struct {
+	FormatVersion int    `json:"formatVersion"`
+	ReportSHA256  string `json:"reportSha256"`
+	NextAction    int    `json:"nextAction"`
+}
+
+func (s System) reverseStorageLayoutMigration(backupDir string) error {
+	reportPath := filepath.Join(s.Config.AIOSDataDir, filepath.FromSlash(storageLayoutMigrationReportRelativePath))
+	journalPath := filepath.Join(backupDir, storageLayoutRollbackJournalName)
+	reportData, err := os.ReadFile(reportPath)
+	if os.IsNotExist(err) {
+		if removeErr := os.Remove(journalPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			return removeErr
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var report storageLayoutMigrationReport
+	if err := json.Unmarshal(reportData, &report); err != nil {
+		return fmt.Errorf("decode %s: %w", storageLayoutMigrationName, err)
+	}
+	if report.Version != 1 || report.Migration != storageLayoutMigrationName || (report.Status != "in_progress" && report.Status != "complete") {
+		return fmt.Errorf("unsupported storage migration report")
+	}
+	if !filepath.IsAbs(report.DataRoot) {
+		return fmt.Errorf("storage migration data root is not absolute")
+	}
+
+	reportDigest := sha256.Sum256(reportData)
+	reportSHA256 := hex.EncodeToString(reportDigest[:])
+	journal, err := loadStorageLayoutRollbackJournal(journalPath)
+	if os.IsNotExist(err) {
+		journal = storageLayoutRollbackJournal{
+			FormatVersion: 1,
+			ReportSHA256:  reportSHA256,
+			NextAction:    len(report.Actions) - 1,
+		}
+		if err := saveStorageLayoutRollbackJournal(journalPath, journal); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	} else if journal.FormatVersion != 1 || journal.ReportSHA256 != reportSHA256 || journal.NextAction < -1 || journal.NextAction >= len(report.Actions) {
+		return fmt.Errorf("storage layout rollback journal does not match migration report")
+	}
+
+	for journal.NextAction >= 0 {
+		if err := s.reverseStorageLayoutAction(report, journal.NextAction); err != nil {
+			return err
+		}
+		journal.NextAction--
+		if err := saveStorageLayoutRollbackJournal(journalPath, journal); err != nil {
+			return err
+		}
+	}
+
+	if err := os.Remove(reportPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := syncDirectory(filepath.Dir(reportPath)); err != nil {
+		return err
+	}
+	if err := os.Remove(journalPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return syncDirectory(filepath.Dir(journalPath))
+}
+
+func (s System) reverseStorageLayoutAction(report storageLayoutMigrationReport, index int) error {
+	action := report.Actions[index]
+	if action.Status != "" && action.Status != "planned" && action.Status != "complete" {
+		return fmt.Errorf("unsupported storage migration action status %q", action.Status)
+	}
+	switch action.Action {
+	case "rewrote-deployment-source":
+		if err := s.reverseDeploymentSourceRewrite(report.DataRoot, action); err != nil {
+			return err
+		}
+		return nil
+	case "moved", "archived", "promoted-database", "promoted-database-snapshot":
+	default:
+		return fmt.Errorf("unsupported storage migration action %q", action.Action)
+	}
+	sourceRelative, err := migrationRelativePath(report.DataRoot, action.Source)
+	if err != nil {
+		return fmt.Errorf("invalid migration source: %w", err)
+	}
+	destinationRelative, err := migrationRelativePath(report.DataRoot, action.Destination)
+	if err != nil {
+		return fmt.Errorf("invalid migration destination: %w", err)
+	}
+	source := filepath.Join(s.Config.AIOSDataDir, sourceRelative)
+	destination := filepath.Join(s.Config.AIOSDataDir, destinationRelative)
+	var reverseErr error
+	if action.Action == "promoted-database-snapshot" {
+		reverseErr = reverseDatabaseSnapshot(s.Config.AIOSDataDir, source, destination)
+	} else {
+		reverseErr = reverseMigrationMove(s.Config.AIOSDataDir, source, destination)
+	}
+	if reverseErr != nil {
+		return fmt.Errorf("reverse %s from %s to %s: %w", action.Action, filepath.ToSlash(destinationRelative), filepath.ToSlash(sourceRelative), reverseErr)
+	}
+	return nil
+}
+
+func loadStorageLayoutRollbackJournal(path string) (storageLayoutRollbackJournal, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return storageLayoutRollbackJournal{}, err
+	}
+	var journal storageLayoutRollbackJournal
+	if err := json.Unmarshal(data, &journal); err != nil {
+		return storageLayoutRollbackJournal{}, err
+	}
+	return journal, nil
+}
+
+func saveStorageLayoutRollbackJournal(path string, journal storageLayoutRollbackJournal) error {
+	data, err := json.MarshalIndent(journal, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeAtomic(path, append(data, '\n'), 0o600)
+}
+
+func (s System) reverseDeploymentSourceRewrite(reportRoot string, action storageLayoutMigrationAction) error {
+	if action.Project == "" || action.Registry == "" {
+		return fmt.Errorf("rewritten deployment source action is missing project or registry")
+	}
+	registryRelative, err := migrationRelativePath(reportRoot, action.Registry)
+	if err != nil {
+		return fmt.Errorf("invalid deployment registry path: %w", err)
+	}
+	registryPath := filepath.Join(s.Config.AIOSDataDir, registryRelative)
+	if err := rejectSymlinkParents(s.Config.AIOSDataDir, registryPath); err != nil {
+		return err
+	}
+	registryData, err := os.ReadFile(registryPath)
+	if err != nil {
+		return err
+	}
+	var registry map[string]any
+	if err := json.Unmarshal(registryData, &registry); err != nil {
+		return fmt.Errorf("decode deployment registry: %w", err)
+	}
+	rawProject, exists := registry[action.Project]
+	if !exists {
+		return fmt.Errorf("deployment registry is missing project %q", action.Project)
+	}
+	project, ok := rawProject.(map[string]any)
+	if !ok {
+		return fmt.Errorf("deployment registry project %q is invalid", action.Project)
+	}
+	currentSource, ok := project["source_dir"].(string)
+	if !ok {
+		return fmt.Errorf("deployment registry project %q has no source_dir", action.Project)
+	}
+	if currentSource == action.Source {
+		return nil
+	}
+	if currentSource != action.Destination {
+		return fmt.Errorf("deployment registry project %q source changed during migration", action.Project)
+	}
+	project["source_dir"] = action.Source
+	updated, err := json.MarshalIndent(registry, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeAtomic(registryPath, append(updated, '\n'), 0o600)
+}
+
+func migrationRelativePath(reportRoot, reportedPath string) (string, error) {
+	if !filepath.IsAbs(reportedPath) {
+		return "", fmt.Errorf("path is not absolute: %q", reportedPath)
+	}
+	relativePath, err := filepath.Rel(filepath.Clean(reportRoot), filepath.Clean(reportedPath))
+	if err != nil {
+		return "", err
+	}
+	if relativePath == "." || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(os.PathSeparator)) || filepath.IsAbs(relativePath) {
+		return "", fmt.Errorf("path escapes reported data root: %q", reportedPath)
+	}
+	return relativePath, nil
+}
+
+func reverseMigrationMove(dataRoot, source, destination string) error {
+	sourceExists, err := pathExists(source)
+	if err != nil {
+		return err
+	}
+	destinationExists, err := pathExists(destination)
+	if err != nil {
+		return err
+	}
+	if sourceExists && !destinationExists {
+		return nil
+	}
+	if sourceExists && destinationExists {
+		return fmt.Errorf("both original and migrated paths exist")
+	}
+	if !destinationExists {
+		return fmt.Errorf("neither original nor migrated path exists")
+	}
+	if err := rejectSymlinkParents(dataRoot, source); err != nil {
+		return err
+	}
+	if err := rejectSymlinkParents(dataRoot, destination); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(source), 0o700); err != nil {
+		return err
+	}
+	if err := rejectSymlinkParents(dataRoot, source); err != nil {
+		return err
+	}
+	if err := os.Rename(destination, source); err != nil {
+		return err
+	}
+	if err := syncDirectory(filepath.Dir(source)); err != nil {
+		return err
+	}
+	if filepath.Dir(source) != filepath.Dir(destination) {
+		return syncDirectory(filepath.Dir(destination))
+	}
+	return nil
+}
+
+func reverseDatabaseSnapshot(dataRoot, source, destination string) error {
+	sourceExists, err := pathExists(source)
+	if err != nil {
+		return err
+	}
+	destinationExists, err := pathExists(destination)
+	if err != nil {
+		return err
+	}
+	if sourceExists && !destinationExists {
+		return nil
+	}
+	if !sourceExists {
+		return fmt.Errorf("original database is unavailable")
+	}
+	if err := rejectSymlinkParents(dataRoot, destination); err != nil {
+		return err
+	}
+	if err := os.Remove(destination); err != nil {
+		return err
+	}
+	return syncDirectory(filepath.Dir(destination))
+}
+
+func pathExists(path string) (bool, error) {
+	_, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func rejectSymlinkParents(dataRoot, path string) error {
+	relativePath, err := filepath.Rel(filepath.Clean(dataRoot), filepath.Clean(path))
+	if err != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(os.PathSeparator)) || filepath.IsAbs(relativePath) {
+		return fmt.Errorf("path escapes aios_data_dir: %q", path)
+	}
+	current := filepath.Clean(dataRoot)
+	parts := strings.Split(filepath.Dir(relativePath), string(os.PathSeparator))
+	for _, part := range parts {
+		if part == "." || part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if os.IsNotExist(statErr) {
+			break
+		}
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("path parent is a symbolic link: %s", current)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("path parent is not a directory: %s", current)
+		}
+	}
+	return nil
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 func copyAndHash(source, destination string) (string, error) {

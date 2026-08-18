@@ -10,6 +10,8 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+const canonicalDatabaseRelativePath = "state/aios.db"
+
 type Config struct {
 	Channel                 string `toml:"channel"`
 	FeedURL                 string `toml:"feed_url"`
@@ -58,7 +60,7 @@ func (c *Config) applyDefaults() {
 		c.ReleaseEnvPath = filepath.Join(c.ComposeProjectDir, "release.env")
 	}
 	if c.DatabaseRelativePath == "" {
-		c.DatabaseRelativePath = filepath.Join("state", "aios.db")
+		c.DatabaseRelativePath = filepath.FromSlash(canonicalDatabaseRelativePath)
 	}
 	if c.DockerBinary == "" {
 		c.DockerBinary = "docker"
@@ -122,6 +124,9 @@ func (c Config) Validate() error {
 		if !filepath.IsAbs(path) {
 			return fmt.Errorf("security-sensitive paths must be absolute: %s", path)
 		}
+	}
+	if _, err := cleanDatabaseRelativePath(c.DatabaseRelativePath); err != nil {
+		return fmt.Errorf("config database_relative_path: %w", err)
 	}
 	return nil
 }

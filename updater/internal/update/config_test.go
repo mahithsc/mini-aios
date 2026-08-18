@@ -18,3 +18,11 @@ func TestConfigDefaultsDatabaseToCanonicalState(t *testing.T) {
 		)
 	}
 }
+
+func TestConfigRejectsDatabasePathOutsideDataRoot(t *testing.T) {
+	config := testConfig(t, t.TempDir())
+	config.DatabaseRelativePath = filepath.Join("..", "outside.db")
+	if err := config.Validate(); err == nil {
+		t.Fatal("config accepted a database path outside aios_data_dir")
+	}
+}
