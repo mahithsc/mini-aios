@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -92,7 +93,10 @@ def _sanitize_path_segment(value: str, fallback: str) -> str:
         character if character.isalnum() or character in "._-" else "-" for character in value
     )
     sanitized = sanitized.strip("._-")
-    return sanitized or fallback
+    if sanitized == value and sanitized not in {".", ".."}:
+        return sanitized
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
+    return f"{sanitized or fallback}-{digest}"
 
 
 def _create_manifest_timestamp() -> str:

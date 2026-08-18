@@ -59,22 +59,31 @@ def test_chat_storage_uses_separate_scratch_upload_and_artifact_roots(
     data_dir, _ = isolated_chat_storage
 
     sessions.create_chat("chat/unsafe")
+    chat_segment = sessions.get_chat_session_relative_dir("chat/unsafe").parts[1]
 
     assert sessions.get_chat_session_relative_dir("chat/unsafe").as_posix() == (
-        "sessions/chat-unsafe"
+        f"sessions/{chat_segment}"
     )
     assert sessions.get_chat_scratch_relative_dir("chat/unsafe").as_posix() == (
-        "sessions/chat-unsafe/scratch"
+        f"sessions/{chat_segment}/scratch"
     )
     assert sessions.get_chat_uploads_relative_dir("chat/unsafe").as_posix() == (
-        "uploads/chat-unsafe"
+        f"uploads/{chat_segment}"
     )
     assert sessions.get_chat_artifacts_relative_dir("chat/unsafe").as_posix() == (
-        "artifacts/chat-unsafe"
+        f"artifacts/{chat_segment}"
     )
-    assert (data_dir / "sessions/chat-unsafe/scratch").is_dir()
-    assert (data_dir / "uploads/chat-unsafe").is_dir()
-    assert (data_dir / "artifacts/chat-unsafe").is_dir()
+    assert chat_segment.startswith("chat-unsafe-")
+    assert chat_segment != sessions.get_chat_session_relative_dir("chat-unsafe").parts[1]
+    assert (data_dir / "sessions" / chat_segment / "scratch").is_dir()
+    assert (data_dir / "uploads" / chat_segment).is_dir()
+    assert (data_dir / "artifacts" / chat_segment).is_dir()
+
+
+def test_unsafe_chat_ids_have_collision_resistant_storage_paths() -> None:
+    assert sessions.get_chat_scratch_relative_dir(
+        "chat/a"
+    ) != sessions.get_chat_scratch_relative_dir("chat-a")
 
 
 def test_loading_db_only_chat_creates_its_filesystem_roots(
@@ -111,8 +120,9 @@ def test_loading_db_only_chat_creates_its_filesystem_roots(
     ],
 )
 def test_unsafe_attachment_paths_are_quarantined_to_chat_storage(file_path):
+    chat_segment = sessions.get_chat_uploads_relative_dir("chat/unsafe").parts[1]
     assert sessions._canonical_attachment_path("chat/unsafe", file_path) == (
-        "uploads/chat-unsafe/.invalid-path"
+        f"uploads/{chat_segment}/.invalid-path"
     )
 
 
