@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from fastapi import HTTPException, UploadFile, status
 from pydantic import BaseModel
 
-from server.uploads import AUDIO_FILE_EXTENSIONS, AUDIO_MIME_TYPES
+from aios_core.attachment_policy import AUDIO_FILE_EXTENSIONS, AUDIO_MIME_TYPES
 
 load_dotenv()
 

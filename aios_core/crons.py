@@ -1,18 +1,17 @@
-import uuid
 import logging
 import os
-from datetime import datetime, timezone
+import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.cron import CronTrigger
-from agents import RunConfig, Runner
+from apscheduler.triggers.date import DateTrigger
 
-from .agent import create_agent
-from .db import DB_PATH, get_db_connection, initialize_app_db
 from .agent.prompts import render_prompt
+from .agent.runtime import run_agent_to_completion
+from .db import DB_PATH, get_db_connection, initialize_app_db
 from .workspace import ensure_workspace_dir
 
 _WORKSPACE_DIR = ensure_workspace_dir()
@@ -409,15 +408,8 @@ class CronManager:
         
         prompt = render_prompt("cron.md", instructions=instructions)
         try:
-            agent = create_agent()
             messages = [{"role": "user", "content": prompt}]
-            response = Runner.run_sync(
-                agent,
-                messages,
-                max_turns=None,
-                run_config=RunConfig(tracing_disabled=True),
-            )
-            output = str(response.final_output or "")
+            output = run_agent_to_completion(messages)
         except Exception as e:
             status = "error"
             output = str(e)

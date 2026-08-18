@@ -10,8 +10,8 @@ from agents import RunConfig, Runner
 
 from ..openai import OpenAIEventTranslator
 from ..prompts import render_prompt
+from .subagent_events import SubagentStreamEvent
 from .subagent_events import (
-    SubagentStreamEvent,
     build_subagent_stream_event as _build_subagent_stream_event,
 )
 
@@ -62,7 +62,7 @@ async def subagent(task: str | None = None, timeout: float = 60, fc=None) -> str
     child_hooks = None
     child_recorder = getattr(child_runtime_context, "conversation_recorder", None)
     if child_recorder is not None:
-        from aios_core.conversation_store import (
+        from aios_core.agent.persistence import (
             CanonicalConversationSession,
             DurableRunHooks,
         )
@@ -114,16 +114,16 @@ async def subagent(task: str | None = None, timeout: float = 60, fc=None) -> str
                 event = translator.translate(sdk_event)
                 if event is None:
                     continue
-                if event.kind == "text" and event.value is not None:
+                if event.kind == "text_delta" and event.value is not None:
                     chunks.append(event.value)
-                elif event.kind == "tool_start":
+                elif event.kind == "tool_call_start":
                     await emit(
                         "tool_call_start",
                         tool_call_id=event.tool_call_id,
                         tool_name=event.tool_name,
                         input=event.input,
                     )
-                elif event.kind == "tool_end":
+                elif event.kind == "tool_call_end":
                     await emit(
                         "tool_call_end",
                         tool_call_id=event.tool_call_id,

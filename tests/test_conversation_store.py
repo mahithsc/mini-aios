@@ -6,10 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from aios_core.conversation_store import (
-    MAIN_SCOPE,
+from aios_core.agent.persistence import (
     CanonicalConversationSession,
     ConversationRecorder,
+)
+from aios_core.conversation_store import (
+    MAIN_SCOPE,
     ConversationStore,
 )
 from aios_core.db import get_db_connection, initialize_app_db

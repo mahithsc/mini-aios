@@ -7,9 +7,8 @@ import inspect
 import json
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Literal, get_type_hints
+from typing import Any, get_type_hints
 
 from agents import FunctionTool, function_tool
 from agents.items import ToolCallItem, ToolCallOutputItem
@@ -17,6 +16,7 @@ from agents.tool_context import ToolContext
 from openai.types.responses import ResponseTextDeltaEvent
 
 from .context import AgentRuntimeContext, FunctionCallContext
+from .events import AgentEvent
 from .tools.subagent_events import SubagentStreamEvent
 
 
@@ -102,9 +102,7 @@ def as_function_tool(
         )
         bound = public_signature.bind(ctx, *args, **kwargs)
         call_kwargs = {
-            name: value
-            for name, value in bound.arguments.items()
-            if name != "ctx"
+            name: value for name, value in bound.arguments.items() if name != "ctx"
         }
         call_context = FunctionCallContext(
             call_id=str(ctx.tool_call_id),
@@ -148,7 +146,9 @@ def as_function_tool(
     }
     invoke.__annotations__["return"] = Any
 
-    async def persist_exact_tool_output(extraction_context: Any) -> dict[str, Any] | None:
+    async def persist_exact_tool_output(
+        extraction_context: Any,
+    ) -> dict[str, Any] | None:
         tool_context = extraction_context.tool_context
         runtime_context = getattr(tool_context, "context", None)
         if not isinstance(runtime_context, AgentRuntimeContext):
@@ -166,16 +166,6 @@ def as_function_tool(
         strict_mode=strict_mode,
         custom_data_extractor=persist_exact_tool_output,
     )
-
-
-@dataclass(frozen=True)
-class AgentEvent:
-    kind: Literal["text", "tool_start", "tool_end"]
-    value: str | None = None
-    tool_call_id: str | None = None
-    tool_name: str = "tool"
-    input: object | None = None
-    output: object | None = None
 
 
 def _raw_arguments(item: ToolCallItem) -> object | None:
@@ -197,7 +187,7 @@ def _parse_arguments(arguments: object | None) -> object:
 
 
 class OpenAIEventTranslator:
-    """Translate SDK stream objects into AIOS's stable three-event core."""
+    """Translate SDK stream objects into provider-neutral agent events."""
 
     def __init__(self) -> None:
         self._tool_names: dict[str, str] = {}
@@ -207,7 +197,7 @@ class OpenAIEventTranslator:
         if event_type == "raw_response_event":
             data = getattr(event, "data", None)
             if isinstance(data, ResponseTextDeltaEvent):
-                return AgentEvent(kind="text", value=data.delta)
+                return AgentEvent(kind="text_delta", value=data.delta)
             return None
 
         if event_type != "run_item_stream_event":
@@ -220,7 +210,7 @@ class OpenAIEventTranslator:
             tool_name = str(item.tool_name or "tool")
             self._tool_names[call_id] = tool_name
             return AgentEvent(
-                kind="tool_start",
+                kind="tool_call_start",
                 tool_call_id=call_id,
                 tool_name=tool_name,
                 input=_parse_arguments(_raw_arguments(item)),
@@ -233,7 +223,7 @@ class OpenAIEventTranslator:
                 origin = getattr(item, "tool_origin", None)
                 tool_name = getattr(origin, "agent_tool_name", None) or "tool"
             return AgentEvent(
-                kind="tool_end",
+                kind="tool_call_end",
                 tool_call_id=call_id,
                 tool_name=str(tool_name),
                 output=item.output,

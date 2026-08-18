@@ -1,3 +1,5 @@
+import importlib
+
 from aios_core.agent import (
     DEFAULT_MODEL_ID,
     DEFAULT_REASONING_EFFORT,
@@ -55,3 +57,11 @@ def test_default_model_configuration_is_gpt_5_6_xhigh() -> None:
             "AIOS_REASONING_EFFORT": "high",
         }
     ) == ("gpt-5.6-terra", "high")
+
+
+def test_cron_tool_resolves_the_domain_manager_after_package_move() -> None:
+    from aios_core import crons
+
+    cron_tool = importlib.import_module("aios_core.agent.tools.cron")
+
+    assert cron_tool._get_cron_manager() is crons.cron_manager

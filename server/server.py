@@ -21,6 +21,7 @@ from server.cloud_events import (
     start_cloud_device_events,
 )
 from server.gateway.routes import router as gateway_router
+from server.gateway.run_broadcaster import RunBroadcaster
 from server.lights import lights
 from server.notifications.runtime import (
     shutdown_notification_service,
@@ -55,7 +56,10 @@ async def lifespan(_: FastAPI):
     await lights.start()
     await start_notification_service()
     receive_cloud_events = cloud_device_events_enabled()
-    await start_runs_service()
+    await start_runs_service(
+        broadcaster=RunBroadcaster(),
+        activity=lights,
+    )
     _install_pi_progress_sink()
     try:
         if receive_cloud_events:

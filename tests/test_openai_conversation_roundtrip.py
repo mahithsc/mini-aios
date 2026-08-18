@@ -9,12 +9,12 @@ from openai.types.responses import ResponseReasoningItem
 
 from aios_core.agent.context import AgentRuntimeContext
 from aios_core.agent.openai import as_function_tool
-from aios_core.conversation_store import (
+from aios_core.agent.persistence import (
     CanonicalConversationSession,
     ConversationRecorder,
-    ConversationStore,
     DurableRunHooks,
 )
+from aios_core.conversation_store import ConversationStore
 from aios_core.db import get_db_connection, initialize_app_db
 
 

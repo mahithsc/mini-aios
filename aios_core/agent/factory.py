@@ -5,6 +5,26 @@ from agents import Agent, ModelSettings
 from dotenv import load_dotenv
 from openai.types.shared import Reasoning
 
+from ..memory import build_memory_prompt
+from ..sessions import (
+    get_chat_artifacts_dir,
+    get_chat_files_dir,
+    get_chat_session_relative_dir,
+)
+from ..skills import load_skills
+from ..workspace import resolve_workspace_path
+from .openai import as_function_tool
+from .pi.tool import pi
+from .prompts.builder import build_agent_prompt
+from .tools import (
+    bash,
+    edit,
+    glob,
+    grep,
+    read,
+    tavily_search,
+    write,
+)
 from .tools.apps import (
     app_create,
     app_info,
@@ -17,26 +37,6 @@ from .tools.apps import (
     legacy_apps_list,
     secrets_list,
 )
-from ..memory import build_memory_prompt
-from ..sessions import (
-    get_chat_artifacts_dir,
-    get_chat_files_dir,
-    get_chat_session_relative_dir,
-)
-from ..skills import load_skills
-from .tools import (
-    bash,
-    edit,
-    glob,
-    grep,
-    read,
-    tavily_search,
-    write,
-)
-from ..workspace import resolve_workspace_path
-from .openai import as_function_tool
-from .pi.tool import pi
-from .prompts.builder import build_agent_prompt
 from .tools.canvas import show_canvas
 from .tools.cron import cron
 from .tools.fetch import fetch

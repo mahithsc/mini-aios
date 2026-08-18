@@ -2,272 +2,120 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any
 
-import pytest
-
+from aios_core.agent.events import AgentEvent
 from aios_core.execution.runners import chat
-from aios_core.agent.tools.subagent_events import build_subagent_stream_event
-from server.types.chat import UserMessage
 from server.types.run import Run
 
 
-class _EventStream:
-    def __init__(self, events, *, context=None) -> None:
-        self._events = iter(events)
-        self._context = context
-        self._sent_nested = False
+class _Runtime:
+    def __init__(self, events: list[AgentEvent]) -> None:
+        self.events = events
+        self.requests = []
         self.closed = False
+        self.consumer_error: Exception | None = None
 
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if self._context is not None and not self._sent_nested:
-            self._sent_nested = True
-            await self._context.emit(
-                build_subagent_stream_event(
-                    parent_tool_call_id="parent-1",
-                    child_run_id="child-1",
-                    child_event_type="stream_start",
-                )
-            )
+    async def run(self, request):
+        self.requests.append(request)
         try:
-            return next(self._events)
-        except StopIteration as exc:
-            raise StopAsyncIteration from exc
-
-    async def aclose(self) -> None:
-        self.closed = True
-
-
-class _StreamingResult:
-    def __init__(self, events, *, context=None, final_output=None) -> None:
-        self.events = _EventStream(events, context=context)
-        self.is_complete = False
-        self.run_loop_exception = None
-        self.final_output = final_output
-        self.cancel_modes: list[str] = []
-
-    def stream_events(self):
-        return self.events
-
-    def cancel(self, mode="immediate") -> None:
-        self.cancel_modes.append(mode)
-        self.is_complete = True
+            for event in self.events:
+                yield event
+        except Exception as exc:
+            self.consumer_error = exc
+            raise
+        finally:
+            self.closed = True
 
 
 class _RunsService:
-    def __init__(self, *, cancel_on_token: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        cancel_on_token: bool = False,
+        fail_on_token: bool = False,
+    ) -> None:
         self.events = []
         self.cancel_on_token = cancel_on_token
+        self.fail_on_token = fail_on_token
 
     async def emit_event(self, _run_id, event):
         self.events.append(event)
         if self.cancel_on_token and event.event.type == "token":
             raise asyncio.CancelledError
+        if self.fail_on_token and event.event.type == "token":
+            raise RuntimeError("projection failed")
         return event
 
 
-def _run() -> Run:
+def _run(*, chat_id: str | None = "chat-1") -> Run:
     return Run(
         id="run-1",
         kind="chat",
         status="running",
         createdAt=1,
         updatedAt=1,
-        chatId="chat-1",
+        chatId=chat_id,
         turnId="user-current",
     )
 
 
-def _patch_runner_dependencies(monkeypatch, sdk_events, *, final_output=None):
-    previous_user = UserMessage(
-        id="user-previous",
-        createdAt=1,
-        updatedAt=1,
-        status="complete",
-        content="Earlier question",
-    )
-    current_user = UserMessage(
-        id="user-current",
-        createdAt=2,
-        updatedAt=2,
-        status="complete",
-        content="hello",
-    )
-    future_user = UserMessage(
-        id="user-future",
-        createdAt=3,
-        updatedAt=3,
-        status="complete",
-        content="queued after this turn",
-    )
-    monkeypatch.setattr(
-        chat,
-        "load_chat_session",
-        lambda _chat_id: [previous_user, current_user, future_user],
-    )
-    monkeypatch.setattr(chat, "create_agent", lambda **_kwargs: object())
-    monkeypatch.setattr(
-        chat,
-        "push_chat_runtime_context",
-        lambda _chat_id: (object(), object(), object()),
-    )
-    popped = []
-    monkeypatch.setattr(chat, "pop_chat_runtime_context", popped.append)
+def _activity() -> tuple[SimpleNamespace, list[str]]:
+    modes: list[str] = []
 
-    light_modes = []
+    async def set_mode(mode: str) -> None:
+        modes.append(mode)
 
-    async def set_mode(mode):
-        light_modes.append(mode)
-
-    monkeypatch.setattr(chat, "lights", SimpleNamespace(set_mode=set_mode))
-    captured: dict[str, Any] = {"persistence_order": []}
-
-    class Store:
-        def __init__(self) -> None:
-            self.calls: list[tuple[Any, ...]] = []
-
-        def create_turn(self, **kwargs) -> None:
-            self.calls.append(("create_turn", kwargs))
-
-        def ensure_seeded(self, chat_id, seed_items) -> None:
-            self.calls.append(("ensure_seeded", chat_id, seed_items))
-
-        def append_items(self, **kwargs) -> None:
-            self.calls.append(("append_items", kwargs))
-
-        def set_turn_status(self, turn_id, status) -> None:
-            self.calls.append(("set_turn_status", turn_id, status))
-
-    store = Store()
-    monkeypatch.setattr(chat, "ConversationStore", lambda: store)
-
-    class Recorder:
-        def __init__(self) -> None:
-            self.application_events: list[tuple[str, dict[str, Any]]] = []
-            self.sdk_events: list[Any] = []
-            self.custom_events: list[Any] = []
-            self.finalize_count = 0
-
-        async def record_application_event(self, event_type, payload) -> int:
-            self.application_events.append((event_type, dict(payload)))
-            return len(self.application_events)
-
-        async def record_sdk_event(self, event) -> int:
-            captured["persistence_order"].append(("persist", event))
-            self.sdk_events.append(event)
-            return len(self.sdk_events)
-
-        async def record_custom_event(self, event) -> int:
-            self.custom_events.append(event)
-            return len(self.custom_events)
-
-        async def finalize_unfinished_tools(self) -> None:
-            self.finalize_count += 1
-
-        async def finish_turn(self, status, payload) -> int:
-            self.finalize_count += 1
-            event_type = {
-                "complete": "run.completed",
-                "cancelled": "run.cancelled",
-                "error": "run.error",
-            }[status]
-            self.application_events.append((event_type, dict(payload)))
-            return len(self.application_events)
-
-    recorder = Recorder()
-
-    def make_recorder(**kwargs):
-        captured["recorder_kwargs"] = kwargs
-        return recorder
-
-    monkeypatch.setattr(chat, "ConversationRecorder", make_recorder)
-
-    class Session:
-        def __init__(self) -> None:
-            self.added_items: list[list[dict[str, Any]]] = []
-
-        async def add_items(self, items) -> None:
-            self.added_items.append(items)
-
-    session = Session()
-
-    def make_session(**kwargs):
-        captured["session_kwargs"] = kwargs
-        return session
-
-    monkeypatch.setattr(chat, "CanonicalConversationSession", make_session)
-    hooks = object()
-    monkeypatch.setattr(chat, "DurableRunHooks", lambda: hooks)
-
-    def translate(event):
-        captured["persistence_order"].append(("translate", event))
-        return event
-
-    monkeypatch.setattr(
-        chat,
-        "OpenAIEventTranslator",
-        lambda: SimpleNamespace(translate=translate),
-    )
-
-    def run_streamed(agent, input, **kwargs):
-        captured.update(agent=agent, input=input, **kwargs)
-        result = _StreamingResult(
-            sdk_events,
-            context=kwargs["context"],
-            final_output=final_output,
-        )
-        captured["result"] = result
-        return result
-
-    monkeypatch.setattr(chat.Runner, "run_streamed", run_streamed)
-    captured.update(
-        store=store,
-        recorder=recorder,
-        session_object=session,
-        hooks_object=hooks,
-        current_user=current_user,
-        previous_user=previous_user,
-        future_user=future_user,
-    )
-    return captured, popped, light_modes
+    return SimpleNamespace(set_mode=set_mode), modes
 
 
-def test_chat_runner_projects_openai_and_nested_events(monkeypatch) -> None:
-    sdk_events = [
-        SimpleNamespace(kind="text", value="Hello"),
-        SimpleNamespace(
-            kind="tool_start",
-            tool_call_id="call-1",
-            tool_name="show_canvas",
-            input={"title": "Demo"},
-        ),
-        SimpleNamespace(
-            kind="tool_end",
-            tool_call_id="call-1",
-            tool_name="show_canvas",
-            output="{'url': '/demo'}",
-        ),
-    ]
-    captured, popped, light_modes = _patch_runner_dependencies(
-        monkeypatch, sdk_events
+def test_chat_runner_only_projects_agent_events() -> None:
+    agent_runtime = _Runtime(
+        [
+            AgentEvent(kind="started"),
+            AgentEvent(kind="text_delta", value="Hello"),
+            AgentEvent(
+                kind="tool_call_start",
+                tool_call_id="call-1",
+                tool_name="show_canvas",
+                input={"title": "Demo"},
+            ),
+            AgentEvent(
+                kind="tool_call_end",
+                tool_call_id="call-1",
+                tool_name="show_canvas",
+                output={"url": "/demo"},
+            ),
+            AgentEvent(
+                kind="subagent_tool_event",
+                parent_tool_call_id="parent-1",
+                child_run_id="child-1",
+                child_event_type="stream_start",
+            ),
+            AgentEvent(kind="completed"),
+        ]
     )
     service = _RunsService()
+    activity, light_modes = _activity()
 
-    asyncio.run(chat.ChatRunner().execute(_run(), service))
+    asyncio.run(
+        chat.ChatRunner(agent_runtime, activity=activity).execute(_run(), service)
+    )
 
-    types = [event.event.type for event in service.events]
-    assert types == [
+    assert [event.event.type for event in service.events] == [
         "started",
-        "subagent_tool_event",
         "token",
         "tool_call_start",
         "tool_call_end",
+        "subagent_tool_event",
         "completed",
     ]
-    assert service.events[1].event.data == {
+    assert service.events[1].event.data == {"value": "Hello"}
+    assert service.events[3].event.data == {
+        "toolCallId": "call-1",
+        "toolName": "show_canvas",
+        "output": {"url": "/demo"},
+    }
+    assert service.events[4].event.data == {
         "parentToolCallId": "parent-1",
         "childRunId": "child-1",
         "childEventType": "stream_start",
@@ -277,128 +125,79 @@ def test_chat_runner_projects_openai_and_nested_events(monkeypatch) -> None:
         "output": None,
         "error": None,
     }
-    assert service.events[4].event.data["output"] == {"url": "/demo"}
-    current_input = captured["session_kwargs"]["current_input"]
-    assert captured["input"] == [current_input]
-    assert current_input == {
-        "role": "user",
-        "content": [{"type": "input_text", "text": "hello"}],
-    }
-    assert captured["session"] is captured["session_object"]
-    assert captured["session_object"].added_items == [[current_input]]
-    assert captured["hooks"] is captured["hooks_object"]
-    assert captured["session_kwargs"] == {
-        "store": captured["store"],
-        "chat_id": "chat-1",
-        "run_id": "run-1",
-        "turn_id": "user-current",
-        "current_user_message_id": "user-current",
-        "current_input": current_input,
-    }
-    assert captured["recorder_kwargs"] == {
-        "store": captured["store"],
-        "chat_id": "chat-1",
-        "run_id": "run-1",
-        "turn_id": "user-current",
-    }
-    assert captured["persistence_order"] == [
-        ("persist", sdk_events[0]),
-        ("translate", sdk_events[0]),
-        ("persist", sdk_events[1]),
-        ("translate", sdk_events[1]),
-        ("persist", sdk_events[2]),
-        ("translate", sdk_events[2]),
-    ]
-    assert captured["recorder"].sdk_events == sdk_events
-    assert len(captured["recorder"].custom_events) == 1
-    assert captured["recorder"].application_events == [
-        ("run.started", {"runId": "run-1", "turnId": "user-current"}),
-        ("run.completed", {"runId": "run-1", "turnId": "user-current"}),
-    ]
-    assert captured["recorder"].finalize_count == 1
-    assert captured["store"].calls[0] == (
-        "create_turn",
-        {
-            "chat_id": "chat-1",
-            "turn_id": "user-current",
-            "user_message_id": "user-current",
-            "run_id": "run-1",
-        },
+    [request] = agent_runtime.requests
+    assert (request.run_id, request.chat_id, request.turn_id) == (
+        "run-1",
+        "chat-1",
+        "user-current",
     )
-    assert captured["store"].calls[1][0:2] == ("ensure_seeded", "chat-1")
-    assert captured["store"].calls[1][2] == [
-        (
-            "user-previous",
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": "Earlier question"}
-                ],
-            },
-        )
-    ]
-    assert captured["store"].calls[2][0] == "append_items"
-    assert captured["store"].calls[2][1]["source_message_id"] == "user-previous"
-    assert captured["store"].calls[3:] == [
-        ("set_turn_status", "user-current", "running"),
-    ]
-    assert captured["max_turns"] is None
-    assert captured["run_config"].tracing_disabled is True
-    assert captured["context"]._loop is not None
-    assert popped
+    assert agent_runtime.closed is True
     assert light_modes == ["thinking", "idle"]
 
 
-def test_chat_runner_cancels_and_closes_sdk_stream(monkeypatch) -> None:
-    sdk_events = [
-        SimpleNamespace(kind="text", value="partial"),
-        SimpleNamespace(
-            kind="tool_start",
-            tool_call_id="call-1",
-            tool_name="read",
-            input={"path": "README.md"},
-        ),
-    ]
-    captured, popped, light_modes = _patch_runner_dependencies(
-        monkeypatch, sdk_events
+def test_chat_runner_closes_agent_stream_when_projection_is_cancelled() -> None:
+    agent_runtime = _Runtime(
+        [
+            AgentEvent(kind="started"),
+            AgentEvent(kind="text_delta", value="partial"),
+            AgentEvent(kind="completed"),
+        ]
     )
     service = _RunsService(cancel_on_token=True)
+    activity, light_modes = _activity()
 
-    with pytest.raises(asyncio.CancelledError):
-        asyncio.run(chat.ChatRunner().execute(_run(), service))
+    async def execute() -> None:
+        await chat.ChatRunner(agent_runtime, activity=activity).execute(_run(), service)
 
-    result = captured["result"]
-    assert result.cancel_modes == ["immediate"]
-    assert result.events.closed is True
-    assert captured["persistence_order"] == [
-        ("persist", sdk_events[0]),
-        ("translate", sdk_events[0]),
-        ("persist", sdk_events[1]),
-    ]
-    assert captured["recorder"].sdk_events == sdk_events
-    assert captured["recorder"].application_events == [
-        ("run.started", {"runId": "run-1", "turnId": "user-current"}),
-        ("run.cancelled", {"runId": "run-1", "turnId": "user-current"}),
-    ]
-    assert captured["recorder"].finalize_count == 1
-    assert captured["store"].calls[3:] == [
-        ("set_turn_status", "user-current", "running"),
-    ]
-    assert "completed" not in [event.event.type for event in service.events]
-    assert popped
+    try:
+        asyncio.run(execute())
+    except asyncio.CancelledError:
+        pass
+    else:  # pragma: no cover - guards cancellation semantics.
+        raise AssertionError("expected chat projection cancellation")
+
+    assert agent_runtime.closed is True
+    assert [event.event.type for event in service.events] == ["started", "token"]
     assert light_modes == ["thinking", "idle"]
 
 
-def test_chat_runner_uses_final_output_when_no_text_delta_arrives(monkeypatch) -> None:
-    _patch_runner_dependencies(monkeypatch, [], final_output="Fallback answer")
+def test_chat_runner_reports_projection_failure_to_agent_runtime() -> None:
+    agent_runtime = _Runtime(
+        [
+            AgentEvent(kind="started"),
+            AgentEvent(kind="text_delta", value="partial"),
+        ]
+    )
+    service = _RunsService(fail_on_token=True)
+    activity, light_modes = _activity()
+
+    async def execute() -> None:
+        await chat.ChatRunner(agent_runtime, activity=activity).execute(_run(), service)
+
+    try:
+        asyncio.run(execute())
+    except RuntimeError as exc:
+        assert str(exc) == "projection failed"
+    else:  # pragma: no cover - guards failure propagation.
+        raise AssertionError("expected projection failure")
+
+    assert isinstance(agent_runtime.consumer_error, RuntimeError)
+    assert agent_runtime.closed is True
+    assert light_modes == ["thinking", "idle"]
+
+
+def test_chat_runner_rejects_missing_chat_id() -> None:
+    agent_runtime = _Runtime([])
     service = _RunsService()
+    activity, light_modes = _activity()
 
-    asyncio.run(chat.ChatRunner().execute(_run(), service))
+    asyncio.run(
+        chat.ChatRunner(agent_runtime, activity=activity).execute(
+            _run(chat_id=None), service
+        )
+    )
 
-    assert [event.event.type for event in service.events] == [
-        "started",
-        "subagent_tool_event",
-        "token",
-        "completed",
-    ]
-    assert service.events[2].event.data == {"value": "Fallback answer"}
+    assert [event.event.type for event in service.events] == ["error"]
+    assert service.events[0].event.data == {"error": "Chat run is missing chatId."}
+    assert agent_runtime.requests == []
+    assert light_modes == []

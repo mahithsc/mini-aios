@@ -61,10 +61,20 @@ def test_tools_package_exports_pi_without_codex_lifecycle_tools() -> None:
     }.intersection(tools.__all__)
 
 
-def test_legacy_tool_module_paths_are_removed() -> None:
-    assert importlib.util.find_spec("aios_core.tools") is None
-    assert importlib.util.find_spec("aios_core.deploy.agent_tools") is None
-    assert importlib.util.find_spec("aios_core.deploy.pi_bridge") is None
+def test_legacy_agent_module_paths_are_removed() -> None:
+    legacy_modules = {
+        "aios_core.agent_prompt",
+        "aios_core.deploy.agent_tools",
+        "aios_core.deploy.pi_bridge",
+        "aios_core.openai_runtime",
+        "aios_core.prompt_loader",
+        "aios_core.runtime_context",
+        "aios_core.tools",
+        "server.execution",
+        "server.utils",
+    }
+
+    assert all(importlib.util.find_spec(name) is None for name in legacy_modules)
 
 
 def test_runtime_shutdown_closes_pi_jobs_even_before_start(monkeypatch) -> None:

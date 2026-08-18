@@ -3,9 +3,8 @@ from __future__ import annotations
 import os
 
 from aios_core.conversation_store import ConversationStore
-from aios_core.execution.broadcaster import RunBroadcaster
-from aios_core.execution.runners.chat import ChatRunner
-from aios_core.execution.service import RunsService
+from aios_core.execution.runners.chat import ActivityIndicator, ChatRunner
+from aios_core.execution.service import RunEventBroadcaster, RunsService
 from aios_core.execution.store import FileRunStore
 
 _runs_service: RunsService | None = None
@@ -23,16 +22,20 @@ def _resolve_worker_count() -> int:
     return max(2, min(8, cpu_count))
 
 
-def initialize_runs_service() -> RunsService:
+def initialize_runs_service(
+    *,
+    broadcaster: RunEventBroadcaster,
+    activity: ActivityIndicator | None = None,
+) -> RunsService:
     global _runs_service
     if _runs_service is None:
         _runs_service = RunsService(
             store=FileRunStore(),
-            broadcaster=RunBroadcaster(),
+            broadcaster=broadcaster,
             worker_count=_resolve_worker_count(),
             conversation_store=ConversationStore(),
         )
-        _runs_service.register_runner(ChatRunner())
+        _runs_service.register_runner(ChatRunner(activity=activity))
     return _runs_service
 
 
@@ -42,8 +45,15 @@ def get_runs_service() -> RunsService:
     return _runs_service
 
 
-async def start_runs_service() -> RunsService:
-    service = initialize_runs_service()
+async def start_runs_service(
+    *,
+    broadcaster: RunEventBroadcaster,
+    activity: ActivityIndicator | None = None,
+) -> RunsService:
+    service = initialize_runs_service(
+        broadcaster=broadcaster,
+        activity=activity,
+    )
     await service.start()
     return service
 

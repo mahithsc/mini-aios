@@ -1,21 +1,32 @@
+"""Convert persisted chat messages into OpenAI Responses input items."""
+
 from __future__ import annotations
 
 import base64
 import json
 import mimetypes
 from pathlib import Path
-from typing import TypeAlias
 
-from aios_core.workspace import resolve_workspace_path
 from pydantic import TypeAdapter
 
-from server.types.chat import AssistantMessage, ChatMessage, MessageAttachment, UserMessage
-from server.uploads import AUDIO_FILE_EXTENSIONS, AUDIO_MIME_TYPES, TEXT_FILE_EXTENSIONS, TEXT_MIME_TYPES
+from aios_core.attachment_policy import (
+    AUDIO_FILE_EXTENSIONS,
+    AUDIO_MIME_TYPES,
+    TEXT_FILE_EXTENSIONS,
+    TEXT_MIME_TYPES,
+)
+from aios_core.workspace import resolve_workspace_path
+from server.types.chat import (
+    AssistantMessage,
+    ChatMessage,
+    MessageAttachment,
+    UserMessage,
+)
 
 CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
 
-ResponseContentPart: TypeAlias = dict[str, str]
-ResponseInputMessage: TypeAlias = dict[str, str | list[ResponseContentPart]]
+type ResponseContentPart = dict[str, str]
+type ResponseInputMessage = dict[str, str | list[ResponseContentPart]]
 
 # Cap tool args/results when embedding in plain-text assistant content for the LLM.
 _MAX_TOOL_PAYLOAD_CHARS = 8_000
@@ -27,7 +38,9 @@ _MAX_HISTORY_CONTENT_CHARS = 120_000
 _MAX_INLINE_MEDIA_CHARS = 48 * 1024 * 1024
 
 
-def _truncate_text(text: str, max_chars: int, *, suffix: str = "... (truncated for context)") -> str:
+def _truncate_text(
+    text: str, max_chars: int, *, suffix: str = "... (truncated for context)"
+) -> str:
     if len(text) <= max_chars:
         return text
     return f"{text[:max_chars]}\n{suffix}"
@@ -69,7 +82,8 @@ def _assistant_events_to_openai_content(message: AssistantMessage) -> str:
             )
         elif etype == "tool_call_error":
             parts.append(
-                f"\n[Tool error: {event.toolName} id={event.toolCallId}]\n{event.error}\n"
+                f"\n[Tool error: {event.toolName} id={event.toolCallId}]\n"
+                f"{event.error}\n"
             )
         elif etype == "stream_error":
             parts.append(f"\n[Stream error]\n{event.error}\n")
@@ -167,7 +181,8 @@ def _message_content_with_attachments(
                 [
                     f"[Attachment omitted from inline model input: {attachment.name}]",
                     f"Workspace path: {attachment.filePath}",
-                    "The combined inline attachment limit was reached; use workspace tools to inspect it.",
+                    "The combined inline attachment limit was reached; "
+                    "use workspace tools to inspect it.",
                 ]
             )
         )
@@ -205,7 +220,8 @@ def _message_content_with_attachments(
                     label="audio",
                     guidance=(
                         "This audio file is available in the workspace. "
-                        "If you need a transcript, use tools/code to inspect or transcribe it."
+                        "If you need a transcript, use tools/code to inspect "
+                        "or transcribe it."
                     ),
                 )
             )

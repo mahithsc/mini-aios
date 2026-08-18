@@ -6,10 +6,17 @@ import time
 from dataclasses import dataclass
 from typing import Protocol
 
-from aios_core.execution.broadcaster import RunBroadcaster
 from aios_core.execution.store import RunStore
 from aios_core.runtime_control import get_runtime_control
-from server.types.run import Run, RunCreateRequest, RunEvent, RunEventType, RunKind, RunSnapshot, RunStatus
+from server.types.run import (
+    Run,
+    RunCreateRequest,
+    RunEvent,
+    RunEventType,
+    RunKind,
+    RunSnapshot,
+    RunStatus,
+)
 
 _STALE_RUN_ERROR_MESSAGE = "Server restarted before run completed."
 log = logging.getLogger(__name__)
@@ -19,6 +26,14 @@ class RunExecutor(Protocol):
     kind: str
 
     async def execute(self, run: Run, runs_service: "RunsService") -> None:
+        ...
+
+
+class RunEventBroadcaster(Protocol):
+    async def broadcast_run_accepted(self, run: Run) -> None:
+        ...
+
+    async def broadcast_run_event(self, event: RunEvent) -> None:
         ...
 
 
@@ -49,7 +64,7 @@ class RunsService:
     def __init__(
         self,
         store: RunStore,
-        broadcaster: RunBroadcaster,
+        broadcaster: RunEventBroadcaster,
         *,
         worker_count: int = 1,
         conversation_store: ConversationRecoveryStore | None = None,

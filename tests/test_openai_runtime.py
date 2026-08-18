@@ -138,7 +138,7 @@ def test_translator_correlates_text_and_tool_lifecycle() -> None:
         )
     )
     assert text is not None
-    assert (text.kind, text.value) == ("text", "hello")
+    assert (text.kind, text.value) == ("text_delta", "hello")
 
     agent = Agent(name="test")
     called = translator.translate(
@@ -156,7 +156,7 @@ def test_translator_correlates_text_and_tool_lifecycle() -> None:
         )
     )
     assert called is not None
-    assert called.kind == "tool_start"
+    assert called.kind == "tool_call_start"
     assert called.tool_call_id == "call-1"
     assert called.tool_name == "read"
     assert called.input == {"path": "README.md"}
@@ -172,7 +172,7 @@ def test_translator_correlates_text_and_tool_lifecycle() -> None:
         )
     )
     assert completed is not None
-    assert completed.kind == "tool_end"
+    assert completed.kind == "tool_call_end"
     assert completed.tool_call_id == "call-1"
     assert completed.tool_name == "read"
     assert completed.output == "contents"

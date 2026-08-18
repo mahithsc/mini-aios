@@ -4,9 +4,9 @@ import base64
 from dataclasses import is_dataclass
 from pathlib import Path
 
+from aios_core.agent import messages as utils
 from aios_core.agent.tools.subagent_events import build_subagent_stream_event
 from server.types.chat import AssistantMessage, MessageAttachment, UserMessage
-from server.utils import utils
 
 
 def _attachment(
@@ -197,7 +197,9 @@ def test_history_truncation_keeps_the_newest_message(monkeypatch) -> None:
     assert _text(formatted[1]) == "recent"
 
 
-def test_public_single_message_helper_preserves_user_attachments(tmp_path: Path) -> None:
+def test_public_single_message_helper_preserves_user_attachments(
+    tmp_path: Path,
+) -> None:
     text_path = tmp_path / "context.txt"
     text_path.write_text("supporting context", encoding="utf-8")
     message = UserMessage(
@@ -229,9 +231,7 @@ def test_legacy_helper_excludes_unusable_assistant_rows() -> None:
         createdAt=1,
         updatedAt=1,
         status="streaming",
-        events=[
-            {"id": "token", "createdAt": 1, "type": "token", "value": "partial"}
-        ],
+        events=[{"id": "token", "createdAt": 1, "type": "token", "value": "partial"}],
     )
     empty = AssistantMessage(
         id="assistant-empty",
@@ -248,9 +248,7 @@ def test_legacy_helper_excludes_unusable_assistant_rows() -> None:
         createdAt=4,
         updatedAt=4,
         status="complete",
-        events=[
-            {"id": "token", "createdAt": 4, "type": "token", "value": "done"}
-        ],
+        events=[{"id": "token", "createdAt": 4, "type": "token", "value": "done"}],
     )
 
     assert utils.legacy_chat_message_to_model_item(incomplete) is None
@@ -293,7 +291,9 @@ def test_inline_media_over_request_budget_falls_back_to_workspace_path(
     assert str(image_path) in _text(formatted)
 
 
-def test_history_budget_counts_replayed_inline_media(tmp_path: Path, monkeypatch) -> None:
+def test_history_budget_counts_replayed_inline_media(
+    tmp_path: Path, monkeypatch
+) -> None:
     first = tmp_path / "first.png"
     second = tmp_path / "second.png"
     first.write_bytes(b"first")

@@ -1,6 +1,6 @@
 def _get_cron_manager():
     # Imported lazily to avoid package import cycles.
-    from ..crons import cron_manager
+    from ...crons import cron_manager
 
     return cron_manager
 
