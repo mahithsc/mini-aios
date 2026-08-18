@@ -166,6 +166,44 @@ def test_legacy_database_discovery_includes_core_migration_archive(
     assert (archive_dir / "aios.db-wal").resolve() not in candidates
 
 
+def test_explicit_data_dir_isolates_legacy_chat_discovery(
+    isolated_chat_storage,
+    tmp_path,
+    monkeypatch,
+):
+    data_dir, _ = isolated_chat_storage
+    archived_state_dir = data_dir / "legacy" / "storage-layout-v1" / "state"
+    archived_state_dir.mkdir(parents=True)
+    archived_db = archived_state_dir / "aios.db"
+    archived_db.touch()
+
+    checkout_db = tmp_path / "checkout" / "state" / "aios.db"
+    checkout_db.parent.mkdir(parents=True)
+    checkout_db.touch()
+    checkout_session = tmp_path / "checkout" / "session"
+    checkout_workspace_session = tmp_path / "checkout" / "workspace" / "session"
+    checkout_session.mkdir(parents=True)
+    checkout_workspace_session.mkdir(parents=True)
+
+    configured_state = tmp_path / "configured-state"
+    configured_home = tmp_path / "configured-home"
+    monkeypatch.setenv("AIOS_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("AIOS_STATE_DIR", str(configured_state))
+    monkeypatch.setenv("AIOS_HOME", str(configured_home))
+    monkeypatch.setattr(sessions, "_LEGACY_SQLITE_CHAT_DB", checkout_db)
+    monkeypatch.setattr(sessions, "_LEGACY_ROOT_SESSION_DIR", checkout_session)
+    monkeypatch.setattr(
+        sessions,
+        "_LEGACY_DEV_SESSION_DIR",
+        checkout_workspace_session,
+    )
+
+    assert sessions._legacy_sqlite_chat_db_candidates() == [archived_db.resolve()]
+    assert sessions._legacy_chat_session_candidates() == [
+        sessions.SESSION_DIR.resolve()
+    ]
+
+
 def test_json_import_is_idempotent_and_preserves_structured_events(
     isolated_chat_storage,
 ):
@@ -370,6 +408,16 @@ def test_sqlite_import_is_idempotent_and_keeps_destination_authoritative(
         conn.execute("ALTER TABLE message_attachments DROP COLUMN content_hash")
 
     sessions.create_chat("existing-chat", "Destination title")
+    sessions.append_user_message(
+        "existing-chat",
+        UserMessage(
+            id="destination-user",
+            content="Keep canonical history",
+            status="complete",
+            createdAt=100,
+            updatedAt=100,
+        ),
+    )
     with get_db_connection(str(source_db)) as conn:
         conn.executemany(
             """
@@ -380,6 +428,17 @@ def test_sqlite_import_is_idempotent_and_keeps_destination_authoritative(
                 ("existing-chat", "Source title", 100, 100),
                 ("imported-chat", "Imported title", 200, 500),
             ],
+        )
+        conn.execute(
+            """
+            INSERT INTO chat_messages
+                (id, chat_id, position, role, content, run_id, status,
+                 created_at, updated_at)
+            VALUES (
+                'source-existing-user', 'existing-chat', 0, 'user',
+                'Do not replace canonical history', NULL, 'complete', 100, 100
+            )
+            """
         )
         conn.executemany(
             """
@@ -402,6 +461,18 @@ def test_sqlite_import_is_idempotent_and_keeps_destination_authoritative(
                 'imported-file', 'imported-user', 0, 'file', 'report.pdf',
                 'workspace/session/imported-chat/uploads/report.pdf',
                 'application/pdf', 123, 190
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO attachment_representations
+                (id, attachment_id, position, kind, status, text_content,
+                 file_path, mime_type, metadata_json, created_at, updated_at)
+            VALUES (
+                'imported-preview', 'imported-file', 0, 'preview', 'ready', NULL,
+                'workspace/session/imported-chat/artifacts/preview.txt',
+                'text/plain', '{}', 200, 200
             )
             """
         )
@@ -439,6 +510,15 @@ def test_sqlite_import_is_idempotent_and_keeps_destination_authoritative(
     assert imported[0].attachments[0].filePath == "uploads/imported-chat/report.pdf"
     assert isinstance(imported[1], AssistantMessage)
     assert imported[1].events[0].value == "Hello back"
+    with get_db_connection(str(db_path)) as conn:
+        representation_path = conn.execute(
+            """
+            SELECT file_path
+            FROM attachment_representations
+            WHERE id = 'imported-preview'
+            """
+        ).fetchone()[0]
+        assert representation_path == "artifacts/imported-chat/preview.txt"
 
     # The legacy state database is a read-only source from the migration's
     # perspective; its original path layout remains unchanged.
@@ -446,6 +526,16 @@ def test_sqlite_import_is_idempotent_and_keeps_destination_authoritative(
         assert conn.execute(
             "SELECT file_path FROM message_attachments WHERE id = 'imported-file'"
         ).fetchone()[0] == "workspace/session/imported-chat/uploads/report.pdf"
+        source_representation_path = conn.execute(
+            """
+            SELECT file_path
+            FROM attachment_representations
+            WHERE id = 'imported-preview'
+            """
+        ).fetchone()[0]
+        assert source_representation_path == (
+            "workspace/session/imported-chat/artifacts/preview.txt"
+        )
 
         conn.execute(
             """
@@ -466,7 +556,10 @@ def test_sqlite_import_is_idempotent_and_keeps_destination_authoritative(
             (destination_updated_at + 1,),
         )
     sessions.migrate_legacy_chat_database(source_db, db_path=str(db_path))
-    assert sessions.get_chat_metadata("existing-chat").title == "Source title"
+    assert sessions.get_chat_metadata("existing-chat").title == "Destination title"
+    assert [message.id for message in sessions.load_chat_session("existing-chat")] == [
+        "destination-user"
+    ]
 
 
 def test_corrupt_json_chat_is_retried_after_repair(isolated_chat_storage):

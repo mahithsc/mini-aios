@@ -55,7 +55,10 @@ log = logging.getLogger(__name__)
 
 
 def _legacy_sqlite_chat_db_candidates() -> list[Path]:
-    candidates = [_LEGACY_SQLITE_CHAT_DB]
+    candidates: list[Path] = []
+    isolated_data_root = bool(os.getenv("AIOS_DATA_DIR"))
+    if not isolated_data_root:
+        candidates.append(_LEGACY_SQLITE_CHAT_DB)
     archived_state_dir = (
         get_data_dir() / "legacy" / "storage-layout-v1" / "state"
     )
@@ -65,13 +68,23 @@ def _legacy_sqlite_chat_db_candidates() -> list[Path]:
             for path in archived_state_dir.glob("aios.db*")
             if path.name == "aios.db" or path.name.startswith("aios.db.conflict-")
         )
-    configured_state = os.getenv("AIOS_STATE_DIR")
-    if configured_state:
-        candidates.append(Path(configured_state).expanduser() / "aios.db")
-    configured_home = os.getenv("AIOS_HOME")
-    if configured_home:
-        candidates.append(Path(configured_home).expanduser() / "state" / "aios.db")
+    if not isolated_data_root:
+        configured_state = os.getenv("AIOS_STATE_DIR")
+        if configured_state:
+            candidates.append(Path(configured_state).expanduser() / "aios.db")
+        configured_home = os.getenv("AIOS_HOME")
+        if configured_home:
+            candidates.append(Path(configured_home).expanduser() / "state" / "aios.db")
     return list(dict.fromkeys(path.resolve() for path in candidates))
+
+
+def _legacy_chat_session_candidates() -> list[Path]:
+    candidates = [Path(SESSION_DIR)]
+    if not is_production() and not os.getenv("AIOS_DATA_DIR"):
+        candidates.extend((_LEGACY_ROOT_SESSION_DIR, _LEGACY_DEV_SESSION_DIR))
+    return list(
+        dict.fromkeys(candidate.expanduser().resolve() for candidate in candidates)
+    )
 
 
 def _sanitize_path_segment(value: str, fallback: str) -> str:
@@ -969,8 +982,9 @@ def migrate_legacy_chat_database(
     """Import chats from a legacy or archived SQLite database exactly once.
 
     The canonical database now lives at ``state/aios.db`` beneath the data
-    root. Existing destination chats win, and the source database remains
-    read-only and untouched.
+    root. Copy only chats that do not already exist there, including their
+    child rows. Existing destination chat IDs always win regardless of
+    timestamps, and the source database remains read-only and untouched.
     """
     initialize_app_db(db_path)
     source_path = Path(source_db).expanduser().resolve()
@@ -1121,16 +1135,9 @@ def migrate_legacy_chat_database(
                 INSERT INTO _legacy_chat_import_ids (id)
                 SELECT source_chat.id
                 FROM legacy_chat.chats AS source_chat
-                WHERE (
-                    NOT EXISTS (
-                        SELECT 1 FROM main.chats AS destination_chat
-                        WHERE destination_chat.id = source_chat.id
-                    )
-                    OR source_chat.updated_at > (
-                        SELECT destination_chat.updated_at
-                        FROM main.chats AS destination_chat
-                        WHERE destination_chat.id = source_chat.id
-                    )
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM main.chats AS destination_chat
+                    WHERE destination_chat.id = source_chat.id
                 )
                 AND NOT EXISTS (
                     SELECT 1
@@ -1199,29 +1206,11 @@ def migrate_legacy_chat_database(
 
             conn.execute(
                 """
-                DELETE FROM main.conversation_threads
-                WHERE chat_id IN (SELECT id FROM _legacy_chat_import_ids)
-                """
-            )
-            conn.execute(
-                """
-                DELETE FROM main.chat_messages
-                WHERE chat_id IN (SELECT id FROM _legacy_chat_import_ids)
-                """
-            )
-            conn.execute(
-                """
                 INSERT INTO main.chats (id, title, status, created_at, updated_at)
                 SELECT source.id, source.title, source.status,
                        source.created_at, source.updated_at
                 FROM legacy_chat.chats AS source
                 JOIN _legacy_chat_import_ids AS selected ON selected.id = source.id
-                WHERE true
-                ON CONFLICT(id) DO UPDATE SET
-                    title = excluded.title,
-                    status = excluded.status,
-                    created_at = excluded.created_at,
-                    updated_at = excluded.updated_at
                 """
             )
             conn.execute(
@@ -1403,12 +1392,7 @@ def initialize_chat_storage() -> list[ChatImportReport]:
             return []
 
         initialize_app_db(DB_PATH)
-        sources = [Path(SESSION_DIR)]
-        if not is_production():
-            sources.extend((_LEGACY_ROOT_SESSION_DIR, _LEGACY_DEV_SESSION_DIR))
-        sources = list(
-            dict.fromkeys(source.expanduser().resolve() for source in sources)
-        )
+        sources = _legacy_chat_session_candidates()
 
         reports: list[ChatImportReport] = []
         target_db = Path(DB_PATH).expanduser().resolve()
