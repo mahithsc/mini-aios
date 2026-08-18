@@ -15,10 +15,10 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from ..context import (
-    get_current_chat_files_dir,
-    resolve_chat_files_path,
+    get_current_chat_scratch_dir,
+    resolve_agent_path,
 )
-from ...workspace import get_workspace_dir
+from ...workspace import get_data_dir
 from ..tools.path_security import validate_within_dir
 from .protocol import PiRPCClient, PiRPCError, normalize_pi_event
 
@@ -221,10 +221,10 @@ def build_pi_command(
 
 def _allowed_roots() -> list[Path]:
     roots: list[Path] = []
-    chat_root = get_current_chat_files_dir()
+    chat_root = get_current_chat_scratch_dir()
     if chat_root is not None:
         roots.append(chat_root)
-    roots.append(get_workspace_dir())
+    roots.append(get_data_dir())
     configured = os.getenv("AIOS_PI_ALLOWED_ROOTS", "")
     for raw_root in configured.split(os.pathsep):
         if raw_root.strip():
@@ -244,7 +244,7 @@ def resolve_pi_workdir(path: str) -> Path:
     """Resolve a workdir and reject traversal/symlink escapes from allowed roots."""
     if not isinstance(path, str) or not path.strip():
         raise ValueError("path must be a non-empty string")
-    candidate = resolve_chat_files_path(path.strip())
+    candidate = resolve_agent_path(path.strip())
     if not candidate.exists():
         raise ValueError(f"path does not exist: {candidate}")
     if not candidate.is_dir():

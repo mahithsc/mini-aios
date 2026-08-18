@@ -111,7 +111,7 @@ _BASE_TOOLS_BLOCK = """
 
 _APP_TOOLS_BLOCK = """
 "app_create": (
-    "Reserve a cloud app identity and create its durable workspace/apps/<app-id> "
+    "Reserve a cloud app identity and create its durable projects/<app-id> "
     "source directory. Returns the app_id and absolute workspace_path to give Pi.",
     {"name": "string (human-readable app name)"},
     app_create,
@@ -220,9 +220,10 @@ def build_agent_prompt(
     *,
     include_subagent_tool: bool,
     default_cron_timezone: str,
-    workspace_dir: str,
+    data_dir: str,
     current_chat_id: str | None = None,
-    current_chat_files_dir: str | None = None,
+    current_chat_scratch_dir: str | None = None,
+    current_chat_uploads_dir: str | None = None,
     current_chat_artifacts_dir: str | None = None,
     current_chat_artifact_url_template: str | None = None,
     include_memory_tools: bool = True,
@@ -235,7 +236,7 @@ def build_agent_prompt(
     utc_now = datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M:%S %Z")
     if include_subagent_tool:
         app_workspace_guidance = (
-            f"Durable application source belongs in `{workspace_dir}/apps/<app-id>`, "
+            f"Durable application source belongs in `{data_dir}/projects/<app-id>`, "
             "never in a chat session directory. Use `app_create` for a new app and "
             "give Pi the returned absolute `workspace_path`. For an existing app, "
             "use `apps_list` or `app_workspace` and continue from its canonical "
@@ -274,7 +275,7 @@ def build_agent_prompt(
             Do not start chaining tool calls with no explanation unless the user explicitly asks for silent execution.
             Prefer inspect-first behavior. For non-trivial work, gather a small amount of context before committing to a plan.
             Ask follow-up questions when the task is ambiguous, risky, or long-horizon enough that clarification will materially improve the result.
-            Before creating a new project or folder, inspect the workspace for existing relevant work and extend it when possible instead of creating a duplicate.
+            Before creating a new project or folder, inspect the current scratch or project scope for existing relevant work and extend it when possible instead of creating a duplicate.
             """,
         ),
         _section(
@@ -292,10 +293,10 @@ def build_agent_prompt(
             """,
         ),
         _section(
-            "workspace",
+            "storage",
             f"""
-            All work for the user must happen inside the workspace.
-            Workspace path: {workspace_dir}
+            All persistent AIOS data lives inside the data root.
+            Data root: {data_dir}
             {app_workspace_guidance}
             For non-app projects, create a `WORKSPACE.md` file and keep it updated with project-specific documentation.
             For longer-horizon work, it is encouraged to keep a `TICKETS.md` task board so progress and decisions remain visible.
@@ -322,7 +323,7 @@ def build_agent_prompt(
             """
             When the user asks to show something in the canvas, display something in the canvas, or put files, images, or videos in the canvas, call `show_canvas` instead of only describing the result in plain text.
             Prefer `show_canvas` whenever the user explicitly mentions the canvas.
-            For generated HTML previews, use `show_canvas(kind="html", ...)` with a served URL and the workspace path to the generated `index.html`.
+            For generated HTML previews, use `show_canvas(kind="html", ...)` with a served URL and the absolute artifact path to the generated `index.html`.
             """,
         ),
         _section(
@@ -365,7 +366,7 @@ def build_agent_prompt(
     if memory_context:
         sections.append(memory_context)
 
-    if current_chat_id and current_chat_files_dir and current_chat_artifacts_dir:
+    if current_chat_id and current_chat_scratch_dir and current_chat_artifacts_dir:
         artifact_url_line = (
             f"Served artifact URL template: {current_chat_artifact_url_template}"
             if current_chat_artifact_url_template
@@ -376,11 +377,13 @@ def build_agent_prompt(
                 "current_chat",
                 f"""
                 Current chat id: {current_chat_id}
-                Default chat files directory: {current_chat_files_dir}
-                Default chat artifacts directory: {current_chat_artifacts_dir}
+                Chat scratch directory: {current_chat_scratch_dir}
+                Chat uploads directory: {current_chat_uploads_dir or "unavailable"}
+                Chat artifacts directory: {current_chat_artifacts_dir}
                 {artifact_url_line}
-                Relative paths for file tools, search tools, shell commands, and Pi default to the chat files directory.
-                Use explicit workspace-relative paths like `session/...` or `runs/...` only when you intentionally want to work outside the chat files directory.
+                Ordinary relative paths for file tools, search tools, shell commands, and Pi default to chat scratch.
+                Use `scratch:/...` when you want to state the scratch scope explicitly.
+                Use `data:/projects/...`, `data:/uploads/...`, or another `data:/...` path when you intentionally need the persistent data root. Canonical top-level paths such as `projects/...`, `sessions/...`, `uploads/...`, and `artifacts/...` are also accepted for compatibility.
                 """,
             )
         )

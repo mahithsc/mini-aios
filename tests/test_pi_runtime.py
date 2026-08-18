@@ -678,9 +678,9 @@ def test_workdir_rejects_symlink_escape(tmp_path, monkeypatch) -> None:
     outside.mkdir()
     link = allowed / "escape"
     link.symlink_to(outside, target_is_directory=True)
-    monkeypatch.setattr(pj, "resolve_chat_files_path", lambda _path: link)
-    monkeypatch.setattr(pj, "get_current_chat_files_dir", lambda: allowed)
-    monkeypatch.setattr(pj, "get_workspace_dir", lambda: allowed)
+    monkeypatch.setattr(pj, "resolve_agent_path", lambda _path: link)
+    monkeypatch.setattr(pj, "get_current_chat_scratch_dir", lambda: allowed)
+    monkeypatch.setattr(pj, "get_data_dir", lambda: allowed)
     monkeypatch.delenv("AIOS_PI_ALLOWED_ROOTS", raising=False)
     with pytest.raises(ValueError, match="escapes allowed Pi roots"):
         resolve_pi_workdir("escape")

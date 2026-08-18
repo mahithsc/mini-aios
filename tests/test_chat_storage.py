@@ -11,14 +11,18 @@ from server.types.chat import AssistantMessage, UserMessage
 
 @pytest.fixture
 def isolated_chat_storage(tmp_path, monkeypatch):
-    workspace_dir = tmp_path / "active-workspace"
-    session_dir = workspace_dir / "session"
+    workspace_dir = tmp_path / "data"
+    session_dir = workspace_dir / "sessions"
+    uploads_dir = workspace_dir / "uploads"
+    artifacts_dir = workspace_dir / "artifacts"
     session_dir.mkdir(parents=True)
     (session_dir / "session_manifest.json").write_text("[]", encoding="utf-8")
     db_path = workspace_dir / "aios.db"
 
     monkeypatch.setattr(sessions, "DB_PATH", str(db_path))
     monkeypatch.setattr(sessions, "SESSION_DIR", session_dir)
+    monkeypatch.setattr(sessions, "UPLOADS_DIR", uploads_dir)
+    monkeypatch.setattr(sessions, "ARTIFACTS_DIR", artifacts_dir)
     monkeypatch.setattr(
         sessions,
         "SESSION_MANIFEST_PATH",
@@ -41,12 +45,125 @@ def isolated_chat_storage(tmp_path, monkeypatch):
     )
     monkeypatch.delenv("AIOS_STATE_DIR", raising=False)
     monkeypatch.delenv("AIOS_HOME", raising=False)
-    monkeypatch.setattr(sessions, "get_workspace_dir", lambda: workspace_dir)
+    monkeypatch.setattr(sessions, "get_data_dir", lambda: workspace_dir)
     sessions._CHAT_STORAGE_READY.clear()
 
     yield workspace_dir, db_path
 
     sessions._CHAT_STORAGE_READY.clear()
+
+
+def test_chat_storage_uses_separate_scratch_upload_and_artifact_roots(
+    isolated_chat_storage,
+):
+    data_dir, _ = isolated_chat_storage
+
+    sessions.create_chat("chat/unsafe")
+
+    assert sessions.get_chat_session_relative_dir("chat/unsafe").as_posix() == (
+        "sessions/chat-unsafe"
+    )
+    assert sessions.get_chat_scratch_relative_dir("chat/unsafe").as_posix() == (
+        "sessions/chat-unsafe/scratch"
+    )
+    assert sessions.get_chat_uploads_relative_dir("chat/unsafe").as_posix() == (
+        "uploads/chat-unsafe"
+    )
+    assert sessions.get_chat_artifacts_relative_dir("chat/unsafe").as_posix() == (
+        "artifacts/chat-unsafe"
+    )
+    assert (data_dir / "sessions/chat-unsafe/scratch").is_dir()
+    assert (data_dir / "uploads/chat-unsafe").is_dir()
+    assert (data_dir / "artifacts/chat-unsafe").is_dir()
+
+
+def test_new_and_existing_attachment_rows_are_canonicalized(
+    isolated_chat_storage,
+):
+    _, db_path = isolated_chat_storage
+    assert sessions._canonical_attachment_path(
+        "chat-1",
+        "workspace/session/chat-1/files/derived.txt",
+    ) == "sessions/chat-1/scratch/derived.txt"
+    sessions.create_chat("chat-1")
+    sessions.append_user_message(
+        "chat-1",
+        UserMessage(
+            id="user-legacy-path",
+            content="See file",
+            status="complete",
+            createdAt=1000,
+            updatedAt=1000,
+            attachments=[
+                {
+                    "id": "attachment-legacy-path",
+                    "kind": "file",
+                    "name": "one.txt",
+                    "filePath": "data:/uploads/chat-1/one.txt",
+                    "mimeType": "text/plain",
+                    "sizeBytes": 3,
+                    "uploadedAt": 900,
+                }
+            ],
+        ),
+    )
+
+    with get_db_connection(str(db_path)) as conn:
+        stored = conn.execute(
+            "SELECT file_path FROM message_attachments WHERE id = ?",
+            ("attachment-legacy-path",),
+        ).fetchone()[0]
+        assert stored == "uploads/chat-1/one.txt"
+        conn.execute(
+            "UPDATE message_attachments SET file_path = ? WHERE id = ?",
+            (
+                "workspace/session/chat-1/uploads/two.txt",
+                "attachment-legacy-path",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO attachment_representations
+                (id, attachment_id, position, kind, status, file_path,
+                 metadata_json, created_at, updated_at)
+            VALUES (?, ?, 0, 'preview', 'ready', ?, '{}', 1000, 1000)
+            """,
+            (
+                "representation-legacy-path",
+                "attachment-legacy-path",
+                "session/chat-1/artifacts/preview/index.html",
+            ),
+        )
+
+    assert sessions._canonicalize_stored_attachment_paths(str(db_path)) == 2
+    assert sessions._canonicalize_stored_attachment_paths(str(db_path)) == 0
+    assert sessions.load_chat_session("chat-1")[0].attachments[0].filePath == (
+        "uploads/chat-1/two.txt"
+    )
+    with get_db_connection(str(db_path)) as conn:
+        assert conn.execute(
+            "SELECT file_path FROM attachment_representations WHERE id = ?",
+            ("representation-legacy-path",),
+        ).fetchone()[0] == "artifacts/chat-1/preview/index.html"
+
+
+def test_legacy_database_discovery_includes_core_migration_archive(
+    isolated_chat_storage,
+):
+    data_dir, _ = isolated_chat_storage
+    archive_dir = data_dir / "legacy" / "storage-layout-v1" / "state"
+    archive_dir.mkdir(parents=True)
+    archived_db = archive_dir / "aios.db"
+    conflict_db = archive_dir / "aios.db.conflict-1"
+    archived_db.touch()
+    conflict_db.touch()
+    (archive_dir / "aios.db-wal").touch()
+
+    candidates = sessions._legacy_sqlite_chat_db_candidates()
+
+    assert archived_db.resolve() in candidates
+    assert conflict_db.resolve() in candidates
+    assert (archive_dir / "aios.db-wal").resolve() not in candidates
 
 
 def test_json_import_is_idempotent_and_preserves_structured_events(
@@ -154,9 +271,7 @@ def test_json_import_is_idempotent_and_preserves_structured_events(
     messages = sessions.load_chat_session("chat-1")
     assert len(messages) == 2
     assert isinstance(messages[0], UserMessage)
-    assert messages[0].attachments[0].filePath == (
-        "workspace/session/chat-1/uploads/report.pdf"
-    )
+    assert messages[0].attachments[0].filePath == "uploads/chat-1/report.pdf"
     assert isinstance(messages[1], AssistantMessage)
     assert [event.type for event in messages[1].events] == [
         "stream_start",
@@ -321,9 +436,7 @@ def test_sqlite_import_is_idempotent_and_keeps_destination_authoritative(
     imported = sessions.load_chat_session("imported-chat")
     assert len(imported) == 2
     assert isinstance(imported[0], UserMessage)
-    assert imported[0].attachments[0].filePath == (
-        "session/imported-chat/uploads/report.pdf"
-    )
+    assert imported[0].attachments[0].filePath == "uploads/imported-chat/report.pdf"
     assert isinstance(imported[1], AssistantMessage)
     assert imported[1].events[0].value == "Hello back"
 
@@ -446,6 +559,6 @@ def test_legacy_upload_is_copied_into_chat_sandbox(isolated_chat_storage):
     copied_file = workspace_dir / attachment.filePath
 
     assert report.attachment_count == 1
-    assert attachment.filePath == "session/upload-chat/uploads/notes.txt"
+    assert attachment.filePath == "uploads/upload-chat/notes.txt"
     assert copied_file.read_text(encoding="utf-8") == "preserve me"
     assert source_file.read_text(encoding="utf-8") == "preserve me"

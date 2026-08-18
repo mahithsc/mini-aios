@@ -8,8 +8,9 @@ from openai.types.shared import Reasoning
 from ..memory import build_memory_prompt
 from ..sessions import (
     get_chat_artifacts_dir,
-    get_chat_files_dir,
+    get_chat_scratch_dir,
     get_chat_session_relative_dir,
+    get_chat_uploads_dir,
 )
 from ..skills import load_skills
 from ..workspace import resolve_workspace_path
@@ -102,11 +103,13 @@ def _build_prompt(
     include_subagent_tool: bool = True,
     chat_id: str | None = None,
 ):
-    current_chat_files_dir = None
+    current_chat_scratch_dir = None
+    current_chat_uploads_dir = None
     current_chat_artifacts_dir = None
     current_chat_artifact_url_template = None
     if chat_id:
-        current_chat_files_dir = str(get_chat_files_dir(chat_id))
+        current_chat_scratch_dir = str(get_chat_scratch_dir(chat_id))
+        current_chat_uploads_dir = str(get_chat_uploads_dir(chat_id))
         current_chat_artifacts_dir = str(get_chat_artifacts_dir(chat_id))
         sanitized_chat_id = get_chat_session_relative_dir(chat_id).name
         current_chat_artifact_url_template = (
@@ -117,9 +120,10 @@ def _build_prompt(
     return build_agent_prompt(
         include_subagent_tool=include_subagent_tool,
         default_cron_timezone=DEFAULT_CRON_TIMEZONE,
-        workspace_dir=str(resolve_workspace_path(".")),
+        data_dir=str(resolve_workspace_path(".")),
         current_chat_id=chat_id,
-        current_chat_files_dir=current_chat_files_dir,
+        current_chat_scratch_dir=current_chat_scratch_dir,
+        current_chat_uploads_dir=current_chat_uploads_dir,
         current_chat_artifacts_dir=current_chat_artifacts_dir,
         current_chat_artifact_url_template=current_chat_artifact_url_template,
         include_memory_tools=include_subagent_tool,

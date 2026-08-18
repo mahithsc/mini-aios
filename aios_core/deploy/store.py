@@ -15,9 +15,9 @@ from .models import Project, Spec
 
 
 def _default_store_path() -> Path:
-    from ..workspace import get_workspace_dir
+    from ..workspace import get_deployments_dir
 
-    return get_workspace_dir() / "deploy" / "projects.json"
+    return get_deployments_dir() / "projects.json"
 
 
 def _to_dict(p: Project) -> dict:

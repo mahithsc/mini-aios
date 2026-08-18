@@ -34,7 +34,7 @@ _MAX_ATTACHMENT_TEXT_CHARS = 20_000
 _MAX_MESSAGE_CONTENT_CHARS = 40_000
 _MAX_HISTORY_CONTENT_CHARS = 120_000
 # Leave headroom under the Responses API's combined request limit after JSON
-# framing. Excess attachments remain available to the agent by workspace path.
+# framing. Excess attachments remain available to the agent by AIOS data path.
 _MAX_INLINE_MEDIA_CHARS = 48 * 1024 * 1024
 
 
@@ -151,7 +151,7 @@ def _format_attachment_reference(
 ) -> str:
     parts = [
         f"[Attached {label}: {attachment.name}]",
-        f"Workspace path: {attachment.filePath}",
+        f"AIOS data path: {attachment.filePath}",
         f"Absolute path: {path}",
     ]
     if guidance:
@@ -180,7 +180,7 @@ def _message_content_with_attachments(
             "\n".join(
                 [
                     f"[Attachment omitted from inline model input: {attachment.name}]",
-                    f"Workspace path: {attachment.filePath}",
+                    f"AIOS data path: {attachment.filePath}",
                     "The combined inline attachment limit was reached; "
                     "use workspace tools to inspect it.",
                 ]

@@ -8,7 +8,7 @@ def _build_prompt(*, include_memory_tools: bool) -> str:
         include_subagent_tool=False,
         include_memory_tools=include_memory_tools,
         default_cron_timezone="UTC",
-        workspace_dir="/tmp/workspace",
+        data_dir="/tmp/.mini-aios",
         memory_context=(
             "<memory_context>\n"
             "MEMORY (your personal notes) [1% — 10/2,200 chars]\n"

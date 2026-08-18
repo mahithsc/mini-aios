@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from ..context import default_chat_files_cwd, resolve_chat_files_path
+from ..context import default_agent_cwd, resolve_agent_path
 from .ansi_strip import strip_ansi
 
 _DEFAULT_SHELL = "/bin/bash"
@@ -382,9 +382,9 @@ class ProcessManager:
         shell: str | None = None,
     ) -> dict[str, object]:
         if cwd is None:
-            resolved_cwd = default_chat_files_cwd()
+            resolved_cwd = default_agent_cwd()
         else:
-            resolved_cwd = resolve_chat_files_path(cwd)
+            resolved_cwd = resolve_agent_path(cwd)
         if not resolved_cwd.exists():
             return {"error": f"path does not exist: {resolved_cwd}"}
         if not resolved_cwd.is_dir():

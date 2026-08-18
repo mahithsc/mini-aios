@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+
 from aios_core.deploy.models import Project, Spec
 from aios_core.deploy.store import ProjectStore
 
@@ -27,6 +29,16 @@ def test_project_store_roundtrip(tmp_path):
 
     store.delete("s1")
     assert store.get("s1") is None
+
+
+def test_default_store_uses_deployments_directory(tmp_path, monkeypatch):
+    deployments_dir = tmp_path / ".mini-aios" / "deployments"
+    workspace = importlib.import_module("aios_core.workspace")
+    monkeypatch.setattr(workspace, "get_deployments_dir", lambda: deployments_dir)
+
+    store = ProjectStore()
+
+    assert store.path == deployments_dir / "projects.json"
 
 
 def test_store_survives_new_instance(tmp_path):

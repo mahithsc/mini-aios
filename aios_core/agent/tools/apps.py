@@ -1,6 +1,6 @@
-"""Main-agent tools for durable app workspaces and cloud app identity.
+"""Main-agent tools for durable app projects and cloud app identity.
 
-The cloud/workspace tools route Pi to canonical source under ``workspace/apps``.
+The cloud tools route Pi to canonical source under ``projects/<app-id>``.
 The local Supervisor lifecycle wrappers remain for backward compatibility with
 apps deployed before cloud deployment became authoritative.
 """

@@ -30,22 +30,31 @@ def _infer_served_url_from_file_path(file_path: str | None) -> str | None:
     if not _is_non_empty_string(file_path):
         return None
 
-    workspace_dir = ensure_workspace_dir().resolve()
+    data_dir = ensure_workspace_dir().resolve()
     path = Path(file_path).expanduser()
 
     if not path.is_absolute():
-        path = (workspace_dir / path).resolve()
+        path = (data_dir / path).resolve()
     else:
         path = path.resolve()
 
     try:
-        relative_path = path.relative_to(workspace_dir)
+        relative_path = path.relative_to(data_dir)
     except ValueError:
         return None
 
     parts = relative_path.parts
+    if parts[:1] == ("workspace",):
+        parts = parts[1:]
 
-    if len(parts) >= 4 and parts[0] == "session" and parts[2] == "artifacts":
+    if len(parts) >= 3 and parts[0] == "artifacts":
+        chat_id = quote(parts[1], safe="")
+        artifact_relative_path = Path(*parts[2:]).as_posix()
+        return f"{DEFAULT_SERVER_BASE_URL}/session-artifacts/{chat_id}/{quote(artifact_relative_path, safe='/')}"
+
+    # Compatibility for descriptors persisted before artifacts had their own
+    # typed data-root directory.
+    if len(parts) >= 4 and parts[0] in {"session", "sessions"} and parts[2] == "artifacts":
         chat_id = quote(parts[1], safe="")
         artifact_relative_path = Path(*parts[3:]).as_posix()
         return f"{DEFAULT_SERVER_BASE_URL}/session-artifacts/{chat_id}/{quote(artifact_relative_path, safe='/')}"

@@ -16,8 +16,15 @@ from aios_core.app_workspaces import (
 APP_ID = "app_cloud123"
 
 
-def _legacy_app(session_dir: Path, chat_id: str, relative: str, files: int) -> Path:
-    root = session_dir / chat_id / "files" / relative
+def _legacy_app(
+    session_dir: Path,
+    chat_id: str,
+    relative: str,
+    files: int,
+    *,
+    scratch_name: str = "files",
+) -> Path:
+    root = session_dir / chat_id / scratch_name / relative
     root.mkdir(parents=True)
     (root / "aios.deploy.yaml").write_text(
         f"version: 1\napp_id: {APP_ID}\nfrontend:\n  source: frontend\n",
@@ -52,6 +59,21 @@ def test_create_app_workspace_adds_metadata_and_readmes(tmp_path: Path) -> None:
     metadata = json.loads((root / ".aios-app.json").read_text(encoding="utf-8"))
     assert metadata["app_id"] == APP_ID
     assert metadata["origin_chat_id"] == "chat-1"
+
+
+def test_default_app_root_is_the_projects_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    projects_dir = tmp_path / ".mini-aios" / "projects"
+    monkeypatch.setattr(
+        "aios_core.app_workspaces.get_projects_dir",
+        lambda: projects_dir,
+    )
+
+    result = create_app_workspace(APP_ID, "Example App")
+
+    assert result["workspace_path"] == str((projects_dir / APP_ID).resolve())
 
 
 def test_create_app_workspace_preserves_project_readme(tmp_path: Path) -> None:
@@ -208,6 +230,31 @@ def test_resolve_app_workspace_adopts_richest_legacy_source(tmp_path: Path) -> N
     assert (adopted / "frontend/source_4.js").is_file()
     metadata = json.loads((adopted / ".aios-app.json").read_text(encoding="utf-8"))
     assert metadata["origin_chat_id"] == "chat-original"
+
+
+def test_resolve_app_workspace_adopts_source_from_canonical_chat_scratch(
+    tmp_path: Path,
+) -> None:
+    sessions = tmp_path / "sessions"
+    source = _legacy_app(
+        sessions,
+        "chat-original",
+        "real-project",
+        files=2,
+        scratch_name="scratch",
+    )
+
+    candidates = find_legacy_app_workspaces(APP_ID, session_dir=sessions)
+    result = resolve_app_workspace(
+        APP_ID,
+        name="Example App",
+        apps_dir=tmp_path / "projects",
+        session_dir=sessions,
+    )
+
+    assert candidates == [source]
+    assert result["migrated_from"] == str(source.resolve())
+    assert (Path(result["workspace_path"]) / "frontend/source_1.js").is_file()
 
 
 def test_resolve_app_workspace_does_not_fabricate_missing_source(

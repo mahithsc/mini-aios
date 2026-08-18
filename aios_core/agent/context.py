@@ -11,7 +11,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
-from ..sessions import get_chat_artifacts_dir, get_chat_files_dir
+from ..sessions import get_chat_artifacts_dir, get_chat_scratch_dir
 from ..workspace import ensure_workspace_dir, resolve_workspace_path
 from .tools.subagent_events import SubagentStreamEvent
 
@@ -20,33 +20,44 @@ EventSink = Callable[[SubagentStreamEvent], Awaitable[None] | None]
 _CURRENT_CHAT_ID: ContextVar[str | None] = ContextVar(
     "aios_current_chat_id", default=None
 )
-_CURRENT_CHAT_FILES_DIR: ContextVar[str | None] = ContextVar(
-    "aios_current_chat_files_dir", default=None
+_CURRENT_CHAT_SCRATCH_DIR: ContextVar[str | None] = ContextVar(
+    "aios_current_chat_scratch_dir", default=None
 )
 _CURRENT_CHAT_ARTIFACTS_DIR: ContextVar[str | None] = ContextVar(
     "aios_current_chat_artifacts_dir", default=None
 )
-_WORKSPACE_ROOT_SENTINELS = {
+_DATA_ROOT_SENTINELS = {
+    "artifacts",
     "apps",
     "cron_logs",
+    "deploy",
+    "deployments",
+    "memories",
+    "projects",
     "runs",
     "session",
+    "sessions",
     "skills",
+    "state",
+    "uploads",
+    "workspace",
 }
+_DATA_SCOPE = "data:"
+_SCRATCH_SCOPE = "scratch:"
 
 
 def push_chat_runtime_context(chat_id: str) -> tuple[object, object, object]:
     return (
         _CURRENT_CHAT_ID.set(chat_id),
-        _CURRENT_CHAT_FILES_DIR.set(str(get_chat_files_dir(chat_id))),
+        _CURRENT_CHAT_SCRATCH_DIR.set(str(get_chat_scratch_dir(chat_id))),
         _CURRENT_CHAT_ARTIFACTS_DIR.set(str(get_chat_artifacts_dir(chat_id))),
     )
 
 
 def pop_chat_runtime_context(tokens: tuple[object, object, object]) -> None:
-    chat_token, files_token, artifacts_token = tokens
+    chat_token, scratch_token, artifacts_token = tokens
     _CURRENT_CHAT_ID.reset(chat_token)
-    _CURRENT_CHAT_FILES_DIR.reset(files_token)
+    _CURRENT_CHAT_SCRATCH_DIR.reset(scratch_token)
     _CURRENT_CHAT_ARTIFACTS_DIR.reset(artifacts_token)
 
 
@@ -54,9 +65,15 @@ def get_current_chat_id() -> str | None:
     return _CURRENT_CHAT_ID.get()
 
 
-def get_current_chat_files_dir() -> Path | None:
-    value = _CURRENT_CHAT_FILES_DIR.get()
+def get_current_chat_scratch_dir() -> Path | None:
+    value = _CURRENT_CHAT_SCRATCH_DIR.get()
     return Path(value) if value else None
+
+
+def get_current_chat_files_dir() -> Path | None:
+    """Compatibility alias for callers written before scratch was named."""
+
+    return get_current_chat_scratch_dir()
 
 
 def get_current_chat_artifacts_dir() -> Path | None:
@@ -64,24 +81,86 @@ def get_current_chat_artifacts_dir() -> Path | None:
     return Path(value) if value else None
 
 
-def _is_workspace_root_relative(path: Path) -> bool:
-    return bool(path.parts) and path.parts[0] in _WORKSPACE_ROOT_SENTINELS
+def _is_data_root_relative(path: Path) -> bool:
+    return bool(path.parts) and path.parts[0] in _DATA_ROOT_SENTINELS
 
 
-def resolve_chat_files_path(path: str | Path) -> Path:
-    raw_path = Path(path).expanduser()
+def _scoped_suffix(raw_value: str, scope: str) -> Path | None:
+    normalized = raw_value.replace("\\", "/")
+    if normalized == scope:
+        return Path(".")
+    prefix = f"{scope}/"
+    if normalized.startswith(prefix):
+        suffix = Path(normalized[len(prefix) :])
+        if suffix.is_absolute() or ".." in suffix.parts:
+            raise ValueError(f"{scope} paths cannot escape their storage scope")
+        return suffix
+    return None
+
+
+def _canonical_data_relative_path(path: Path) -> Path:
+    """Translate pre-v1 workspace/session paths to the canonical data layout."""
+
+    parts = path.parts
+    if parts[:1] == ("workspace",):
+        parts = parts[1:]
+    if len(parts) >= 3 and parts[0] in {"session", "sessions"}:
+        chat_id, category = parts[1], parts[2]
+        suffix = parts[3:]
+        if category == "files":
+            return Path("sessions", chat_id, "scratch", *suffix)
+        if category == "uploads":
+            return Path("uploads", chat_id, *suffix)
+        if category == "artifacts":
+            return Path("artifacts", chat_id, *suffix)
+    return Path(*parts) if parts else Path(".")
+
+
+def resolve_agent_path(path: str | Path) -> Path:
+    """Resolve an agent path against an explicit or implicit storage scope.
+
+    ``scratch:/...`` is always chat-scratch-relative and ``data:/...`` is
+    always data-root-relative. Ordinary relative paths default to chat scratch;
+    canonical top-level data paths remain accepted for compatibility.
+    """
+
+    raw_value = str(path)
+    raw_path = Path(raw_value).expanduser()
     if raw_path.is_absolute():
         return raw_path
 
-    current_chat_files_dir = get_current_chat_files_dir()
-    if current_chat_files_dir is not None and not _is_workspace_root_relative(raw_path):
-        return current_chat_files_dir / raw_path
+    data_suffix = _scoped_suffix(raw_value, _DATA_SCOPE)
+    if data_suffix is not None:
+        return resolve_workspace_path(_canonical_data_relative_path(data_suffix))
 
-    return resolve_workspace_path(raw_path)
+    scratch_suffix = _scoped_suffix(raw_value, _SCRATCH_SCOPE)
+    if scratch_suffix is not None:
+        current_chat_scratch_dir = get_current_chat_scratch_dir()
+        if current_chat_scratch_dir is None:
+            raise ValueError("scratch: paths require an active chat")
+        return current_chat_scratch_dir / scratch_suffix
+
+    current_chat_scratch_dir = get_current_chat_scratch_dir()
+    if current_chat_scratch_dir is not None and not _is_data_root_relative(raw_path):
+        return current_chat_scratch_dir / raw_path
+
+    return resolve_workspace_path(_canonical_data_relative_path(raw_path))
+
+
+def resolve_chat_files_path(path: str | Path) -> Path:
+    """Compatibility alias for the former chat-files path resolver."""
+
+    return resolve_agent_path(path)
+
+
+def default_agent_cwd() -> Path:
+    return get_current_chat_scratch_dir() or ensure_workspace_dir()
 
 
 def default_chat_files_cwd() -> Path:
-    return get_current_chat_files_dir() or ensure_workspace_dir()
+    """Compatibility alias for the former chat-files working directory."""
+
+    return default_agent_cwd()
 
 
 class AgentRuntimeContext:
@@ -184,11 +263,14 @@ class FunctionCallContext:
 __all__ = [
     "AgentRuntimeContext",
     "FunctionCallContext",
+    "default_agent_cwd",
     "default_chat_files_cwd",
     "get_current_chat_artifacts_dir",
     "get_current_chat_files_dir",
     "get_current_chat_id",
+    "get_current_chat_scratch_dir",
     "pop_chat_runtime_context",
     "push_chat_runtime_context",
+    "resolve_agent_path",
     "resolve_chat_files_path",
 ]

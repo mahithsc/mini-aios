@@ -83,7 +83,7 @@ def test_prompt_documents_only_the_bash_execution_tool() -> None:
         include_subagent_tool=False,
         include_memory_tools=False,
         default_cron_timezone="UTC",
-        workspace_dir="/tmp/workspace",
+        data_dir="/tmp/.mini-aios",
     )
 
     assert '"bash": (' in prompt

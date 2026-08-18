@@ -26,12 +26,20 @@ from server.types.chat import (
 )
 
 from .db import DB_PATH, get_db_connection, initialize_app_db
-from .workspace import get_workspace_dir, is_production, resolve_workspace_path
+from .workspace import (
+    get_artifacts_dir,
+    get_data_dir,
+    get_sessions_dir,
+    get_uploads_dir,
+    is_production,
+)
 
 CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
 LLM_EVENT_ADAPTER = TypeAdapter(LLMEvent)
 VALID_CHAT_STATUSES = {"idle", "streaming", "error", "cancelled"}
-SESSION_DIR = resolve_workspace_path("session")
+SESSION_DIR = get_sessions_dir()
+UPLOADS_DIR = get_uploads_dir()
+ARTIFACTS_DIR = get_artifacts_dir()
 SESSION_MANIFEST_PATH = SESSION_DIR / "session_manifest.json"
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _LEGACY_ROOT_SESSION_DIR = _PROJECT_ROOT / "session"
@@ -48,6 +56,15 @@ log = logging.getLogger(__name__)
 
 def _legacy_sqlite_chat_db_candidates() -> list[Path]:
     candidates = [_LEGACY_SQLITE_CHAT_DB]
+    archived_state_dir = (
+        get_data_dir() / "legacy" / "storage-layout-v1" / "state"
+    )
+    if archived_state_dir.is_dir():
+        candidates.extend(
+            path
+            for path in archived_state_dir.glob("aios.db*")
+            if path.name == "aios.db" or path.name.startswith("aios.db.conflict-")
+        )
     configured_state = os.getenv("AIOS_STATE_DIR")
     if configured_state:
         candidates.append(Path(configured_state).expanduser() / "aios.db")
@@ -120,19 +137,25 @@ def save_manifest(manifest: list[dict[str, Any]]) -> None:
 
 
 def get_sandbox_relative_dir(owner_id: str) -> Path:
-    return Path("session") / _sanitize_path_segment(owner_id, "chat")
+    """Return the data-root-relative directory for one conversation.
+
+    ``sandbox`` is retained in the public helper name for compatibility. New
+    code should prefer the equivalent ``get_chat_*`` helpers below.
+    """
+
+    return Path("sessions") / _sanitize_path_segment(owner_id, "chat")
 
 
 def get_sandbox_uploads_relative_dir(owner_id: str) -> Path:
-    return get_sandbox_relative_dir(owner_id) / "uploads"
+    return Path("uploads") / _sanitize_path_segment(owner_id, "chat")
 
 
 def get_sandbox_files_relative_dir(owner_id: str) -> Path:
-    return get_sandbox_relative_dir(owner_id) / "files"
+    return get_sandbox_relative_dir(owner_id) / "scratch"
 
 
 def get_sandbox_artifacts_relative_dir(owner_id: str) -> Path:
-    return get_sandbox_relative_dir(owner_id) / "artifacts"
+    return Path("artifacts") / _sanitize_path_segment(owner_id, "chat")
 
 
 def get_sandbox_artifact_relative_dir(owner_id: str, artifact_id: str) -> Path:
@@ -159,6 +182,10 @@ def get_chat_files_relative_dir(chat_id: str) -> Path:
     return get_sandbox_files_relative_dir(chat_id)
 
 
+def get_chat_scratch_relative_dir(chat_id: str) -> Path:
+    return get_sandbox_files_relative_dir(chat_id)
+
+
 def get_chat_artifacts_relative_dir(chat_id: str) -> Path:
     return get_sandbox_artifacts_relative_dir(chat_id)
 
@@ -180,15 +207,15 @@ def _sandbox_transcript_file(owner_id: str) -> Path:
 
 
 def _sandbox_uploads_dir(owner_id: str) -> Path:
-    return _sandbox_dir(owner_id) / "uploads"
+    return Path(UPLOADS_DIR) / _sanitize_path_segment(owner_id, "chat")
 
 
 def _sandbox_files_dir(owner_id: str) -> Path:
-    return _sandbox_dir(owner_id) / "files"
+    return _sandbox_dir(owner_id) / "scratch"
 
 
 def _sandbox_artifacts_dir(owner_id: str) -> Path:
-    return _sandbox_dir(owner_id) / "artifacts"
+    return Path(ARTIFACTS_DIR) / _sanitize_path_segment(owner_id, "chat")
 
 
 def get_sandbox_dir(owner_id: str) -> Path:
@@ -197,6 +224,10 @@ def get_sandbox_dir(owner_id: str) -> Path:
 
 def get_sandbox_transcript_path(owner_id: str) -> Path:
     return _sandbox_transcript_file(owner_id)
+
+
+def get_sandbox_uploads_dir(owner_id: str) -> Path:
+    return _sandbox_uploads_dir(owner_id)
 
 
 def get_sandbox_files_dir(owner_id: str) -> Path:
@@ -217,6 +248,14 @@ def get_sandbox_artifact_entrypoint_path(owner_id: str, artifact_id: str) -> Pat
 
 def get_chat_files_dir(chat_id: str) -> Path:
     return get_sandbox_files_dir(chat_id)
+
+
+def get_chat_scratch_dir(chat_id: str) -> Path:
+    return get_sandbox_files_dir(chat_id)
+
+
+def get_chat_uploads_dir(chat_id: str) -> Path:
+    return get_sandbox_uploads_dir(chat_id)
 
 
 def get_chat_artifacts_dir(chat_id: str) -> Path:
@@ -259,7 +298,10 @@ def _get_session_entry(chat_id: str) -> dict[str, Any] | None:
 def _session_file_from_entry(chat_id: str, session_entry: dict[str, Any]) -> Path:
     file_name = session_entry.get("file")
     if isinstance(file_name, str) and file_name:
-        return Path(SESSION_DIR) / file_name
+        relative_path = Path(file_name)
+        if relative_path.parts[:1] in (("session",), ("sessions",)):
+            relative_path = Path(*relative_path.parts[1:])
+        return Path(SESSION_DIR) / relative_path
     return _sandbox_transcript_file(chat_id)
 
 
@@ -272,10 +314,63 @@ def _update_manifest_entry(chat_id: str, updated_entry: dict[str, Any]) -> None:
             return
 
 
+def _canonical_attachment_path(chat_id: str, file_path: str) -> str:
+    """Normalize a stored chat-owned path to the typed data-root layout.
+
+    Older releases stored uploads beside session scratch files and sometimes
+    stored derived files or artifacts there too. Absolute paths are left
+    untouched because they may point at explicitly imported external data.
+    """
+
+    normalized_path = file_path.replace("\\", "/")
+    if normalized_path.startswith("scratch:/"):
+        scratch_suffix = Path(normalized_path[len("scratch:/") :])
+        if scratch_suffix.is_absolute() or ".." in scratch_suffix.parts:
+            return file_path
+        return (
+            Path("sessions", _sanitize_path_segment(chat_id, "chat"), "scratch")
+            / scratch_suffix
+        ).as_posix()
+    data_scoped = normalized_path.startswith("data:/")
+    if data_scoped:
+        normalized_path = normalized_path[len("data:/") :]
+
+    raw_path = Path(normalized_path)
+    if raw_path.is_absolute():
+        return file_path if data_scoped else str(raw_path)
+
+    chat_segment = _sanitize_path_segment(chat_id, "chat")
+    parts = raw_path.parts
+    if parts[:1] == ("workspace",):
+        parts = parts[1:]
+    if ".." in parts:
+        return raw_path.as_posix()
+
+    if (
+        len(parts) >= 3
+        and parts[0] in {"session", "sessions"}
+        and parts[1] == chat_segment
+    ):
+        category = parts[2]
+        suffix = parts[3:]
+        if category == "uploads" and suffix:
+            return (Path("uploads", chat_segment, *suffix)).as_posix()
+        if category == "artifacts" and suffix:
+            return (Path("artifacts", chat_segment, *suffix)).as_posix()
+        if category in {"files", "scratch"} and suffix:
+            return (Path("sessions", chat_segment, "scratch", *suffix)).as_posix()
+
+    if (
+        len(parts) >= 3
+        and parts[0] in {"uploads", "artifacts"}
+        and parts[1] == chat_segment
+    ):
+        return Path(*parts).as_posix()
+    return raw_path.as_posix()
+
+
 def _migrate_attachment_paths(chat_id: str, messages: list[Any]) -> bool:
     changed = False
-    legacy_prefix = f"uploads/{_sanitize_path_segment(chat_id, 'chat')}/"
-    next_prefix = f"{get_sandbox_uploads_relative_dir(chat_id).as_posix()}/"
 
     for message in messages:
         if not isinstance(message, dict):
@@ -290,35 +385,15 @@ def _migrate_attachment_paths(chat_id: str, messages: list[Any]) -> bool:
                 continue
 
             file_path = attachment.get("filePath")
-            if isinstance(file_path, str) and file_path.startswith(legacy_prefix):
-                attachment["filePath"] = file_path.replace(legacy_prefix, next_prefix, 1)
+            if isinstance(file_path, str):
+                canonical_path = _canonical_attachment_path(chat_id, file_path)
+            else:
+                canonical_path = file_path
+            if canonical_path != file_path:
+                attachment["filePath"] = canonical_path
                 changed = True
 
     return changed
-
-
-def _migrate_legacy_upload_dir(chat_id: str) -> None:
-    legacy_upload_dir = Path.cwd() / "uploads" / _sanitize_path_segment(chat_id, "chat")
-    target_upload_dir = _sandbox_uploads_dir(chat_id)
-    if not legacy_upload_dir.exists() or legacy_upload_dir == target_upload_dir:
-        return
-
-    target_upload_dir.parent.mkdir(parents=True, exist_ok=True)
-
-    if not target_upload_dir.exists():
-        shutil.move(str(legacy_upload_dir), str(target_upload_dir))
-        return
-
-    for source in legacy_upload_dir.iterdir():
-        destination = target_upload_dir / source.name
-        if destination.exists():
-            continue
-        shutil.move(str(source), str(destination))
-
-    try:
-        legacy_upload_dir.rmdir()
-    except OSError:
-        pass
 
 
 def _load_raw_session_messages(session_path: Path) -> list[Any]:
@@ -332,7 +407,6 @@ def _migrate_session_entry(chat_id: str, session_entry: dict[str, Any], *, persi
     target_path = _sandbox_transcript_file(chat_id)
     current_path = _session_file_from_entry(chat_id, session_entry)
     _ensure_sandbox_dirs(chat_id)
-    _migrate_legacy_upload_dir(chat_id)
 
     if current_path.exists():
         raw_messages = _load_raw_session_messages(current_path)
@@ -345,7 +419,7 @@ def _migrate_session_entry(chat_id: str, session_entry: dict[str, Any], *, persi
         if current_path != target_path and current_path.exists():
             current_path.unlink(missing_ok=True)
 
-    relative_target_path = str(target_path.relative_to(Path(SESSION_DIR)))
+    relative_target_path = get_sandbox_transcript_relative_path(chat_id).as_posix()
     if session_entry.get("file") != relative_target_path:
         session_entry["file"] = relative_target_path
         if persist_manifest:
@@ -511,7 +585,7 @@ def _insert_message_rows(
                         attachment_position,
                         attachment.kind,
                         attachment.name,
-                        attachment.filePath,
+                        _canonical_attachment_path(chat_id, attachment.filePath),
                         attachment.mimeType,
                         attachment.sizeBytes,
                         attachment.uploadedAt,
@@ -560,30 +634,45 @@ def _remap_imported_attachment_paths(
         next_attachments: list[MessageAttachment] = []
         for attachment in message.attachments:
             raw_path = Path(attachment.filePath).expanduser()
-            source_path = (
-                raw_path if raw_path.is_absolute() else source_workspace / raw_path
-            ).resolve()
+            canonical_path = _canonical_attachment_path(
+                chat_id,
+                attachment.filePath,
+            )
+            canonical_relative = Path(canonical_path)
 
-            # The oldest file store used ``uploads/<chat>/...`` beside the
-            # session directory. Copy those files into the current per-chat
-            # sandbox while leaving the legacy source in place as a backup.
-            legacy_prefix = Path("uploads") / _sanitize_path_segment(chat_id, "chat")
-            try:
-                legacy_suffix = raw_path.relative_to(legacy_prefix)
-            except ValueError:
-                legacy_suffix = None
-            if legacy_suffix is not None and not raw_path.is_absolute():
-                target_relative = get_sandbox_uploads_relative_dir(chat_id) / legacy_suffix
-                target_path = (target_workspace / target_relative).resolve()
+            canonical_upload_prefix = (
+                "uploads",
+                _sanitize_path_segment(chat_id, "chat"),
+            )
+            is_chat_upload = (
+                canonical_relative.parts[:2] == canonical_upload_prefix
+                and len(canonical_relative.parts) > 2
+            )
+            if not raw_path.is_absolute() and is_chat_upload:
+                source_candidates = [
+                    (source_workspace / raw_path).resolve(),
+                    (source_workspace.parent / raw_path).resolve(),
+                ]
+                if raw_path.parts[:1] == ("workspace",):
+                    source_candidates.append(
+                        (source_workspace / Path(*raw_path.parts[1:])).resolve()
+                    )
+                source_path = next(
+                    (candidate for candidate in source_candidates if candidate.is_file()),
+                    source_candidates[0],
+                )
+                target_path = (target_workspace / canonical_relative).resolve()
                 if source_path.is_file() and not target_path.exists():
                     target_path.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source_path, target_path)
-                stored_path = target_relative.as_posix()
                 next_attachments.append(
-                    attachment.model_copy(update={"filePath": stored_path})
+                    attachment.model_copy(update={"filePath": canonical_path})
                 )
                 continue
 
+            source_path = (
+                raw_path if raw_path.is_absolute() else source_workspace / raw_path
+            ).resolve()
             try:
                 stored_path = source_path.relative_to(target_workspace).as_posix()
             except ValueError:
@@ -666,11 +755,15 @@ def _import_entries(session_dir: Path) -> list[tuple[dict[str, Any], Path]]:
         if not isinstance(chat_id, str) or not chat_id or chat_id in seen_ids:
             continue
         file_name = entry.get("file")
-        session_path = (
-            session_dir / file_name
-            if isinstance(file_name, str) and file_name
-            else session_dir / _sanitize_path_segment(chat_id, "chat") / "chat.json"
-        )
+        if isinstance(file_name, str) and file_name:
+            relative_path = Path(file_name)
+            if relative_path.parts[:1] in (("session",), ("sessions",)):
+                relative_path = Path(*relative_path.parts[1:])
+            session_path = session_dir / relative_path
+        else:
+            session_path = (
+                session_dir / _sanitize_path_segment(chat_id, "chat") / "chat.json"
+            )
         entries.append((entry, session_path))
         seen_ids.add(chat_id)
 
@@ -715,7 +808,7 @@ def migrate_legacy_chat_sessions(
     target_root = (
         Path(target_workspace).expanduser().resolve()
         if target_workspace is not None
-        else get_workspace_dir().resolve()
+        else get_data_dir().resolve()
     )
 
     with get_db_connection(db_path) as conn:
@@ -1151,12 +1244,7 @@ def migrate_legacy_chat_database(
                     (id, message_id, position, kind, name, file_path, mime_type,
                      size_bytes, content_hash, uploaded_at)
                 SELECT source.id, source.message_id, source.position, source.kind,
-                       source.name,
-                       CASE
-                           WHEN source.file_path LIKE 'workspace/session/%'
-                           THEN substr(source.file_path, 11)
-                           ELSE source.file_path
-                       END,
+                       source.name, source.file_path,
                        source.mime_type, source.size_bytes, {content_hash_expression},
                        source.uploaded_at
                 FROM legacy_chat.message_attachments AS source
@@ -1174,11 +1262,7 @@ def migrate_legacy_chat_database(
                          file_path, mime_type, metadata_json, created_at, updated_at)
                     SELECT source.id, source.attachment_id, source.position,
                            source.kind, source.status, source.text_content,
-                           CASE
-                               WHEN source.file_path LIKE 'workspace/session/%'
-                               THEN substr(source.file_path, 11)
-                               ELSE source.file_path
-                           END,
+                           source.file_path,
                            source.mime_type, source.metadata_json,
                            source.created_at, source.updated_at
                     FROM legacy_chat.attachment_representations AS source
@@ -1241,6 +1325,7 @@ def migrate_legacy_chat_database(
             except sqlite3.OperationalError:
                 log.warning("Could not detach legacy chat database %s", source_path)
 
+    _canonicalize_stored_attachment_paths(db_path)
     report = ChatImportReport(
         source_path=source_key,
         already_imported=already_imported,
@@ -1259,6 +1344,54 @@ def migrate_legacy_chat_database(
         attachment_count,
     )
     return report
+
+
+def _canonicalize_stored_attachment_paths(db_path: str = DB_PATH) -> int:
+    """Rewrite legacy relative attachment paths without touching external paths."""
+
+    updates: list[tuple[str, str]] = []
+    representation_updates: list[tuple[str, str]] = []
+    with get_db_connection(db_path) as conn:
+        for attachment_id, chat_id, file_path in conn.execute(
+            """
+            SELECT attachment.id, message.chat_id, attachment.file_path
+            FROM message_attachments AS attachment
+            JOIN chat_messages AS message ON message.id = attachment.message_id
+            """
+        ):
+            if not isinstance(file_path, str):
+                continue
+            canonical_path = _canonical_attachment_path(chat_id, file_path)
+            if canonical_path != file_path:
+                updates.append((canonical_path, attachment_id))
+
+        for representation_id, chat_id, file_path in conn.execute(
+            """
+            SELECT representation.id, message.chat_id, representation.file_path
+            FROM attachment_representations AS representation
+            JOIN message_attachments AS attachment
+              ON attachment.id = representation.attachment_id
+            JOIN chat_messages AS message ON message.id = attachment.message_id
+            WHERE representation.file_path IS NOT NULL
+            """
+        ):
+            if not isinstance(file_path, str):
+                continue
+            canonical_path = _canonical_attachment_path(chat_id, file_path)
+            if canonical_path != file_path:
+                representation_updates.append((canonical_path, representation_id))
+
+        if updates:
+            conn.executemany(
+                "UPDATE message_attachments SET file_path = ? WHERE id = ?",
+                updates,
+            )
+        if representation_updates:
+            conn.executemany(
+                "UPDATE attachment_representations SET file_path = ? WHERE id = ?",
+                representation_updates,
+            )
+    return len(updates) + len(representation_updates)
 
 
 def initialize_chat_storage() -> list[ChatImportReport]:
@@ -1292,10 +1425,11 @@ def initialize_chat_storage() -> list[ChatImportReport]:
             migrate_legacy_chat_sessions(
                 source,
                 db_path=DB_PATH,
-                target_workspace=get_workspace_dir(),
+                target_workspace=get_data_dir(),
             )
             for source in sources
         )
+        _canonicalize_stored_attachment_paths(DB_PATH)
         _CHAT_STORAGE_READY.add(db_key)
         return reports
 
@@ -1549,7 +1683,7 @@ def append_user_message(
                     attachment_position,
                     attachment.kind,
                     attachment.name,
-                    attachment.filePath,
+                    _canonical_attachment_path(chat_id, attachment.filePath),
                     attachment.mimeType,
                     attachment.sizeBytes,
                     attachment.uploadedAt,

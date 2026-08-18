@@ -12,10 +12,11 @@ def _prompt() -> str:
         include_subagent_tool=False,
         include_memory_tools=False,
         default_cron_timezone="UTC",
-        workspace_dir="/tmp/workspace",
+        data_dir="/tmp/.mini-aios",
         current_chat_id="chat-1",
-        current_chat_files_dir="/tmp/workspace/session/chat-1/files",
-        current_chat_artifacts_dir="/tmp/workspace/session/chat-1/artifacts",
+        current_chat_scratch_dir="/tmp/.mini-aios/sessions/chat-1/scratch",
+        current_chat_uploads_dir="/tmp/.mini-aios/uploads/chat-1",
+        current_chat_artifacts_dir="/tmp/.mini-aios/artifacts/chat-1",
     )
 
 
@@ -27,6 +28,17 @@ def test_prompt_exposes_one_pi_tool_and_documents_its_lifecycle() -> None:
     assert "cursor_reset=true" in prompt
     assert "status is done, error, or stopped" in prompt
     assert '"codex' not in prompt.lower()
+
+
+def test_prompt_distinguishes_scratch_data_and_project_scopes() -> None:
+    prompt = _prompt()
+
+    assert "Chat scratch directory: /tmp/.mini-aios/sessions/chat-1/scratch" in prompt
+    assert "Chat uploads directory: /tmp/.mini-aios/uploads/chat-1" in prompt
+    assert "Chat artifacts directory: /tmp/.mini-aios/artifacts/chat-1" in prompt
+    assert "Data root: /tmp/.mini-aios" in prompt
+    assert "`scratch:/...`" in prompt
+    assert "`data:/projects/...`" in prompt
 
 
 def test_agent_registers_pi_as_the_only_external_coding_agent_tool() -> None:

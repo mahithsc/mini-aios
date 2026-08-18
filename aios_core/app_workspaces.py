@@ -1,8 +1,8 @@
 """Durable local workspaces for cloud applications.
 
-Chat sessions are ephemeral conversation sandboxes.  Application source must
-outlive those sandboxes, so every cloud app has one canonical local root under
-``workspace/apps/<app-id>``.
+Chat scratch is ephemeral. Application source must outlive a conversation, so
+every cloud app has one canonical local root under ``projects/<app-id>`` in the
+AIOS data directory.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from uuid import uuid4
 
 import yaml
 
-from .workspace import resolve_workspace_path
+from .workspace import get_projects_dir, get_sessions_dir
 
 APP_METADATA_NAME = ".aios-app.json"
 APP_README_NAME = "README.md"
@@ -42,7 +42,9 @@ class AppWorkspaceError(RuntimeError):
 
 
 def get_apps_dir(apps_dir: str | Path | None = None) -> Path:
-    return Path(apps_dir) if apps_dir is not None else resolve_workspace_path("apps")
+    """Return the canonical projects root (legacy name retained for API stability)."""
+
+    return Path(apps_dir) if apps_dir is not None else get_projects_dir()
 
 
 def get_app_workspace_dir(app_id: str, *, apps_dir: str | Path | None = None) -> Path:
@@ -178,17 +180,17 @@ def find_legacy_app_workspaces(
     """Find session-scoped app roots and rank richer source trees first."""
 
     _validate_app_id(app_id)
-    sessions = (
-        Path(session_dir)
-        if session_dir is not None
-        else resolve_workspace_path("session")
-    )
+    sessions = Path(session_dir) if session_dir is not None else get_sessions_dir()
     if not sessions.is_dir():
         return []
     sessions_root = sessions.resolve()
 
     matches: list[Path] = []
-    for files_root in sessions.glob("*/files"):
+    scratch_roots = [
+        *sessions.glob("*/scratch"),
+        *sessions.glob("*/files"),
+    ]
+    for files_root in scratch_roots:
         if (
             not files_root.is_dir()
             or files_root.is_symlink()
@@ -385,7 +387,7 @@ def _legacy_chat_id(source: Path, session_dir: str | Path | None) -> str | None:
     sessions = (
         Path(session_dir).resolve()
         if session_dir is not None
-        else resolve_workspace_path("session").resolve()
+        else get_sessions_dir().resolve()
     )
     try:
         return source.resolve().relative_to(sessions).parts[0]
@@ -441,9 +443,9 @@ def _ensure_apps_readme(apps_dir: Path) -> None:
     if path.exists():
         return
     path.write_text(
-        "# AIOS Apps\n\n"
-        "Each directory is the durable source-of-truth workspace for one cloud app.\n"
-        "Chat session folders contain conversation-specific files, not canonical app code.\n",
+        "# AIOS Projects\n\n"
+        "Each directory is the durable source-of-truth project for one cloud app.\n"
+        "Chat scratch contains conversation-specific files, not canonical project code.\n",
         encoding="utf-8",
     )
 
@@ -458,7 +460,7 @@ def _ensure_app_readme(root: Path, metadata: dict[str, Any]) -> None:
         "- **Source of truth:** this directory\n"
         "- **Deployment manifest:** `aios.deploy.yaml`\n\n"
         "## Development\n\n"
-        "Keep application source and deployment configuration here. Chat sessions may "
+        "Keep application source and deployment configuration here. Chats may "
         "reference this folder, but should not create separate project copies.\n",
         encoding="utf-8",
     )

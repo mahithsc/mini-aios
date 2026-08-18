@@ -9,7 +9,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from ..context import default_chat_files_cwd, resolve_chat_files_path
+from ..context import default_agent_cwd, resolve_agent_path
 from .tool_output_limits import get_max_lines
 from .toolcore import (
     failure_exit_hint,
@@ -173,9 +173,9 @@ async def _run_bash(
         return f"error: {exc}"
 
     if cwd is None:
-        workdir = default_chat_files_cwd()
+        workdir = default_agent_cwd()
     else:
-        workdir = resolve_chat_files_path(cwd)
+        workdir = resolve_agent_path(cwd)
     if not workdir.is_dir():
         return f"error: working directory is not a directory: {workdir}"
 
@@ -308,7 +308,7 @@ async def bash(command: str, timeout: float | None = None) -> str:
     log. Timeout or agent cancellation kills the entire process group.
 
     Args:
-        command: Shell command to run in the current chat files directory.
+        command: Shell command to run in the current chat scratch directory.
         timeout: Optional timeout in seconds. By default there is no timeout.
     """
     return await _run_bash(command, timeout)

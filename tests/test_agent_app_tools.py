@@ -32,12 +32,12 @@ def test_apps_list_uses_durable_workspace_inventory(monkeypatch):
         apps,
         "list_app_workspaces",
         lambda: {
-            "apps_dir": "/workspace/apps",
+            "apps_dir": "/data/projects",
             "apps": [
                 {
                     "app_id": "app_cloud123",
                     "name": "Example",
-                    "workspace_path": "/workspace/apps/app_cloud123",
+                    "workspace_path": "/data/projects/app_cloud123",
                     "has_manifest": False,
                 }
             ],
@@ -45,7 +45,7 @@ def test_apps_list_uses_durable_workspace_inventory(monkeypatch):
     )
     result = apps.apps_list()
     assert result["apps"][0]["app_id"] == "app_cloud123"
-    assert result["apps"][0]["workspace_path"] == "/workspace/apps/app_cloud123"
+    assert result["apps"][0]["workspace_path"] == "/data/projects/app_cloud123"
 
 
 def test_legacy_apps_list_preserves_supervisor_inventory(temp_store, monkeypatch):
@@ -89,13 +89,13 @@ def test_app_create_reserves_cloud_identity_and_workspace(monkeypatch):
             "app_id": app_id,
             "name": name,
             "found": True,
-            "workspace_path": f"/workspace/apps/{app_id}",
+            "workspace_path": f"/data/projects/{app_id}",
         },
     )
 
     result = apps.app_create("Example")
     assert result["app_id"] == "app_cloud123"
-    assert result["workspace_path"] == "/workspace/apps/app_cloud123"
+    assert result["workspace_path"] == "/data/projects/app_cloud123"
 
 
 def test_app_workspace_resolves_durable_source(monkeypatch):
@@ -105,12 +105,12 @@ def test_app_workspace_resolves_durable_source(monkeypatch):
         lambda app_id, origin_chat_id=None: {
             "app_id": app_id,
             "found": True,
-            "workspace_path": f"/workspace/apps/{app_id}",
+            "workspace_path": f"/data/projects/{app_id}",
         },
     )
 
     assert apps.app_workspace("app_cloud123")["workspace_path"] == (
-        "/workspace/apps/app_cloud123"
+        "/data/projects/app_cloud123"
     )
 
 

@@ -9,14 +9,16 @@ from server.types.chat import AssistantMessage, UserMessage
 
 @pytest.fixture
 def isolated_search_storage(tmp_path, monkeypatch):
-    """Point the SQLite chat store and its legacy importer at a temp workspace."""
-    workspace_dir = tmp_path / "workspace"
-    session_dir = workspace_dir / "session"
+    """Point the SQLite chat store and its legacy importer at a temp data root."""
+    workspace_dir = tmp_path / ".mini-aios"
+    session_dir = workspace_dir / "sessions"
     session_dir.mkdir(parents=True)
     (session_dir / "session_manifest.json").write_text("[]", encoding="utf-8")
 
     monkeypatch.setattr(sessions, "DB_PATH", str(workspace_dir / "aios.db"))
     monkeypatch.setattr(sessions, "SESSION_DIR", session_dir)
+    monkeypatch.setattr(sessions, "UPLOADS_DIR", workspace_dir / "uploads")
+    monkeypatch.setattr(sessions, "ARTIFACTS_DIR", workspace_dir / "artifacts")
     monkeypatch.setattr(
         sessions,
         "SESSION_MANIFEST_PATH",
@@ -39,7 +41,7 @@ def isolated_search_storage(tmp_path, monkeypatch):
     )
     monkeypatch.delenv("AIOS_STATE_DIR", raising=False)
     monkeypatch.delenv("AIOS_HOME", raising=False)
-    monkeypatch.setattr(sessions, "get_workspace_dir", lambda: workspace_dir)
+    monkeypatch.setattr(sessions, "get_data_dir", lambda: workspace_dir)
     sessions._CHAT_STORAGE_READY.clear()
 
     yield session_dir
