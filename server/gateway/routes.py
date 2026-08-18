@@ -18,7 +18,7 @@ from aios_core.sessions import (
     list_chat_history,
     load_chat_session,
 )
-from server.execution.runtime import get_runs_service
+from aios_core.execution.runtime import get_runs_service
 from server.notifications.runtime import get_notification_service
 from server.types.chat import AssistantMessage, ChatMetadata, UserMessage
 from server.types.notification import (

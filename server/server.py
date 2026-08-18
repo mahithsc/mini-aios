@@ -8,6 +8,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from aios_core.execution.runtime import shutdown_runs_service, start_runs_service
 from aios_core.initialize import (
     register_runtime_shutdown,
     shutdown_runtime,
@@ -19,7 +20,6 @@ from server.cloud_events import (
     shutdown_cloud_device_events,
     start_cloud_device_events,
 )
-from server.execution.runtime import shutdown_runs_service, start_runs_service
 from server.gateway.routes import router as gateway_router
 from server.lights import lights
 from server.notifications.runtime import (

@@ -8,10 +8,10 @@ from pathlib import Path
 from fastapi import APIRouter, Header, HTTPException
 
 from aios_core.db import get_db_connection, validate_app_db_schema
+from aios_core.execution.runtime import get_runs_service
 from aios_core.release import get_release_info
 from aios_core.runtime_control import RuntimeDrainingError, get_runtime_control
 from aios_core.workspace import ensure_workspace_dir
-from server.execution.runtime import get_runs_service
 
 router = APIRouter(prefix="/internal/updater", tags=["updater"])
 

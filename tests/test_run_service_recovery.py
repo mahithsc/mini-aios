@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from server.execution.service import ActiveRun, RunsService, build_run_event
+from aios_core.execution.service import ActiveRun, RunsService, build_run_event
 from server.types.run import Run, RunSnapshot
 
 

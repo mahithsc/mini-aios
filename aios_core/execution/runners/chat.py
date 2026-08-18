@@ -20,13 +20,13 @@ from aios_core.conversation_store import (
     DurableRunHooks,
     MAIN_SCOPE,
 )
+from aios_core.execution.service import RunsService, build_run_event
 from aios_core.openai_runtime import AgentRuntimeContext, OpenAIEventTranslator
 from aios_core.runtime_context import (
     pop_chat_runtime_context,
     push_chat_runtime_context,
 )
 from aios_core.sessions import load_chat_session
-from server.execution.service import RunsService, build_run_event
 from server.lights import lights
 from server.types.chat import ChatMessage, UserMessage
 from server.types.run import Run

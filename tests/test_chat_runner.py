@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
+from aios_core.execution.runners import chat
 from aios_core.tools.subagent_events import build_subagent_stream_event
-from server.execution.runners import chat
 from server.types.chat import UserMessage
 from server.types.run import Run
 
