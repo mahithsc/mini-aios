@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 
 from aios_core.execution.runtime import shutdown_runs_service, start_runs_service
 from aios_core.initialize import (
@@ -14,7 +12,6 @@ from aios_core.initialize import (
     shutdown_runtime,
     start_runtime,
 )
-from aios_core.sessions import get_chat_artifacts_dir
 from server.cloud_events import (
     cloud_device_events_enabled,
     shutdown_cloud_device_events,
@@ -124,23 +121,3 @@ async def create_transcription(
         ended_at=endedAt,
         mime_type=mimeType,
     )
-
-
-@app.get("/session-artifacts/{chat_id}/{artifact_path:path}")
-async def get_session_artifact_file(chat_id: str, artifact_path: str) -> FileResponse:
-    raw_artifacts_root = get_chat_artifacts_dir(chat_id)
-    if raw_artifacts_root.is_symlink():
-        raise HTTPException(status_code=404, detail="Artifact not found.")
-    artifacts_root = raw_artifacts_root.resolve()
-    requested_relative_path = Path(artifact_path)
-    requested_path = (artifacts_root / requested_relative_path).resolve()
-
-    try:
-        requested_path.relative_to(artifacts_root)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Artifact not found.") from exc
-
-    if not requested_path.exists() or not requested_path.is_file():
-        raise HTTPException(status_code=404, detail="Artifact not found.")
-
-    return FileResponse(requested_path)

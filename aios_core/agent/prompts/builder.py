@@ -27,13 +27,6 @@ _BASE_TOOLS_BLOCK = """
     {"path": "string", "old": "string", "new": "string", "all": "boolean?"},
     edit,
 ),
-"show_canvas": (
-    "Prepare a canvas artifact for the current chat. Use for images, videos, files, and HTML previews that should appear in the chat's canvas.",
-    {"kind": "string (image|video|file|html)", "title": "string?", "url": "string?",
-     "file_path": "string?", "name": "string?", "mime_type": "string?",
-     "thumbnail_url": "string?", "text_preview": "string?", "size_bytes": "number?"},
-    show_canvas,
-),
 "glob": (
     "Find files by pattern, newest first (dependency/VCS dirs are skipped "
     "unless the pattern names them)",
@@ -224,8 +217,6 @@ def build_agent_prompt(
     current_chat_id: str | None = None,
     current_chat_scratch_dir: str | None = None,
     current_chat_uploads_dir: str | None = None,
-    current_chat_artifacts_dir: str | None = None,
-    current_chat_artifact_url_template: str | None = None,
     include_memory_tools: bool = True,
     memory_context: str | None = None,
     skills: Sequence[Mapping[str, Any]] | None = None,
@@ -319,14 +310,6 @@ def build_agent_prompt(
             """,
         ),
         _section(
-            "canvas",
-            """
-            When the user asks to show something in the canvas, display something in the canvas, or put files, images, or videos in the canvas, call `show_canvas` instead of only describing the result in plain text.
-            Prefer `show_canvas` whenever the user explicitly mentions the canvas.
-            For generated HTML previews, use `show_canvas(kind="html", ...)` with a served URL and the absolute artifact path to the generated `index.html`.
-            """,
-        ),
-        _section(
             "notifications",
             """
             Notifications are useful for longer-running tasks such as research or longer coding work.
@@ -366,12 +349,7 @@ def build_agent_prompt(
     if memory_context:
         sections.append(memory_context)
 
-    if current_chat_id and current_chat_scratch_dir and current_chat_artifacts_dir:
-        artifact_url_line = (
-            f"Served artifact URL template: {current_chat_artifact_url_template}"
-            if current_chat_artifact_url_template
-            else ""
-        )
+    if current_chat_id and current_chat_scratch_dir:
         sections.append(
             _section(
                 "current_chat",
@@ -379,25 +357,9 @@ def build_agent_prompt(
                 Current chat id: {current_chat_id}
                 Chat scratch directory: {current_chat_scratch_dir}
                 Chat uploads directory: {current_chat_uploads_dir or "unavailable"}
-                Chat artifacts directory: {current_chat_artifacts_dir}
-                {artifact_url_line}
                 Ordinary relative paths for file tools, search tools, shell commands, and Pi default to chat scratch.
                 Use `scratch:/...` when you want to state the scratch scope explicitly.
-                Use `data:/projects/...`, `data:/uploads/...`, or another `data:/...` path when you intentionally need the persistent data root. Canonical top-level paths such as `projects/...`, `sessions/...`, `uploads/...`, and `artifacts/...` are also accepted for compatibility.
-                """,
-            )
-        )
-        sections.append(
-            _section(
-                "generative_ui",
-                """
-                You may create generative UI when a visual explanation or interactive artifact would materially help the user.
-                Use `generative_widget` for generative UI.
-                Call `generative_widget(function="documentation")` first when you need the widget guidelines.
-                Then call `generative_widget(function="generate", widget=...)` with the actual widget markup.
-                For this MVP, the widget should be a single self-contained HTML or SVG fragment with inline styling and any inline JavaScript needed.
-                Do not wrap the widget markup in markdown fences.
-                Keep a short normal text response alongside the generated widget so the artifact complements the answer.
+                Use `data:/projects/...`, `data:/uploads/...`, or another `data:/...` path when you intentionally need the persistent data root. Canonical top-level paths such as `projects/...`, `sessions/...`, and `uploads/...` are also accepted for compatibility.
                 """,
             )
         )

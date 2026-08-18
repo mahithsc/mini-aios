@@ -76,13 +76,13 @@ def test_chat_runner_only_projects_agent_events() -> None:
             AgentEvent(
                 kind="tool_call_start",
                 tool_call_id="call-1",
-                tool_name="show_canvas",
+                tool_name="example_tool",
                 input={"title": "Demo"},
             ),
             AgentEvent(
                 kind="tool_call_end",
                 tool_call_id="call-1",
-                tool_name="show_canvas",
+                tool_name="example_tool",
                 output={"url": "/demo"},
             ),
             AgentEvent(
@@ -112,7 +112,7 @@ def test_chat_runner_only_projects_agent_events() -> None:
     assert service.events[1].event.data == {"value": "Hello"}
     assert service.events[3].event.data == {
         "toolCallId": "call-1",
-        "toolName": "show_canvas",
+        "toolName": "example_tool",
         "output": {"url": "/demo"},
     }
     assert service.events[4].event.data == {

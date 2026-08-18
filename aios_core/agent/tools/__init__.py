@@ -19,7 +19,6 @@ __all__ = [
     "app_logs",
     "app_restart",
     "app_stop",
-    "generative_widget",
     "tavily_search",
     "fetch",
     "memory",
@@ -88,10 +87,6 @@ def __getattr__(name: str):
             "app_restart": app_restart,
             "app_stop": app_stop,
         }[name]
-    if name == "generative_widget":
-        from .generative_widget import generative_widget
-
-        return generative_widget
     if name == "tavily_search":
         from .tavily import tavily_search
 

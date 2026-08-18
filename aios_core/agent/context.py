@@ -13,7 +13,6 @@ from typing import Any
 
 from ..sessions import (
     ensure_chat_storage_dirs,
-    get_chat_artifacts_dir,
     get_chat_scratch_dir,
 )
 from ..workspace import ensure_workspace_dir, resolve_workspace_path
@@ -26,9 +25,6 @@ _CURRENT_CHAT_ID: ContextVar[str | None] = ContextVar(
 )
 _CURRENT_CHAT_SCRATCH_DIR: ContextVar[str | None] = ContextVar(
     "aios_current_chat_scratch_dir", default=None
-)
-_CURRENT_CHAT_ARTIFACTS_DIR: ContextVar[str | None] = ContextVar(
-    "aios_current_chat_artifacts_dir", default=None
 )
 _DATA_ROOT_SENTINELS = {
     "artifacts",
@@ -50,22 +46,20 @@ _DATA_SCOPE = "data:"
 _SCRATCH_SCOPE = "scratch:"
 
 
-def push_chat_runtime_context(chat_id: str) -> tuple[object, object, object]:
+def push_chat_runtime_context(chat_id: str) -> tuple[object, object]:
     # Chats imported from SQLite may not have ever had filesystem state. Make
     # the per-chat roots real before any prompt or tool receives their paths.
     ensure_chat_storage_dirs(chat_id)
     return (
         _CURRENT_CHAT_ID.set(chat_id),
         _CURRENT_CHAT_SCRATCH_DIR.set(str(get_chat_scratch_dir(chat_id))),
-        _CURRENT_CHAT_ARTIFACTS_DIR.set(str(get_chat_artifacts_dir(chat_id))),
     )
 
 
-def pop_chat_runtime_context(tokens: tuple[object, object, object]) -> None:
-    chat_token, scratch_token, artifacts_token = tokens
+def pop_chat_runtime_context(tokens: tuple[object, object]) -> None:
+    chat_token, scratch_token = tokens
     _CURRENT_CHAT_ID.reset(chat_token)
     _CURRENT_CHAT_SCRATCH_DIR.reset(scratch_token)
-    _CURRENT_CHAT_ARTIFACTS_DIR.reset(artifacts_token)
 
 
 def get_current_chat_id() -> str | None:
@@ -81,11 +75,6 @@ def get_current_chat_files_dir() -> Path | None:
     """Compatibility alias for callers written before scratch was named."""
 
     return get_current_chat_scratch_dir()
-
-
-def get_current_chat_artifacts_dir() -> Path | None:
-    value = _CURRENT_CHAT_ARTIFACTS_DIR.get()
-    return Path(value) if value else None
 
 
 def _is_data_root_relative(path: Path) -> bool:
@@ -278,7 +267,6 @@ __all__ = [
     "FunctionCallContext",
     "default_agent_cwd",
     "default_chat_files_cwd",
-    "get_current_chat_artifacts_dir",
     "get_current_chat_files_dir",
     "get_current_chat_id",
     "get_current_chat_scratch_dir",

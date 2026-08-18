@@ -7,9 +7,7 @@ from openai.types.shared import Reasoning
 
 from ..memory import build_memory_prompt
 from ..sessions import (
-    get_chat_artifacts_dir,
     get_chat_scratch_dir,
-    get_chat_session_relative_dir,
     get_chat_uploads_dir,
 )
 from ..skills import load_skills
@@ -38,10 +36,8 @@ from .tools.apps import (
     legacy_apps_list,
     secrets_list,
 )
-from .tools.canvas import show_canvas
 from .tools.cron import cron
 from .tools.fetch import fetch
-from .tools.generative_widget import generative_widget
 from .tools.memory import memory
 from .tools.notify import notify
 from .tools.session_search import session_search
@@ -50,7 +46,6 @@ from .tools.subagent import subagent
 load_dotenv()
 
 DEFAULT_CRON_TIMEZONE = os.getenv("AIOS_DEFAULT_TIMEZONE", "America/New_York")
-DEFAULT_SERVER_BASE_URL = os.getenv("AIOS_SERVER_BASE_URL", "http://localhost:8765")
 
 
 def _resolve_model_configuration(
@@ -75,8 +70,6 @@ BASE_TOOLS = [
     bash,
     pi,
     cron,
-    show_canvas,
-    generative_widget,
     notify,
     tavily_search,
     fetch,
@@ -105,17 +98,9 @@ def _build_prompt(
 ):
     current_chat_scratch_dir = None
     current_chat_uploads_dir = None
-    current_chat_artifacts_dir = None
-    current_chat_artifact_url_template = None
     if chat_id:
         current_chat_scratch_dir = str(get_chat_scratch_dir(chat_id))
         current_chat_uploads_dir = str(get_chat_uploads_dir(chat_id))
-        current_chat_artifacts_dir = str(get_chat_artifacts_dir(chat_id))
-        sanitized_chat_id = get_chat_session_relative_dir(chat_id).name
-        current_chat_artifact_url_template = (
-            f"{DEFAULT_SERVER_BASE_URL}/session-artifacts/"
-            f"{sanitized_chat_id}/<artifact-id>/index.html"
-        )
 
     return build_agent_prompt(
         include_subagent_tool=include_subagent_tool,
@@ -124,8 +109,6 @@ def _build_prompt(
         current_chat_id=chat_id,
         current_chat_scratch_dir=current_chat_scratch_dir,
         current_chat_uploads_dir=current_chat_uploads_dir,
-        current_chat_artifacts_dir=current_chat_artifacts_dir,
-        current_chat_artifact_url_template=current_chat_artifact_url_template,
         include_memory_tools=include_subagent_tool,
         memory_context=build_memory_prompt(),
         skills=load_skills(),

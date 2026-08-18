@@ -55,12 +55,11 @@ def _read_text(resolved: Path) -> tuple[str, bool] | str:
     """Return (text, had_bom) or an error string for binary/unreadable files."""
     if has_binary_extension(str(resolved)):
         kind = "image" if is_image_path(resolved) else "binary"
-        hint = " Use show_canvas to display it in the chat." if kind == "image" else ""
         try:
             size = resolved.stat().st_size
         except OSError:
             size = 0
-        return f"error: {resolved} is a {kind} file ({size:,} bytes) — cannot display as text.{hint}"
+        return f"error: {resolved} is a {kind} file ({size:,} bytes) — cannot display as text."
     try:
         raw = resolved.read_bytes()
     except FileNotFoundError:
@@ -131,12 +130,11 @@ def read(path: str, offset: int = 0, limit: int = None):
 
     if has_binary_extension(str(resolved)):
         kind = "image" if is_image_path(resolved) else "binary"
-        hint = " Use show_canvas to display it in the chat." if kind == "image" else ""
         try:
             size = resolved.stat().st_size
         except OSError:
             size = 0
-        return f"error: {resolved} is a {kind} file ({size:,} bytes) — cannot display as text.{hint}"
+        return f"error: {resolved} is a {kind} file ({size:,} bytes) — cannot display as text."
     try:
         with open(resolved, "rb") as probe:
             if looks_binary(probe.read(1024)):

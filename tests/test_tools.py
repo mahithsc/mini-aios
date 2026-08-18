@@ -65,7 +65,7 @@ out = filesystem.read(str(binary))
 check("read binary blocked", "error" in out and "binary" in out.lower(), out)
 
 out = filesystem.read(str(TMP / "pic.png"))
-check("read image hint", "show_canvas" in out or "not found" in out, out)
+check("read image error", "image file" in out or "not found" in out, out)
 
 out = filesystem.read("/dev/urandom")
 check("read device blocked", "device" in out, out)

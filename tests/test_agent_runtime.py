@@ -306,14 +306,14 @@ def test_agent_runtime_streams_and_persists_openai_and_nested_events(
         AgentEvent(
             kind="tool_call_start",
             tool_call_id="call-1",
-            tool_name="show_canvas",
+            tool_name="example_tool",
             input={"title": "Demo"},
         ),
         AgentEvent(
             kind="tool_call_end",
             tool_call_id="call-1",
-            tool_name="show_canvas",
-            output="{'url': '/demo'}",
+            tool_name="example_tool",
+            output={"url": "/demo"},
         ),
     ]
     captured, popped = _patch_runtime_dependencies(monkeypatch, sdk_events)

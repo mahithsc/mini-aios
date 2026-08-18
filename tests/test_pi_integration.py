@@ -16,7 +16,6 @@ def _prompt() -> str:
         current_chat_id="chat-1",
         current_chat_scratch_dir="/tmp/.mini-aios/sessions/chat-1/scratch",
         current_chat_uploads_dir="/tmp/.mini-aios/uploads/chat-1",
-        current_chat_artifacts_dir="/tmp/.mini-aios/artifacts/chat-1",
     )
 
 
@@ -35,10 +34,11 @@ def test_prompt_distinguishes_scratch_data_and_project_scopes() -> None:
 
     assert "Chat scratch directory: /tmp/.mini-aios/sessions/chat-1/scratch" in prompt
     assert "Chat uploads directory: /tmp/.mini-aios/uploads/chat-1" in prompt
-    assert "Chat artifacts directory: /tmp/.mini-aios/artifacts/chat-1" in prompt
     assert "Data root: /tmp/.mini-aios" in prompt
     assert "`scratch:/...`" in prompt
     assert "`data:/projects/...`" in prompt
+    assert "show_canvas" not in prompt
+    assert "generative_widget" not in prompt
 
 
 def test_agent_registers_pi_as_the_only_external_coding_agent_tool() -> None:
@@ -55,6 +55,8 @@ def test_agent_registers_pi_as_the_only_external_coding_agent_tool() -> None:
         "codex_start",
         "codex_poll",
         "codex_stop",
+        "generative_widget",
+        "show_canvas",
     }.intersection(tool_names)
 
 
@@ -70,12 +72,16 @@ def test_tools_package_exports_pi_without_codex_lifecycle_tools() -> None:
         "codex_start",
         "codex_poll",
         "codex_stop",
+        "generative_widget",
+        "show_canvas",
     }.intersection(tools.__all__)
 
 
 def test_legacy_agent_module_paths_are_removed() -> None:
     legacy_modules = {
         "aios_core.agent_prompt",
+        "aios_core.agent.tools.canvas",
+        "aios_core.agent.tools.generative_widget",
         "aios_core.deploy.agent_tools",
         "aios_core.deploy.pi_bridge",
         "aios_core.openai_runtime",
@@ -83,10 +89,17 @@ def test_legacy_agent_module_paths_are_removed() -> None:
         "aios_core.runtime_context",
         "aios_core.tools",
         "server.execution",
+        "server.types.artifact",
         "server.utils",
     }
 
     assert all(importlib.util.find_spec(name) is None for name in legacy_modules)
+
+
+def test_server_does_not_expose_chat_artifact_routes() -> None:
+    from server.server import app
+
+    assert all(not route.path.startswith("/session-artifacts") for route in app.routes)
 
 
 def test_runtime_shutdown_closes_pi_jobs_even_before_start(monkeypatch) -> None:
