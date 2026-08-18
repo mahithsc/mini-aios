@@ -15,7 +15,7 @@ import threading
 import time
 from pathlib import Path
 
-from ..agent.context import get_current_chat_id
+from ..context import get_current_chat_id
 from .ansi_strip import strip_ansi  # noqa: F401  (re-exported)
 from .tool_output_limits import get_max_bytes, get_max_lines, get_max_line_length
 

@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from aios_core.tools import pi_job as pj
-from aios_core.tools.pi_job import (
+from aios_core.agent.pi import runtime as pj
+from aios_core.agent.pi.protocol import encode_rpc_message
+from aios_core.agent.pi.runtime import (
     PiJob,
     PiJobManager,
     build_pi_command,
@@ -19,7 +20,6 @@ from aios_core.tools.pi_job import (
     sanitized_pi_environment,
     set_progress_sink,
 )
-from aios_core.tools.pi_protocol import encode_rpc_message
 
 FIXTURES = Path(__file__).parent / "fixtures" / "pi_rpc"
 
@@ -636,6 +636,13 @@ def test_command_disables_discovery_and_enforces_profiles(tmp_path) -> None:
     assert "--extension" in coding
     assert read_only[read_only.index("--tools") + 1] == "read,grep,find,ls"
     assert "--extension" not in read_only
+
+
+def test_default_deploy_extension_lives_with_pi_runtime() -> None:
+    assert pj._DEPLOY_EXTENSION == (
+        Path(pj.__file__).resolve().parent / "extensions" / "deploy.ts"
+    )
+    assert pj._DEPLOY_EXTENSION.is_file()
 
 
 def test_environment_is_minimal_but_keeps_provider_auth() -> None:

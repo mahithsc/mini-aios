@@ -37,7 +37,7 @@ def _install_pi_progress_sink() -> None:
     """Stream live Pi progress (pi.* events) onto the gateway bus so the chat
     shows what a background Pi job is doing. The PiJob reader thread calls the
     sink; we hop back to this loop (bus.publish is not thread-safe) before publishing."""
-    from aios_core.tools.pi_job import set_progress_sink
+    from aios_core.agent.pi.runtime import set_progress_sink
     from server.gateway.bus import get_gateway_bus
 
     loop = asyncio.get_running_loop()
@@ -62,7 +62,7 @@ async def lifespan(_: FastAPI):
             await start_cloud_device_events()
         yield
     finally:
-        from aios_core.tools.pi_job import set_progress_sink
+        from aios_core.agent.pi.runtime import set_progress_sink
 
         set_progress_sink(None)
         if receive_cloud_events:

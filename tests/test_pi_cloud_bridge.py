@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from aios_core.deploy import pi_bridge
+from aios_core.agent.pi import cloud_bridge
 
 CLOUD_TOOL_NAMES = (
     "deploy",
@@ -47,17 +47,17 @@ def _write_manifest(root: Path, *, app_id: str = "app_cloud123") -> None:
 
 
 def test_components_are_deduplicated_and_put_in_dependency_order() -> None:
-    assert pi_bridge.normalize_components(["frontend", "database", "frontend"]) == [
+    assert cloud_bridge.normalize_components(["frontend", "database", "frontend"]) == [
         "database",
         "frontend",
     ]
-    assert pi_bridge.normalize_components(None) is None
+    assert cloud_bridge.normalize_components(None) is None
 
 
 @pytest.mark.parametrize("components", [[], ["worker"], ["server", "unknown"]])
 def test_invalid_components_are_rejected(components) -> None:
-    with pytest.raises(pi_bridge.BridgeRequestError):
-        pi_bridge.normalize_components(components)
+    with pytest.raises(cloud_bridge.BridgeRequestError):
+        cloud_bridge.normalize_components(components)
 
 
 def test_deploy_is_manifest_rooted_ordered_and_idempotent(tmp_path) -> None:
@@ -78,7 +78,7 @@ def test_deploy_is_manifest_rooted_ordered_and_idempotent(tmp_path) -> None:
             )
             return {"id": "pip_cloud123", "status": "running"}
 
-    result = pi_bridge.deploy_from_cwd(
+    result = cloud_bridge.deploy_from_cwd(
         operation_id="pi-operation123",
         components=["frontend", "database"],
         _cwd=nested,
@@ -99,8 +99,8 @@ def test_deploy_is_manifest_rooted_ordered_and_idempotent(tmp_path) -> None:
 
 
 def test_deploy_requires_manifest_in_current_directory_tree(tmp_path) -> None:
-    with pytest.raises(pi_bridge.BridgeRequestError, match="aios.deploy.yaml"):
-        pi_bridge.deploy_from_cwd(
+    with pytest.raises(cloud_bridge.BridgeRequestError, match="aios.deploy.yaml"):
+        cloud_bridge.deploy_from_cwd(
             operation_id="pi-operation123",
             _cwd=tmp_path,
             _client_factory=lambda: object(),
@@ -116,8 +116,8 @@ def test_deploy_rejects_workspace_identity_mismatch(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(pi_bridge.BridgeRequestError, match="must match"):
-        pi_bridge.deploy_from_cwd(
+    with pytest.raises(cloud_bridge.BridgeRequestError, match="must match"):
+        cloud_bridge.deploy_from_cwd(
             operation_id="pi-operation123",
             _cwd=app_root,
             _client_factory=lambda: object(),
@@ -136,13 +136,13 @@ def test_pipeline_and_component_status_use_validated_ids() -> None:
             return {"events": [], "cursor": after, "deployment": deployment_id}
 
     cloud = FakeCloud()
-    pipeline = pi_bridge.get_pipeline_status(
+    pipeline = cloud_bridge.get_pipeline_status(
         "pip_cloud123", _client_factory=lambda: cloud
     )
-    deployment = pi_bridge.get_deployment_status(
+    deployment = cloud_bridge.get_deployment_status(
         "dep_cloud123", _client_factory=lambda: cloud
     )
-    events = pi_bridge.get_deployment_events(
+    events = cloud_bridge.get_deployment_events(
         "dep_cloud123", after=4, _client_factory=lambda: cloud
     )
 
@@ -188,21 +188,21 @@ def test_app_info_status_and_deployment_controls_use_cloud_client() -> None:
         return cloud
 
     assert (
-        pi_bridge.get_app_info("app_cloud123", _client_factory=factory)["status"]
+        cloud_bridge.get_app_info("app_cloud123", _client_factory=factory)["status"]
         == "ok"
     )
     assert (
-        pi_bridge.check_app_status("app_cloud123", _client_factory=factory)[
+        cloud_bridge.check_app_status("app_cloud123", _client_factory=factory)[
             "overall_status"
         ]
         == "queued"
     )
     assert (
-        pi_bridge.cancel_deployment("dep_cloud123", _client_factory=factory)["status"]
+        cloud_bridge.cancel_deployment("dep_cloud123", _client_factory=factory)["status"]
         == "cancelled"
     )
-    pi_bridge.resume_deployment("dep_cloud123", _client_factory=factory)
-    pi_bridge.rollback_deployment("dep_cloud123", _client_factory=factory)
+    cloud_bridge.resume_deployment("dep_cloud123", _client_factory=factory)
+    cloud_bridge.rollback_deployment("dep_cloud123", _client_factory=factory)
 
     assert calls == [
         ("info", "app_cloud123"),
@@ -241,7 +241,7 @@ def test_media_upload_is_locked_to_current_manifest_workspace(tmp_path) -> None:
             )
             return {"id": "med_cloud123", "status": "ready"}
 
-    result = pi_bridge.upload_app_media(
+    result = cloud_bridge.upload_app_media(
         "app_cloud123",
         str(media),
         destination="images/hero.png",
@@ -267,22 +267,22 @@ def test_media_upload_rejects_app_mismatch_and_unsafe_destination(tmp_path) -> N
     outside = tmp_path.parent / f"{tmp_path.name}-outside.png"
     outside.write_bytes(b"png")
 
-    with pytest.raises(pi_bridge.BridgeRequestError, match="must match"):
-        pi_bridge.upload_app_media(
+    with pytest.raises(cloud_bridge.BridgeRequestError, match="must match"):
+        cloud_bridge.upload_app_media(
             "app_other123",
             str(media),
             _cwd=tmp_path,
             _client_factory=lambda: object(),
         )
-    with pytest.raises(pi_bridge.BridgeRequestError, match="inside"):
-        pi_bridge.upload_app_media(
+    with pytest.raises(cloud_bridge.BridgeRequestError, match="inside"):
+        cloud_bridge.upload_app_media(
             "app_cloud123",
             str(outside),
             _cwd=tmp_path,
             _client_factory=lambda: object(),
         )
-    with pytest.raises(pi_bridge.BridgeRequestError, match="safe relative"):
-        pi_bridge.upload_app_media(
+    with pytest.raises(cloud_bridge.BridgeRequestError, match="safe relative"):
+        cloud_bridge.upload_app_media(
             "app_cloud123",
             str(media),
             destination="../private.png",
@@ -313,16 +313,16 @@ def test_media_read_url_and_delete_are_structured() -> None:
         return cloud
 
     assert (
-        pi_bridge.list_app_media("app_cloud123", _client_factory=factory)["media"] == []
+        cloud_bridge.list_app_media("app_cloud123", _client_factory=factory)["media"] == []
     )
-    assert pi_bridge.get_app_media_url(
+    assert cloud_bridge.get_app_media_url(
         "app_cloud123",
         "med_cloud123",
         expires_in=600,
         _client_factory=factory,
     )["url"].startswith("https://")
     assert (
-        pi_bridge.delete_app_media(
+        cloud_bridge.delete_app_media(
             "app_cloud123", "med_cloud123", _client_factory=factory
         )["deleted"]
         is True
@@ -361,13 +361,13 @@ def test_database_tools_are_structured_and_never_accept_sql() -> None:
     def factory():
         return cloud
 
-    assert pi_bridge.list_database_tables("app_cloud123", _client_factory=factory)[
+    assert cloud_bridge.list_database_tables("app_cloud123", _client_factory=factory)[
         "tables"
     ] == ["customers"]
-    assert pi_bridge.inspect_database_table(
+    assert cloud_bridge.inspect_database_table(
         "app_cloud123", "public.customers", _client_factory=factory
     )["columns"] == ["id", "status"]
-    result = pi_bridge.query_database_table(
+    result = cloud_bridge.query_database_table(
         "app_cloud123",
         "customers",
         columns=["id"],
@@ -376,7 +376,7 @@ def test_database_tools_are_structured_and_never_accept_sql() -> None:
         limit=10,
         _client_factory=factory,
     )
-    pi_bridge.list_database_migrations("app_cloud123", _client_factory=factory)
+    cloud_bridge.list_database_migrations("app_cloud123", _client_factory=factory)
 
     assert result["rows"] == [{"id": 1}]
     assert calls[-2] == (
@@ -389,8 +389,8 @@ def test_database_tools_are_structured_and_never_accept_sql() -> None:
         10,
     )
     assert calls[-1] == ("migrations", "app_cloud123")
-    with pytest.raises(pi_bridge.BridgeRequestError):
-        pi_bridge.query_database_table(
+    with pytest.raises(cloud_bridge.BridgeRequestError):
+        cloud_bridge.query_database_table(
             "app_cloud123",
             "customers/../../secrets",
             _client_factory=factory,
@@ -416,7 +416,7 @@ def test_database_tools_are_structured_and_never_accept_sql() -> None:
 def test_request_protocol_rejects_source_paths_missing_operation_ids_and_sql(
     argv, capsys
 ) -> None:
-    rc = pi_bridge.main(argv)
+    rc = cloud_bridge.main(argv)
     payload = json.loads(capsys.readouterr().out)
 
     assert rc == 2
@@ -425,7 +425,7 @@ def test_request_protocol_rejects_source_paths_missing_operation_ids_and_sql(
 
 
 def test_query_protocol_parses_structured_json() -> None:
-    action, request = pi_bridge._parse_request(
+    action, request = cloud_bridge._parse_request(
         [
             "query-database-table",
             "--app-id",
@@ -460,10 +460,10 @@ def test_expected_cloud_error_is_structured_transport_success(
         def deploy_pipeline(
             self, app_dir, *, components, idempotency_key
         ) -> dict[str, object]:
-            raise pi_bridge.CloudDeployError("cloud unavailable")
+            raise cloud_bridge.CloudDeployError("cloud unavailable")
 
-    monkeypatch.setattr(pi_bridge, "CloudDeployClient", BrokenCloud)
-    rc = pi_bridge.main(["deploy", "--operation-id", "pi-operation123"])
+    monkeypatch.setattr(cloud_bridge, "CloudDeployClient", BrokenCloud)
+    rc = cloud_bridge.main(["deploy", "--operation-id", "pi-operation123"])
     payload = json.loads(capsys.readouterr().out)
 
     assert rc == 0
@@ -484,8 +484,8 @@ def test_unexpected_bridge_failure_is_json_without_traceback(
         ) -> dict[str, object]:
             raise RuntimeError("host broke")
 
-    monkeypatch.setattr(pi_bridge, "CloudDeployClient", BrokenCloud)
-    rc = pi_bridge.main(["deploy", "--operation-id", "pi-operation123"])
+    monkeypatch.setattr(cloud_bridge, "CloudDeployClient", BrokenCloud)
+    rc = cloud_bridge.main(["deploy", "--operation-id", "pi-operation123"])
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
 
@@ -500,7 +500,7 @@ def test_unexpected_bridge_failure_is_json_without_traceback(
 
 
 def test_bridge_runs_as_absolute_script_from_project_cwd(tmp_path) -> None:
-    bridge = Path(pi_bridge.__file__).resolve()
+    bridge = Path(cloud_bridge.__file__).resolve()
     result = subprocess.run(
         [sys.executable, str(bridge), "status", "--pipeline-id", "../escape"],
         cwd=tmp_path,
@@ -516,9 +516,7 @@ def test_bridge_runs_as_absolute_script_from_project_cwd(tmp_path) -> None:
 
 
 def test_extension_uses_tool_call_id_for_idempotency() -> None:
-    extension = (
-        Path(pi_bridge.__file__).resolve().parents[1] / "pi_extensions" / "deploy.ts"
-    )
+    extension = Path(cloud_bridge.__file__).resolve().parent / "extensions" / "deploy.ts"
     source = extension.read_text(encoding="utf-8")
     assert "stableOperationId(toolCallId)" in source
     assert '"--operation-id"' in source
@@ -530,9 +528,7 @@ def test_trusted_extension_loads_cloud_tools_in_pi_rpc(tmp_path) -> None:
     if pi is None:
         pytest.skip("Pi is not installed")
 
-    extension = (
-        Path(pi_bridge.__file__).resolve().parents[1] / "pi_extensions" / "deploy.ts"
-    )
+    extension = Path(cloud_bridge.__file__).resolve().parent / "extensions" / "deploy.ts"
     env = dict(os.environ)
     env["PI_CODING_AGENT_DIR"] = str(tmp_path / "pi-state")
     env["PI_OFFLINE"] = "1"

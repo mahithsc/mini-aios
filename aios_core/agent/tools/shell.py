@@ -9,7 +9,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from ..agent.context import default_chat_files_cwd, resolve_chat_files_path
+from ..context import default_chat_files_cwd, resolve_chat_files_path
 from .tool_output_limits import get_max_lines
 from .toolcore import (
     failure_exit_hint,

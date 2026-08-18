@@ -10,6 +10,14 @@ The public action dispatcher owns a background job manager. Each job launches a
 pinned Pi CLI in RPC mode, exchanges LF-delimited JSON over stdin/stdout, and
 normalizes Pi events before returning them to the main agent or gateway.
 
+The Pi implementation lives under `aios_core/agent/pi/`: `tool.py` is the
+model-facing lifecycle tool, `runtime.py` owns jobs and subprocesses,
+`protocol.py` handles RPC framing, and `cloud_bridge.py` plus
+`extensions/deploy.ts` form the trusted cloud-control boundary. Other
+model-facing tools live under `aios_core/agent/tools/`; deployment manifests,
+clients, archives, and provider-neutral domain logic remain under
+`aios_core/deploy/`.
+
 ## Lifecycle
 
 - `start` validates the task and working directory, reserves a job slot, starts

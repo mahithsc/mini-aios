@@ -7,16 +7,16 @@ apps deployed before cloud deployment became authoritative.
 
 from __future__ import annotations
 
-from ..agent.context import get_current_chat_id
-from ..app_workspaces import (
+from ...app_workspaces import (
     AppWorkspaceError,
     create_app_workspace,
     list_app_workspaces,
     resolve_app_workspace,
 )
-from .cloud_client import CloudDeployClient, CloudDeployError
-from .store import ProjectStore
-from .supervisor import Supervisor
+from ...deploy.cloud_client import CloudDeployClient, CloudDeployError
+from ...deploy.store import ProjectStore
+from ...deploy.supervisor import Supervisor
+from ..context import get_current_chat_id
 
 
 def _store() -> ProjectStore:

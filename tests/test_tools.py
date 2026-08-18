@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from aios_core.tools import filesystem, search, shell, processes  # noqa: E402
+from aios_core.agent.tools import filesystem, processes, search, shell  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="aios-tool-test-"))
 PASS = 0

@@ -4,7 +4,7 @@ import base64
 from dataclasses import is_dataclass
 from pathlib import Path
 
-from aios_core.tools.subagent_events import build_subagent_stream_event
+from aios_core.agent.tools.subagent_events import build_subagent_stream_event
 from server.types.chat import AssistantMessage, MessageAttachment, UserMessage
 from server.utils import utils
 

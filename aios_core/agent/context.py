@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from ..sessions import get_chat_artifacts_dir, get_chat_files_dir
-from ..tools.subagent_events import SubagentStreamEvent
 from ..workspace import ensure_workspace_dir, resolve_workspace_path
+from .tools.subagent_events import SubagentStreamEvent
 
 EventSink = Callable[[SubagentStreamEvent], Awaitable[None] | None]
 

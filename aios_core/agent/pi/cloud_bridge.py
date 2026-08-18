@@ -21,7 +21,7 @@ from typing import Any
 
 # The extension invokes this file by absolute path from an app workspace.
 if __package__ in {None, ""}:  # pragma: no cover - exercised by subprocess test
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from aios_core.app_workspaces import APP_METADATA_NAME
 from aios_core.deploy.cloud_client import (

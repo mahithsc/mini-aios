@@ -29,7 +29,7 @@ type BridgeToolSpec<TParams extends TSchema> = {
 	progress?: (params: Static<TParams>) => string;
 };
 
-const BRIDGE_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../deploy/pi_bridge.py");
+const BRIDGE_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../cloud_bridge.py");
 const DEPLOY_TIMEOUT_MS = 5 * 60 * 1000;
 const OUTPUT_TAIL_LIMIT = 4000;
 const FAILURE_STATUSES = new Set(["error", "failed"]);

@@ -40,8 +40,8 @@ success; otherwise return the exact deployment error.
 
 
 def test_pi_builds_and_deploys_through_cloud(tmp_path, monkeypatch) -> None:
-    from aios_core.tools.pi import pi
-    from aios_core.tools.pi_job import close_all_pi_jobs
+    from aios_core.agent.pi.runtime import close_all_pi_jobs
+    from aios_core.agent.pi.tool import pi
 
     (tmp_path / ".aios-app.json").write_text(
         json.dumps({"version": 1, "app_id": _APP_ID, "name": "Pi cloud e2e"}),

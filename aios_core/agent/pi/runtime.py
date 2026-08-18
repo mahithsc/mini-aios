@@ -14,18 +14,20 @@ from time import monotonic
 from typing import Any, Literal
 from uuid import uuid4
 
-from ..agent.context import (
+from ..context import (
     get_current_chat_files_dir,
     resolve_chat_files_path,
 )
-from ..workspace import get_workspace_dir
-from .path_security import validate_within_dir
-from .pi_protocol import PiRPCClient, PiRPCError, normalize_pi_event
+from ...workspace import get_workspace_dir
+from ..tools.path_security import validate_within_dir
+from .protocol import PiRPCClient, PiRPCError, normalize_pi_event
 
 PiProfile = Literal["coding", "read_only"]
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEPLOY_EXTENSION = _REPO_ROOT / "aios_core" / "pi_extensions" / "deploy.ts"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_DEPLOY_EXTENSION = (
+    _REPO_ROOT / "aios_core" / "agent" / "pi" / "extensions" / "deploy.ts"
+)
 _CLOUD_TOOL_NAMES = (
     "deploy",
     "deployment_status",

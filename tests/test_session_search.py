@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from aios_core import sessions
-from aios_core.tools.session_search import session_search
+from aios_core.agent.tools.session_search import session_search
 from server.types.chat import AssistantMessage, UserMessage
 
 

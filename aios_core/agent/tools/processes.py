@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from ..agent.context import default_chat_files_cwd, resolve_chat_files_path
+from ..context import default_chat_files_cwd, resolve_chat_files_path
 from .ansi_strip import strip_ansi
 
 _DEFAULT_SHELL = "/bin/bash"

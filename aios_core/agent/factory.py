@@ -5,7 +5,7 @@ from agents import Agent, ModelSettings
 from dotenv import load_dotenv
 from openai.types.shared import Reasoning
 
-from ..deploy.agent_tools import (
+from .tools.apps import (
     app_create,
     app_info,
     app_logs,
@@ -24,7 +24,7 @@ from ..sessions import (
     get_chat_session_relative_dir,
 )
 from ..skills import load_skills
-from ..tools import (
+from .tools import (
     bash,
     edit,
     glob,
@@ -33,18 +33,18 @@ from ..tools import (
     tavily_search,
     write,
 )
-from ..tools.canvas import show_canvas
-from ..tools.cron import cron
-from ..tools.fetch import fetch
-from ..tools.generative_widget import generative_widget
-from ..tools.memory import memory
-from ..tools.notify import notify
-from ..tools.pi import pi
-from ..tools.session_search import session_search
-from ..tools.subagent import subagent
 from ..workspace import resolve_workspace_path
 from .openai import as_function_tool
+from .pi.tool import pi
 from .prompts.builder import build_agent_prompt
+from .tools.canvas import show_canvas
+from .tools.cron import cron
+from .tools.fetch import fetch
+from .tools.generative_widget import generative_widget
+from .tools.memory import memory
+from .tools.notify import notify
+from .tools.session_search import session_search
+from .tools.subagent import subagent
 
 load_dotenv()
 

@@ -75,11 +75,11 @@ def __getattr__(name: str):
 
         return notify
     if name == "pi":
-        from .pi import pi
+        from ..pi.tool import pi
 
         return pi
     if name in {"apps_list", "app_status", "app_logs", "app_restart", "app_stop"}:
-        from ..deploy.agent_tools import app_logs, app_restart, app_status, app_stop, apps_list
+        from .apps import app_logs, app_restart, app_status, app_stop, apps_list
 
         return {
             "apps_list": apps_list,

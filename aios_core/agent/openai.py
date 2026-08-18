@@ -16,8 +16,8 @@ from agents.items import ToolCallItem, ToolCallOutputItem
 from agents.tool_context import ToolContext
 from openai.types.responses import ResponseTextDeltaEvent
 
-from ..tools.subagent_events import SubagentStreamEvent
 from .context import AgentRuntimeContext, FunctionCallContext
+from .tools.subagent_events import SubagentStreamEvent
 
 
 def _resolved_signature(function: Callable[..., Any]) -> inspect.Signature:

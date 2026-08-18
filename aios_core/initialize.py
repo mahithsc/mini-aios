@@ -191,7 +191,7 @@ def shutdown_runtime(stop_crons: bool = True):
     # Bash calls also run in their own process groups. Normally the async tool
     # kills them when a run is cancelled; this covers interpreter/app shutdown.
     try:
-        from .tools.shell import close_all_shell_processes
+        from .agent.tools.shell import close_all_shell_processes
 
         close_all_shell_processes()
     except Exception:
@@ -202,7 +202,7 @@ def shutdown_runtime(stop_crons: bool = True):
     # unless closed here. Runs even when the runtime never started — tool
     # calls can create sessions without start_runtime.
     try:
-        from .tools.processes import close_all_processes
+        from .agent.tools.processes import close_all_processes
 
         close_all_processes()
     except Exception:
@@ -211,7 +211,7 @@ def shutdown_runtime(stop_crons: bool = True):
     # Pi jobs also own long-lived subprocess groups. Close them even when the
     # runtime never started so tool-only callers cannot leave orphaned agents.
     try:
-        from .tools.pi_job import close_all_pi_jobs
+        from .agent.pi.runtime import close_all_pi_jobs
 
         close_all_pi_jobs()
     except Exception:

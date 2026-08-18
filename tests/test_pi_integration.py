@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 from pathlib import Path
 
 from aios_core.agent.prompts import build_agent_prompt
@@ -30,7 +31,7 @@ def test_prompt_exposes_one_pi_tool_and_documents_its_lifecycle() -> None:
 
 def test_agent_registers_pi_as_the_only_external_coding_agent_tool() -> None:
     from aios_core.agent.factory import BASE_TOOLS
-    from aios_core.tools.pi import pi
+    from aios_core.agent.pi.tool import pi
 
     tool_names = [tool.__name__ for tool in BASE_TOOLS]
 
@@ -46,8 +47,8 @@ def test_agent_registers_pi_as_the_only_external_coding_agent_tool() -> None:
 
 
 def test_tools_package_exports_pi_without_codex_lifecycle_tools() -> None:
-    import aios_core.tools as tools
-    from aios_core.tools.pi import pi
+    import aios_core.agent.tools as tools
+    from aios_core.agent.pi.tool import pi
 
     assert tools.__getattr__("pi") is pi
     assert "pi" in tools.__all__
@@ -60,9 +61,16 @@ def test_tools_package_exports_pi_without_codex_lifecycle_tools() -> None:
     }.intersection(tools.__all__)
 
 
+def test_legacy_tool_module_paths_are_removed() -> None:
+    assert importlib.util.find_spec("aios_core.tools") is None
+    assert importlib.util.find_spec("aios_core.deploy.agent_tools") is None
+    assert importlib.util.find_spec("aios_core.deploy.pi_bridge") is None
+
+
 def test_runtime_shutdown_closes_pi_jobs_even_before_start(monkeypatch) -> None:
     from aios_core import initialize
-    from aios_core.tools import pi_job, processes
+    from aios_core.agent.pi import runtime as pi_job
+    from aios_core.agent.tools import processes
 
     closed: list[str] = []
     monkeypatch.setattr(processes, "close_all_processes", lambda: closed.append("processes"))
@@ -75,7 +83,7 @@ def test_runtime_shutdown_closes_pi_jobs_even_before_start(monkeypatch) -> None:
 
 
 def test_server_pi_sink_forwards_events_on_the_event_loop(monkeypatch) -> None:
-    from aios_core.tools import pi_job
+    from aios_core.agent.pi import runtime as pi_job
     from server import server
     from server.gateway import bus as gateway_bus
 

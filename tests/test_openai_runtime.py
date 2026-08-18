@@ -11,7 +11,7 @@ from openai.types.responses import ResponseFunctionToolCall, ResponseTextDeltaEv
 
 from aios_core.agent.context import AgentRuntimeContext
 from aios_core.agent.openai import OpenAIEventTranslator, as_function_tool
-from aios_core.tools.subagent_events import build_subagent_stream_event
+from aios_core.agent.tools.subagent_events import build_subagent_stream_event
 
 
 def _context(runtime: AgentRuntimeContext, arguments: str) -> ToolContext:

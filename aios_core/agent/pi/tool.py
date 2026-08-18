@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from ..agent.context import get_current_chat_id
-from .pi_job import PiProfile, get_pi_job_manager
+from ..context import get_current_chat_id
+from .runtime import PiProfile, get_pi_job_manager
 
 PiAction = Literal["start", "poll", "steer", "stop", "list"]
 

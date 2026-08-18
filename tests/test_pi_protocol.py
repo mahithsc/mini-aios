@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-from aios_core.tools.pi_protocol import (
+from aios_core.agent.pi.protocol import (
     PiProtocolError,
     PiRPCClient,
     PiRPCError,

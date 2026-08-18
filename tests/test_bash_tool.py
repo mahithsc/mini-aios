@@ -17,7 +17,7 @@ from aios_core.agent.factory import (
 )
 from aios_core.agent.openai import as_function_tool
 from aios_core.agent.prompts import build_agent_prompt
-from aios_core.tools.shell import _run_bash, bash
+from aios_core.agent.tools.shell import _run_bash, bash
 
 PROCESS_TOOL_NAMES = {
     "process_spawn",

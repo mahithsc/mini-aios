@@ -5,7 +5,7 @@ from typing import Any
 
 from server.types.chat import AssistantMessage, ChatMessage, UserMessage
 
-from .. import sessions
+from ... import sessions
 
 _MAX_RESULTS = 10
 _MAX_CONTENT_CHARS = 2_000

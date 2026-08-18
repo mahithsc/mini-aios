@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from aios_core.deploy import agent_tools
+from aios_core.agent.tools import apps
 from aios_core.deploy.models import Project, Spec
 from aios_core.deploy.store import ProjectStore
 from aios_core.deploy.supervisor import Supervisor, docker_available
@@ -16,20 +16,20 @@ from aios_core.deploy.supervisor import Supervisor, docker_available
 @pytest.fixture
 def temp_store(tmp_path, monkeypatch):
     store = ProjectStore(path=tmp_path / "projects.json")
-    monkeypatch.setattr(agent_tools, "_store", lambda: store)
+    monkeypatch.setattr(apps, "_store", lambda: store)
     return store, tmp_path
 
 
 def test_unknown_app_errors(temp_store):
-    assert "error" in agent_tools.app_status("nope")
-    assert "error" in agent_tools.app_logs("nope")
-    assert "error" in agent_tools.app_stop("nope")
-    assert "error" in agent_tools.app_restart("nope")
+    assert "error" in apps.app_status("nope")
+    assert "error" in apps.app_logs("nope")
+    assert "error" in apps.app_stop("nope")
+    assert "error" in apps.app_restart("nope")
 
 
 def test_apps_list_uses_durable_workspace_inventory(monkeypatch):
     monkeypatch.setattr(
-        agent_tools,
+        apps,
         "list_app_workspaces",
         lambda: {
             "apps_dir": "/workspace/apps",
@@ -43,7 +43,7 @@ def test_apps_list_uses_durable_workspace_inventory(monkeypatch):
             ],
         },
     )
-    result = agent_tools.apps_list()
+    result = apps.apps_list()
     assert result["apps"][0]["app_id"] == "app_cloud123"
     assert result["apps"][0]["workspace_path"] == "/workspace/apps/app_cloud123"
 
@@ -63,8 +63,8 @@ def test_legacy_apps_list_preserves_supervisor_inventory(temp_store, monkeypatch
         def is_running(self, project):
             return False
 
-    monkeypatch.setattr(agent_tools, "_sup", FakeSup)
-    assert agent_tools.legacy_apps_list() == {
+    monkeypatch.setattr(apps, "_sup", FakeSup)
+    assert apps.legacy_apps_list() == {
         "apps": [
             {
                 "slug": "legacy",
@@ -81,9 +81,9 @@ def test_app_create_reserves_cloud_identity_and_workspace(monkeypatch):
         def create_app(self, name):
             return {"id": "app_cloud123", "name": name}
 
-    monkeypatch.setattr(agent_tools, "_cloud", FakeCloud)
+    monkeypatch.setattr(apps, "_cloud", FakeCloud)
     monkeypatch.setattr(
-        agent_tools,
+        apps,
         "create_app_workspace",
         lambda app_id, name, origin_chat_id=None: {
             "app_id": app_id,
@@ -93,14 +93,14 @@ def test_app_create_reserves_cloud_identity_and_workspace(monkeypatch):
         },
     )
 
-    result = agent_tools.app_create("Example")
+    result = apps.app_create("Example")
     assert result["app_id"] == "app_cloud123"
     assert result["workspace_path"] == "/workspace/apps/app_cloud123"
 
 
 def test_app_workspace_resolves_durable_source(monkeypatch):
     monkeypatch.setattr(
-        agent_tools,
+        apps,
         "resolve_app_workspace",
         lambda app_id, origin_chat_id=None: {
             "app_id": app_id,
@@ -109,7 +109,7 @@ def test_app_workspace_resolves_durable_source(monkeypatch):
         },
     )
 
-    assert agent_tools.app_workspace("app_cloud123")["workspace_path"] == (
+    assert apps.app_workspace("app_cloud123")["workspace_path"] == (
         "/workspace/apps/app_cloud123"
     )
 
@@ -130,9 +130,9 @@ def test_app_info_and_secret_metadata_use_cloud_client(monkeypatch):
                 ]
             }
 
-    monkeypatch.setattr(agent_tools, "_cloud", FakeCloud)
-    assert agent_tools.app_info("app_cloud123")["app"]["id"] == "app_cloud123"
-    secret = agent_tools.secrets_list()["secrets"][0]
+    monkeypatch.setattr(apps, "_cloud", FakeCloud)
+    assert apps.app_info("app_cloud123")["app"]["id"] == "app_cloud123"
+    secret = apps.secrets_list()["secrets"][0]
     assert secret["id"] == "sec_cloud123"
     assert "value" not in secret
 
@@ -169,14 +169,14 @@ def test_lifecycle_status_logs_stop_restart(temp_store):
         spec=Spec(run=["python", "app.py"], port=8000),
     )
     try:
-        assert agent_tools.app_status("life1")["running"] is True
-        assert "logs" in agent_tools.app_logs("life1")
+        assert apps.app_status("life1")["running"] is True
+        assert "logs" in apps.app_logs("life1")
 
-        assert agent_tools.app_stop("life1")["status"] == "stopped"
-        assert agent_tools.app_status("life1")["running"] is False
+        assert apps.app_stop("life1")["status"] == "stopped"
+        assert apps.app_status("life1")["running"] is False
 
-        restarted = agent_tools.app_restart("life1")
+        restarted = apps.app_restart("life1")
         assert restarted["status"] == "running" and restarted["health_ok"] is True
-        assert agent_tools.app_status("life1")["running"] is True
+        assert apps.app_status("life1")["running"] is True
     finally:
         Supervisor().stop(project)
