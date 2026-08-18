@@ -4,6 +4,13 @@ __all__ = [
     "edit",
     "glob",
     "grep",
+    "find_relevant_apps",
+    "find_app_references",
+    "inspect_app",
+    "list_app_files",
+    "read_app_file",
+    "search_app",
+    "search_app_content",
     "processes",
     "process_spawn",
     "process_list",
@@ -41,6 +48,34 @@ def __getattr__(name: str):
         from .search import glob, grep
 
         return {"glob": glob, "grep": grep}[name]
+    if name in {
+        "find_relevant_apps",
+        "find_app_references",
+        "inspect_app",
+        "list_app_files",
+        "read_app_file",
+        "search_app",
+        "search_app_content",
+    }:
+        from .app_search import (
+            find_app_references,
+            find_relevant_apps,
+            inspect_app,
+            list_app_files,
+            read_app_file,
+            search_app,
+            search_app_content,
+        )
+
+        return {
+            "find_relevant_apps": find_relevant_apps,
+            "find_app_references": find_app_references,
+            "inspect_app": inspect_app,
+            "list_app_files": list_app_files,
+            "read_app_file": read_app_file,
+            "search_app": search_app,
+            "search_app_content": search_app_content,
+        }[name]
     if name in {
         "processes",
         "process_spawn",

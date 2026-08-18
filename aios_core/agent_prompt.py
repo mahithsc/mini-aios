@@ -251,6 +251,52 @@ _MEMORY_TOOLS_BLOCK = """
 ),
 """.strip()
 
+_APP_SEARCH_TOOLS_BLOCK = """
+"find_relevant_apps": (
+    "Rank durable apps under workspace/apps against natural-language text, keywords, logs, or code. "
+    "Use this before creating a project when the request may refer to an existing app.",
+    {"content": "string", "limit": "number? (1-20)"},
+    find_relevant_apps,
+),
+"inspect_app": (
+    "Summarize an app's components, important files, file types, and directory tree. "
+    "Use immediately after identifying an unfamiliar app.",
+    {"app_path": "string", "max_depth": "number? (1-10)",
+     "include_hidden": "boolean?", "limit": "number? (1-1000)"},
+    inspect_app,
+),
+"list_app_files": (
+    "Inventory files in one app. Use for questions about which assets, migrations, routes, "
+    "or file types exist; pass extensions as an array instead of constructing brace globs.",
+    {"app_path": "string", "under": "string?", "extensions": "array?",
+     "name_contains": "array?", "path_contains": "array?",
+     "include_generated": "boolean?", "limit": "number? (1-1000)"},
+    list_app_files,
+),
+"search_app_content": (
+    "Search text inside one app. Pass paths returned by list_app_files to search only selected files; "
+    "otherwise use under and extensions for a broader scope.",
+    {"app_path": "string", "query": "string", "paths": "array?", "under": "string?",
+     "extensions": "array?", "match_mode": "string? (keywords|literal|regex)",
+     "context": "number? (0-10)", "include_generated": "boolean?",
+     "limit": "number? (1-200)"},
+    search_app_content,
+),
+"find_app_references": (
+    "Find where asset names, module names, symbols, or paths are referenced inside one app.",
+    {"app_path": "string", "targets": "array", "under": "string?",
+     "extensions": "array?", "context": "number? (0-10)",
+     "include_generated": "boolean?", "limit": "number? (1-200)"},
+    find_app_references,
+),
+"read_app_file": (
+    "Read a paginated text file within one app after inventory or content search identifies it.",
+    {"app_path": "string", "file_path": "string", "offset": "number?",
+     "limit": "number? (1-500)"},
+    read_app_file,
+),
+""".strip()
+
 
 def _section(name: str, body: str) -> str:
     return f"<{name}>\n{body.strip()}\n</{name}>"
@@ -311,6 +357,9 @@ def build_agent_prompt(
             Prefer inspect-first behavior. For non-trivial work, gather a small amount of context before committing to a plan.
             Ask follow-up questions when the task is ambiguous, risky, or long-horizon enough that clarification will materially improve the result.
             Before creating a new project or folder, inspect the workspace for existing relevant work and extend it when possible instead of creating a duplicate.
+            Use `find_relevant_apps` when a request may refer to an existing durable app, then preserve its returned app path in subsequent calls.
+            For an unfamiliar app, call `inspect_app` before answering detailed questions. Use `list_app_files` for inventories, `search_app_content` for text, `find_app_references` for usage, and `read_app_file` for surrounding implementation.
+            Treat a surprising empty result as inconclusive: inspect the app structure or broaden the scoped search before claiming that a file, asset, or reference does not exist.
             """,
         ),
         _section(
@@ -470,7 +519,7 @@ def build_agent_prompt(
 
     tools_block = _BASE_TOOLS_BLOCK
     if include_memory_tools:
-        tools_block = f"{tools_block}\n{_MEMORY_TOOLS_BLOCK}"
+        tools_block = f"{tools_block}\n{_APP_SEARCH_TOOLS_BLOCK}\n{_MEMORY_TOOLS_BLOCK}"
     if include_subagent_tool:
         tools_block = f"{tools_block}\n{_SUBAGENT_TOOLS_BLOCK}"
     sections.append(_section("tools", tools_block))
