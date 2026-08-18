@@ -1,9 +1,18 @@
 .env
+.DS_Store
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
 .venv/
 .dev/
 dist/
+/uploads/
+/downloads/
+/assistants/
+/heartbeat_logs/
+/logs/
+/transcripts/
 
 # sessions
 session/

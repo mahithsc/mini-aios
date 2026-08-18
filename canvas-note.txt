@@ -1,5 +1,0 @@
-Canvas demo
-
-If you can see this file in the canvas, the canvas integration is working.
-
-— ChatGPT
