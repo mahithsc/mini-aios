@@ -28,6 +28,7 @@ the active data root.
 │   └── aios.db
 ├── projects/
 │   └── <project-id>/
+│       └── project.md
 ├── sessions/
 │   └── <chat-id>/
 │       ├── scratch/
@@ -40,8 +41,9 @@ the active data root.
 
 - `state/` contains service-owned state, including the SQLite database used
   for chats, schedules, notifications, and device state.
-- `projects/` contains durable project source. A project is independent of any
-  one chat even when a chat originally created it.
+- `projects/` contains durable, longer-lived work. SQLite owns project identity,
+  and Mini AIOS creates only `project.md`; the agent chooses every other file
+  and directory. A project is independent of any one chat.
 - `sessions/<chat-id>/scratch/` is the default working directory for a chat.
   It is suitable for intermediate files, experiments, and unpromoted work.
 - `sessions/<chat-id>/uploads/` contains inbound user attachments. Stored
@@ -51,8 +53,9 @@ the active data root.
   scheduled-run logs beneath `runs/cron_logs/`.
 - `skills/` and `memories/` contain user-owned agent extensions and curated
   memory respectively.
-- `deployments/` contains deployment registry and lifecycle state. Project
-  source remains in `projects/`.
+- `deployments/` contains legacy deployment registry and lifecycle state.
+  Deployment is separate from project identity and project source remains in
+  `projects/`.
 
 Uploads are owned by the session but remain outside its scratch directory, so
 scratch cleanup cannot change attachment identity. Mini AIOS does not maintain

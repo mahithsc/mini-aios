@@ -58,8 +58,9 @@ def test_database_initialization_rejects_incompatible_migration_history(
                 """
                 INSERT INTO schema_migrations (
                     version, name, checksum, applied_at, app_release
-                ) VALUES (6, 'future', 'future-v1', 1, 'future-release')
-                """
+                ) VALUES (?, 'future', 'future-v1', 1, 'future-release')
+                """,
+                (DATABASE_SCHEMA_VERSION + 1,),
             )
 
     with pytest.raises(RuntimeError, match="newer|name/checksum"):

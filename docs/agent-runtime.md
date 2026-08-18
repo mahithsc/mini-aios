@@ -34,7 +34,9 @@ does not implement the agent loop.
 
 Domain implementations such as memory, cron scheduling, project storage, and
 deployment remain outside `agent`. Their files under `agent/tools` are only the
-model-facing adapters.
+model-facing adapters. Project lifecycle is exposed as one `project` tool with
+an action parameter; the SQLite-backed implementation lives in
+`aios_core/projects.py`.
 
 The runtime receives resolved paths through its run context rather than
 choosing a storage root itself. Ordinary relative tool paths default to

@@ -19,6 +19,7 @@ _EXPECTED_SCHEMA_MIGRATIONS = {
     3: ("canonical_conversation_storage", "conversation-v1"),
     4: ("conversation_rail_metadata", "conversation-v2"),
     5: ("cloud_deployment_runtime", "cloud-deploy-v1"),
+    6: ("durable_projects", "projects-v1"),
 }
 log = logging.getLogger(__name__)
 
@@ -190,6 +191,17 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_gateway_events_session_id_id
                 ON gateway_events(session_id, id);
+
+            CREATE TABLE IF NOT EXISTS projects (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL
+                            CHECK (length(trim(name)) BETWEEN 1 AND 200),
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_projects_updated_at
+                ON projects(updated_at DESC, created_at DESC);
 
             CREATE TABLE IF NOT EXISTS chats (
                 id          TEXT PRIMARY KEY,
@@ -552,6 +564,17 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
             INSERT OR IGNORE INTO schema_migrations (
                 version, name, checksum, applied_at, app_release
             ) VALUES (5, 'cloud_deployment_runtime', 'cloud-deploy-v1', ?, ?)
+            """,
+            (
+                int(time.time() * 1000),
+                os.getenv("AIOS_RELEASE_ID", "development"),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO schema_migrations (
+                version, name, checksum, applied_at, app_release
+            ) VALUES (6, 'durable_projects', 'projects-v1', ?, ?)
             """,
             (
                 int(time.time() * 1000),

@@ -96,7 +96,7 @@ def test_updater_ready_rejects_migration_checksum_mismatch(
     initialize_app_db(str(database))
     with sqlite3.connect(database) as connection:
         connection.execute(
-            "UPDATE schema_migrations SET checksum = 'wrong' WHERE version = 5"
+            "UPDATE schema_migrations SET checksum = 'wrong' WHERE version = 6"
         )
 
     monkeypatch.setattr(updater, "ensure_data_dir", lambda: data_dir)

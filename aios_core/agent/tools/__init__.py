@@ -14,11 +14,7 @@ __all__ = [
     "cron",
     "notify",
     "pi",
-    "apps_list",
-    "app_status",
-    "app_logs",
-    "app_restart",
-    "app_stop",
+    "project",
     "tavily_search",
     "fetch",
     "memory",
@@ -77,16 +73,10 @@ def __getattr__(name: str):
         from ..pi.tool import pi
 
         return pi
-    if name in {"apps_list", "app_status", "app_logs", "app_restart", "app_stop"}:
-        from .apps import app_logs, app_restart, app_status, app_stop, apps_list
+    if name == "project":
+        from .project import project
 
-        return {
-            "apps_list": apps_list,
-            "app_status": app_status,
-            "app_logs": app_logs,
-            "app_restart": app_restart,
-            "app_stop": app_stop,
-        }[name]
+        return project
     if name == "tavily_search":
         from .tavily import tavily_search
 

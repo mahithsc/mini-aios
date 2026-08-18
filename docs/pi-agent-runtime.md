@@ -68,6 +68,12 @@ filters and ordering, never raw SQL. Provider credentials, user secret values,
 generic HTTP access, arbitrary source roots, and direct provider deployment
 tools are not exposed through the extension.
 
+This deployment bridge is separate from the main agent's `project` lifecycle
+tool. A project is a SQLite record plus a durable directory beginning with
+`project.md`; creating one does not create cloud identity, deployment metadata,
+or a manifest. The older metadata requirements described above apply only when
+the separate cloud-deployment bridge is used.
+
 ## Safety boundary
 
 Pi has no built-in sandbox. The validated `path` selects the starting directory

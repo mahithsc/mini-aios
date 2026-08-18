@@ -24,22 +24,11 @@ from .tools import (
     tavily_search,
     write,
 )
-from .tools.apps import (
-    app_create,
-    app_info,
-    app_logs,
-    app_restart,
-    app_status,
-    app_stop,
-    app_workspace,
-    apps_list,
-    legacy_apps_list,
-    secrets_list,
-)
 from .tools.cron import cron
 from .tools.fetch import fetch
 from .tools.memory import memory
 from .tools.notify import notify
+from .tools.project import project
 from .tools.session_search import session_search
 from .tools.subagent import subagent
 
@@ -79,16 +68,7 @@ MAIN_TOOLS = [
     memory,
     session_search,
     subagent,
-    app_create,
-    app_workspace,
-    app_info,
-    secrets_list,
-    apps_list,
-    legacy_apps_list,
-    app_status,
-    app_logs,
-    app_restart,
-    app_stop,
+    project,
 ]
 
 
