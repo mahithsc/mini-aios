@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -563,12 +564,71 @@ def _canonical_deployment_source_path(
     return data_dir / "sessions" / chat_id / Path(*parts[2:])
 
 
+def _promote_deployed_scratch_source(
+    source: Path,
+    *,
+    slug: str,
+    data_dir: Path,
+    archive_root: Path,
+    report: dict[str, Any],
+) -> Path:
+    """Promote a durable local deployment out of chat scratch storage."""
+
+    resolved_source = source.resolve(strict=False)
+    try:
+        relative_source = resolved_source.relative_to(data_dir.resolve(strict=False))
+    except ValueError:
+        return source
+    parts = relative_source.parts
+    if len(parts) < 4 or parts[0] != "sessions" or parts[2] != "scratch":
+        return source
+
+    recorded_target: Path | None = None
+    for action in reversed(report["actions"]):
+        if not isinstance(action, dict):
+            continue
+        if action.get("action") != "moved" or action.get("source") != str(source):
+            continue
+        destination = action.get("destination")
+        if not isinstance(destination, str):
+            continue
+        candidate = Path(destination)
+        try:
+            candidate.resolve(strict=False).relative_to(
+                (data_dir / "projects").resolve(strict=False)
+            )
+        except ValueError:
+            continue
+        recorded_target = candidate
+        break
+
+    safe_slug = "".join(
+        character if character.isalnum() or character in "._-" else "-"
+        for character in slug
+    ).strip("._-")
+    if not safe_slug:
+        safe_slug = "legacy-project"
+    target = recorded_target or data_dir / "projects" / safe_slug
+    if recorded_target is None and target.exists() and not _paths_are_equal(source, target):
+        source_digest = hashlib.sha256(str(source).encode("utf-8")).hexdigest()[:8]
+        target = data_dir / "projects" / f"{safe_slug}-legacy-{source_digest}"
+
+    _merge_path(
+        source,
+        target,
+        archive_root / "deployed-scratch" / safe_slug,
+        report,
+    )
+    return target if target.exists() else source
+
+
 def _rewrite_deployment_registry_paths(
     registry_path: Path,
     *,
     workspace_dir: Path,
     source_root: Path,
     data_dir: Path,
+    archive_root: Path,
     report: dict[str, Any],
 ) -> None:
     """Keep deployed project records usable after their source trees move."""
@@ -596,6 +656,18 @@ def _rewrite_deployment_registry_paths(
             source_root=source_root,
             data_dir=data_dir,
         )
+        if canonical_path is None:
+            candidate = Path(source_value).expanduser()
+            if candidate.is_absolute():
+                canonical_path = candidate
+        if canonical_path is not None:
+            canonical_path = _promote_deployed_scratch_source(
+                canonical_path,
+                slug=str(slug),
+                data_dir=data_dir,
+                archive_root=archive_root,
+                report=report,
+            )
         if canonical_path is None or str(canonical_path) == source_value:
             continue
         raw_project["source_dir"] = str(canonical_path)
@@ -654,6 +726,7 @@ def _repair_completed_layout(
         workspace_dir=workspace_dir,
         source_root=source_root,
         data_dir=canonical_root,
+        archive_root=archive_root,
         report=report,
     )
     _merge_path(
@@ -886,6 +959,7 @@ def migrate_storage_layout(
             workspace_dir=workspace_dir,
             source_root=source_root,
             data_dir=canonical_root,
+            archive_root=archive_root,
             report=report,
         )
 

@@ -171,9 +171,7 @@ def test_storage_migration_promotes_active_db_and_preserves_collisions(
     deployment_registry = json.loads(
         (data_dir / "deployments" / "projects.json").read_text(encoding="utf-8")
     )
-    canonical_deployed_source = (
-        data_dir / "sessions" / "chat-1" / "scratch" / "deployed-app"
-    )
+    canonical_deployed_source = data_dir / "projects" / "deployed-app"
     assert deployment_registry["deployed-app"]["source_dir"] == str(
         canonical_deployed_source
     )
@@ -311,8 +309,10 @@ def test_completed_v1_layout_receives_idempotent_finalizers(tmp_path: Path) -> N
     repository = tmp_path / "mini-aios"
     data_dir = repository / ".mini-aios"
     old_source = repository / "workspace" / "session" / "chat-1" / "files" / "app"
-    canonical_source = data_dir / "sessions" / "chat-1" / "scratch" / "app"
-    canonical_source.mkdir(parents=True)
+    migrated_scratch_source = data_dir / "sessions" / "chat-1" / "scratch" / "app"
+    canonical_source = data_dir / "projects" / "app"
+    migrated_scratch_source.mkdir(parents=True)
+    (migrated_scratch_source / "app.py").write_text("app", encoding="utf-8")
     registry_path = data_dir / "deployments" / "projects.json"
     registry_path.parent.mkdir(parents=True)
     registry_path.write_text(
@@ -347,6 +347,8 @@ def test_completed_v1_layout_receives_idempotent_finalizers(tmp_path: Path) -> N
 
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     assert registry["app"]["source_dir"] == str(canonical_source)
+    assert (canonical_source / "app.py").is_file()
+    assert not migrated_scratch_source.exists()
     assert (data_dir / "runs" / "cron_logs").is_dir()
     assert (data_dir / "uploads" / "chat-1" / "input.txt").is_file()
     assert repaired["repairedAt"]
