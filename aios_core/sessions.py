@@ -28,10 +28,8 @@ from server.types.chat import (
 
 from .db import DB_PATH, get_db_connection, initialize_app_db
 from .workspace import (
-    get_artifacts_dir,
     get_data_dir,
     get_sessions_dir,
-    get_uploads_dir,
     is_production,
 )
 
@@ -39,8 +37,6 @@ CHAT_MESSAGE_ADAPTER = TypeAdapter(ChatMessage)
 LLM_EVENT_ADAPTER = TypeAdapter(LLMEvent)
 VALID_CHAT_STATUSES = {"idle", "streaming", "error", "cancelled"}
 SESSION_DIR = get_sessions_dir()
-UPLOADS_DIR = get_uploads_dir()
-ARTIFACTS_DIR = get_artifacts_dir()
 SESSION_MANIFEST_PATH = SESSION_DIR / "session_manifest.json"
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _LEGACY_ROOT_SESSION_DIR = _PROJECT_ROOT / "session"
@@ -164,27 +160,15 @@ def get_sandbox_relative_dir(owner_id: str) -> Path:
 
 
 def get_sandbox_uploads_relative_dir(owner_id: str) -> Path:
-    return Path("uploads") / _sanitize_path_segment(owner_id, "chat")
+    return get_sandbox_relative_dir(owner_id) / "uploads"
 
 
 def get_sandbox_files_relative_dir(owner_id: str) -> Path:
     return get_sandbox_relative_dir(owner_id) / "scratch"
 
 
-def get_sandbox_artifacts_relative_dir(owner_id: str) -> Path:
-    return Path("artifacts") / _sanitize_path_segment(owner_id, "chat")
-
-
-def get_sandbox_artifact_relative_dir(owner_id: str, artifact_id: str) -> Path:
-    return get_sandbox_artifacts_relative_dir(owner_id) / _sanitize_path_segment(artifact_id, "artifact")
-
-
 def get_sandbox_transcript_relative_path(owner_id: str) -> Path:
     return get_sandbox_relative_dir(owner_id) / "chat.json"
-
-
-def get_sandbox_artifact_entrypoint_relative_path(owner_id: str, artifact_id: str) -> Path:
-    return get_sandbox_artifact_relative_dir(owner_id, artifact_id) / "index.html"
 
 
 def get_chat_session_relative_dir(chat_id: str) -> Path:
@@ -203,18 +187,6 @@ def get_chat_scratch_relative_dir(chat_id: str) -> Path:
     return get_sandbox_files_relative_dir(chat_id)
 
 
-def get_chat_artifacts_relative_dir(chat_id: str) -> Path:
-    return get_sandbox_artifacts_relative_dir(chat_id)
-
-
-def get_chat_artifact_relative_dir(chat_id: str, artifact_id: str) -> Path:
-    return get_sandbox_artifact_relative_dir(chat_id, artifact_id)
-
-
-def get_chat_artifact_entrypoint_relative_path(chat_id: str, artifact_id: str) -> Path:
-    return get_sandbox_artifact_entrypoint_relative_path(chat_id, artifact_id)
-
-
 def _sandbox_dir(owner_id: str) -> Path:
     return Path(SESSION_DIR) / _sanitize_path_segment(owner_id, "chat")
 
@@ -224,15 +196,11 @@ def _sandbox_transcript_file(owner_id: str) -> Path:
 
 
 def _sandbox_uploads_dir(owner_id: str) -> Path:
-    return Path(UPLOADS_DIR) / _sanitize_path_segment(owner_id, "chat")
+    return _sandbox_dir(owner_id) / "uploads"
 
 
 def _sandbox_files_dir(owner_id: str) -> Path:
     return _sandbox_dir(owner_id) / "scratch"
-
-
-def _sandbox_artifacts_dir(owner_id: str) -> Path:
-    return Path(ARTIFACTS_DIR) / _sanitize_path_segment(owner_id, "chat")
 
 
 def get_sandbox_dir(owner_id: str) -> Path:
@@ -251,18 +219,6 @@ def get_sandbox_files_dir(owner_id: str) -> Path:
     return _sandbox_files_dir(owner_id)
 
 
-def get_sandbox_artifacts_dir(owner_id: str) -> Path:
-    return _sandbox_artifacts_dir(owner_id)
-
-
-def get_sandbox_artifact_dir(owner_id: str, artifact_id: str) -> Path:
-    return _sandbox_artifacts_dir(owner_id) / _sanitize_path_segment(artifact_id, "artifact")
-
-
-def get_sandbox_artifact_entrypoint_path(owner_id: str, artifact_id: str) -> Path:
-    return get_sandbox_artifact_dir(owner_id, artifact_id) / "index.html"
-
-
 def get_chat_files_dir(chat_id: str) -> Path:
     return get_sandbox_files_dir(chat_id)
 
@@ -275,24 +231,11 @@ def get_chat_uploads_dir(chat_id: str) -> Path:
     return get_sandbox_uploads_dir(chat_id)
 
 
-def get_chat_artifacts_dir(chat_id: str) -> Path:
-    return get_sandbox_artifacts_dir(chat_id)
-
-
-def get_chat_artifact_dir(chat_id: str, artifact_id: str) -> Path:
-    return get_sandbox_artifact_dir(chat_id, artifact_id)
-
-
-def get_chat_artifact_entrypoint_path(chat_id: str, artifact_id: str) -> Path:
-    return get_sandbox_artifact_entrypoint_path(chat_id, artifact_id)
-
-
 def _ensure_sandbox_dirs(owner_id: str) -> Path:
     session_dir = _sandbox_dir(owner_id)
     session_dir.mkdir(parents=True, exist_ok=True)
     _sandbox_uploads_dir(owner_id).mkdir(parents=True, exist_ok=True)
     _sandbox_files_dir(owner_id).mkdir(parents=True, exist_ok=True)
-    _sandbox_artifacts_dir(owner_id).mkdir(parents=True, exist_ok=True)
     return session_dir
 
 
@@ -304,17 +247,10 @@ def ensure_chat_storage_dirs(chat_id: str) -> Path:
     """Create the typed filesystem roots owned by ``chat_id``.
 
     A chat can exist only in SQLite after an import or restore. Runtime callers
-    use this public helper before exposing scratch/artifact paths to tools.
+    use this public helper before exposing scratch and upload paths to tools.
     """
 
     return _ensure_chat_dirs(chat_id)
-
-
-def ensure_chat_artifact_dir(chat_id: str, artifact_id: str) -> Path:
-    _ensure_chat_dirs(chat_id)
-    artifact_dir = get_chat_artifact_dir(chat_id, artifact_id)
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    return artifact_dir
 
 
 def _get_session_entry(chat_id: str) -> dict[str, Any] | None:
@@ -344,13 +280,14 @@ def _update_manifest_entry(chat_id: str, updated_entry: dict[str, Any]) -> None:
 def _canonical_attachment_path(chat_id: str, file_path: str) -> str:
     """Normalize a stored chat-owned path to the typed data-root layout.
 
-    Older releases stored uploads beside session scratch files and sometimes
-    stored derived files or artifacts there too. Absolute paths are left
-    untouched because they may point at explicitly imported external data.
+    Older releases stored uploads at the data root or beside session scratch
+    files. Absolute paths are left untouched because they may point at
+    explicitly imported external data. Removed artifact paths are quarantined.
     """
 
     chat_segment = _sanitize_path_segment(chat_id, "chat")
-    invalid_path = Path("uploads", chat_segment, ".invalid-path").as_posix()
+    upload_root = Path("sessions", chat_segment, "uploads")
+    invalid_path = (upload_root / ".invalid-path").as_posix()
     normalized_path = file_path.replace("\\", "/")
     if normalized_path == "scratch:":
         scratch_suffix = Path(".")
@@ -393,18 +330,20 @@ def _canonical_attachment_path(chat_id: str, file_path: str) -> str:
         category = parts[2]
         suffix = parts[3:]
         if category == "uploads" and suffix:
-            return (Path("uploads", chat_segment, *suffix)).as_posix()
-        if category == "artifacts" and suffix:
-            return (Path("artifacts", chat_segment, *suffix)).as_posix()
+            return (upload_root / Path(*suffix)).as_posix()
+        if category == "artifacts":
+            return invalid_path
         if category in {"files", "scratch"} and suffix:
             return (Path("sessions", chat_segment, "scratch", *suffix)).as_posix()
 
     if (
         len(parts) >= 3
-        and parts[0] in {"uploads", "artifacts"}
+        and parts[0] == "uploads"
         and parts[1] == chat_segment
     ):
-        return Path(*parts).as_posix()
+        return (upload_root / Path(*parts[2:])).as_posix()
+    if len(parts) >= 2 and parts[0] == "artifacts" and parts[1] == chat_segment:
+        return invalid_path
     return raw_path.as_posix()
 
 
@@ -680,12 +619,13 @@ def _remap_imported_attachment_paths(
             canonical_relative = Path(canonical_path)
 
             canonical_upload_prefix = (
-                "uploads",
+                "sessions",
                 _sanitize_path_segment(chat_id, "chat"),
+                "uploads",
             )
             is_chat_upload = (
-                canonical_relative.parts[:2] == canonical_upload_prefix
-                and len(canonical_relative.parts) > 2
+                canonical_relative.parts[:3] == canonical_upload_prefix
+                and len(canonical_relative.parts) > 3
             )
             invalid_path = Path(*canonical_upload_prefix, ".invalid-path").as_posix()
             if canonical_path == invalid_path:

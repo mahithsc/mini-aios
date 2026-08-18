@@ -30,11 +30,8 @@ the active data root.
 │   └── <project-id>/
 ├── sessions/
 │   └── <chat-id>/
-│       └── scratch/
-├── uploads/
-│   └── <chat-id>/
-├── artifacts/
-│   └── <chat-id>/
+│       ├── scratch/
+│       └── uploads/
 ├── runs/
 ├── skills/
 ├── memories/
@@ -47,10 +44,9 @@ the active data root.
   one chat even when a chat originally created it.
 - `sessions/<chat-id>/scratch/` is the default working directory for a chat.
   It is suitable for intermediate files, experiments, and unpromoted work.
-- `uploads/<chat-id>/` contains inbound user attachments. Stored attachment
-  paths are relative to the data root, for example
-  `uploads/<chat-id>/report.pdf`.
-- `artifacts/<chat-id>/` contains outputs deliberately exposed to the user.
+- `sessions/<chat-id>/uploads/` contains inbound user attachments. Stored
+  attachment paths are relative to the data root, for example
+  `sessions/<chat-id>/uploads/report.pdf`.
 - `runs/` contains durable agent-run metadata, event logs, snapshots, and
   scheduled-run logs beneath `runs/cron_logs/`.
 - `skills/` and `memories/` contain user-owned agent extensions and curated
@@ -58,10 +54,10 @@ the active data root.
 - `deployments/` contains deployment registry and lifecycle state. Project
   source remains in `projects/`.
 
-Uploads and artifacts are deliberately not nested inside scratch space. A
-scratch cleanup policy can therefore be introduced without changing attachment
-identity or deleting published outputs. There is no extra `workspace/` wrapper
-beneath the data root.
+Uploads are owned by the session but remain outside its scratch directory, so
+scratch cleanup cannot change attachment identity. Mini AIOS does not maintain
+a separate user-visible artifact directory. There is no extra `workspace/`
+wrapper beneath the data root.
 
 ## Agent path scopes
 
@@ -72,6 +68,7 @@ scratch directory. Explicit scopes remove ambiguity:
 | --- | --- |
 | `notes.md` | `sessions/<chat-id>/scratch/` |
 | `scratch:/notes.md` | `sessions/<chat-id>/scratch/` |
+| `data:/sessions/<chat-id>/uploads/report.pdf` | the current session's uploads directory |
 | `data:/projects/<project-id>/...` | the canonical data root |
 
 Existing data-root-relative paths beginning with a canonical top-level
@@ -85,10 +82,14 @@ Older releases wrote development data to repository-level `workspace/`,
 `workspace/session/<chat-id>/files/` and `workspace/apps/<app-id>/`. These are
 legacy migration inputs, not valid destinations for new writes.
 
-Compatibility code may read or adopt those locations during migration. New
-records and files use the canonical directories above, and legacy paths should
-remain described as legacy wherever they appear in code, tests, or operations
-documentation.
+Compatibility code may read or adopt those locations during migration. Legacy
+top-level `uploads/<chat-id>/` content is moved to the corresponding session.
+The removed top-level and per-session `artifacts/` directories are archived
+under `state/migration-backups/session-layout-v2/`; they are not active runtime
+storage. The resumable migration journal is
+`state/migrations/session-layout-v2.json`. New records and files use the
+canonical directories above, and legacy paths should remain described as
+legacy wherever they appear in code, tests, or operations documentation.
 
 An archived legacy SQLite database is retained intact after migration. Chats,
 crons, cron runs, and device pairing are imported with canonical destination

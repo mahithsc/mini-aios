@@ -15,7 +15,7 @@ def _prompt() -> str:
         data_dir="/tmp/.mini-aios",
         current_chat_id="chat-1",
         current_chat_scratch_dir="/tmp/.mini-aios/sessions/chat-1/scratch",
-        current_chat_uploads_dir="/tmp/.mini-aios/uploads/chat-1",
+        current_chat_uploads_dir="/tmp/.mini-aios/sessions/chat-1/uploads",
     )
 
 
@@ -33,7 +33,7 @@ def test_prompt_distinguishes_scratch_data_and_project_scopes() -> None:
     prompt = _prompt()
 
     assert "Chat scratch directory: /tmp/.mini-aios/sessions/chat-1/scratch" in prompt
-    assert "Chat uploads directory: /tmp/.mini-aios/uploads/chat-1" in prompt
+    assert "Chat uploads directory: /tmp/.mini-aios/sessions/chat-1/uploads" in prompt
     assert "Data root: /tmp/.mini-aios" in prompt
     assert "`scratch:/...`" in prompt
     assert "`data:/projects/...`" in prompt

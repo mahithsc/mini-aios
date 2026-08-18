@@ -91,8 +91,6 @@ Privileges are constrained even though the service is root:
 /var/lib/mini-aios/state/aios.db
 /var/lib/mini-aios/projects/
 /var/lib/mini-aios/sessions/
-/var/lib/mini-aios/uploads/
-/var/lib/mini-aios/artifacts/
 /var/lib/mini-aios/runs/
 /var/lib/mini-aios/skills/
 /var/lib/mini-aios/memories/
@@ -353,8 +351,8 @@ on post-backup failure:
   mark rolled_back or recovery_required
 ```
 
-The transaction never deletes projects, session scratch files, uploads,
-artifacts, skills, memories, pairing state, or cron definitions.
+The transaction never deletes projects, session files, archived legacy
+artifact data, skills, memories, pairing state, or cron definitions.
 
 ## 13. Updater self-update
 

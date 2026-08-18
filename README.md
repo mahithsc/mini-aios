@@ -12,8 +12,8 @@ Development data lives in `<repository>/.mini-aios/`. Production data lives in
 `~/.mini-aios/`; the appliance mounts `/var/lib/mini-aios` at
 `/root/.mini-aios` inside the box container.
 
-The data root separates durable projects, chat scratch files, uploads,
-artifacts, runs, skills, memories, deployments, and service state. See
+The data root separates durable projects, session scratch files and uploads,
+runs, skills, memories, deployments, and service state. See
 [the runtime storage layout](docs/storage-layout.md) for the complete contract
 and legacy migration boundary.
 

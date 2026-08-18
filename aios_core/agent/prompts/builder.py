@@ -359,7 +359,7 @@ def build_agent_prompt(
                 Chat uploads directory: {current_chat_uploads_dir or "unavailable"}
                 Ordinary relative paths for file tools, search tools, shell commands, and Pi default to chat scratch.
                 Use `scratch:/...` when you want to state the scratch scope explicitly.
-                Use `data:/projects/...`, `data:/uploads/...`, or another `data:/...` path when you intentionally need the persistent data root. Canonical top-level paths such as `projects/...`, `sessions/...`, and `uploads/...` are also accepted for compatibility.
+                Use `data:/projects/...`, `data:/sessions/{current_chat_id}/uploads/...`, or another `data:/...` path when you intentionally need the persistent data root. Canonical paths beginning with `projects/...` or `sessions/...` are also accepted. Legacy `uploads/{current_chat_id}/...` paths are translated only for compatibility.
                 """,
             )
         )

@@ -33,9 +33,9 @@ def test_agent_paths_default_to_scratch_and_support_explicit_scopes(
     )
     assert context.resolve_agent_path(
         "data:/workspace/session/chat-1/uploads/old.txt"
-    ) == (data_dir / "uploads" / "chat-1" / "old.txt")
-    assert context.resolve_agent_path("sessions/chat-1/artifacts/index.html") == (
-        data_dir / "artifacts" / "chat-1" / "index.html"
+    ) == (data_dir / "sessions" / "chat-1" / "uploads" / "old.txt")
+    assert context.resolve_agent_path("data:/uploads/chat-1/old.txt") == (
+        data_dir / "sessions" / "chat-1" / "uploads" / "old.txt"
     )
 
 

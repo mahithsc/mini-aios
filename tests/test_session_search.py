@@ -17,8 +17,6 @@ def isolated_search_storage(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sessions, "DB_PATH", str(workspace_dir / "aios.db"))
     monkeypatch.setattr(sessions, "SESSION_DIR", session_dir)
-    monkeypatch.setattr(sessions, "UPLOADS_DIR", workspace_dir / "uploads")
-    monkeypatch.setattr(sessions, "ARTIFACTS_DIR", workspace_dir / "artifacts")
     monkeypatch.setattr(
         sessions,
         "SESSION_MANIFEST_PATH",

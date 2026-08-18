@@ -27,7 +27,6 @@ _CURRENT_CHAT_SCRATCH_DIR: ContextVar[str | None] = ContextVar(
     "aios_current_chat_scratch_dir", default=None
 )
 _DATA_ROOT_SENTINELS = {
-    "artifacts",
     "apps",
     "cron_logs",
     "deploy",
@@ -110,9 +109,9 @@ def _canonical_data_relative_path(path: Path) -> Path:
         if category == "files":
             return Path("sessions", chat_id, "scratch", *suffix)
         if category == "uploads":
-            return Path("uploads", chat_id, *suffix)
-        if category == "artifacts":
-            return Path("artifacts", chat_id, *suffix)
+            return Path("sessions", chat_id, "uploads", *suffix)
+    if len(parts) >= 2 and parts[0] == "uploads":
+        return Path("sessions", parts[1], "uploads", *parts[2:])
     return Path(*parts) if parts else Path(".")
 
 

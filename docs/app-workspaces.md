@@ -1,7 +1,7 @@
 # Durable project workspaces
 
-Application source is stored as a durable project, independently from chat
-scratch space, uploads, and artifacts:
+Application source is stored as a durable project, independently from session
+scratch space and uploads:
 
 ```text
 <data-root>/
@@ -13,11 +13,9 @@ scratch space, uploads, and artifacts:
 │       ├── aios.deploy.yaml
 │       └── ...application source
 ├── sessions/
-│   └── <chat-id>/scratch/
-├── uploads/
 │   └── <chat-id>/
-└── artifacts/
-    └── <chat-id>/
+│       ├── scratch/
+│       └── uploads/
 ```
 
 See [the runtime storage contract](./storage-layout.md) for development and

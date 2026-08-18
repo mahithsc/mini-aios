@@ -31,8 +31,8 @@ The first implementation should be a single static Go binary installed as a `sys
 The current repository already has several useful boundaries:
 
 - production data lives below `~/.mini-aios`;
-- `state/aios.db`, projects, session scratch files, uploads, artifacts, runs,
-  skills, memories, and deployments are separate from application code;
+- `state/aios.db`, projects, session scratch files and uploads, runs, skills,
+  memories, and deployments are separate from application code;
 - `/health` provides a basic liveness check;
 - the box is packaged as a Docker image and run with Docker Compose;
 - device identity and pairing credentials survive container restarts in SQLite.
@@ -105,9 +105,9 @@ Use explicit host paths in production:
   state/
     aios.db
   projects/<project-id>/
-  sessions/<chat-id>/scratch/
-  uploads/<chat-id>/
-  artifacts/<chat-id>/
+  sessions/<chat-id>/
+    scratch/
+    uploads/
   runs/
   skills/
   memories/
@@ -288,9 +288,9 @@ After the application is quiescent:
 The updater normally backs up `state/aios.db`, not the entire data root. During
 the one-time canonical-layout upgrade it first checks for the active legacy
 `workspace/aios.db`; that path takes precedence over a stale `state/aios.db`
-and is recorded in `backup.json`. Projects, session scratch files, uploads,
-artifacts, skills, memories, and deployment data remain on the persistent host
-path and are never deleted by an application update. A future release that
+and is recorded in `backup.json`. Projects, sessions, skills, memories, and
+deployment data remain on the persistent host path and are never deleted by an
+application update. A future release that
 transforms filesystem state must declare and implement its own journaled
 migration and backup plan.
 
@@ -318,6 +318,10 @@ Rollback is allowed only according to the release's signed database policy.
   cursor beside the backup makes each reversed action restartable after a
   power loss. This puts projects, session files, uploads, artifacts, and the
   database back where the previous release expects them.
+- If `session-layout-v2` ran, reverse its completed or in-progress journal even
+  when the database schema is backward-compatible. This returns nested uploads
+  and archived legacy artifact data to the locations expected by the previous
+  release.
 - If the new schema is explicitly readable by the previous release, the backup need not be restored.
 - If neither condition is true, do not loop between releases. Stop the service, enter `recovery_required`, and surface a local diagnostic.
 
@@ -441,8 +445,9 @@ mini-aios-updater doctor
 | Previous release also unhealthy | Enter recovery-required; never alternate indefinitely |
 | Clock far outside trusted metadata window | Keep current release and require time synchronization/local repair |
 
-An update failure must never unpair the box, delete projects, scratch files,
-uploads, artifacts, or memories, reset skills, or erase queued crons.
+An update failure must never unpair the box, delete projects, session files,
+archived legacy artifact data, or memories, reset skills, or erase queued
+crons.
 
 ## 14. Security requirements
 

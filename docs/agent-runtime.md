@@ -38,6 +38,6 @@ model-facing adapters.
 
 The runtime receives resolved paths through its run context rather than
 choosing a storage root itself. Ordinary relative tool paths default to
-`<data-root>/sessions/<chat-id>/scratch/`; uploads, user-visible artifacts, and
-durable projects live in their separate canonical roots. See
+`<data-root>/sessions/<chat-id>/scratch/`; inbound uploads live beside scratch
+at `sessions/<chat-id>/uploads/`, while durable projects have a separate root. See
 [the runtime storage contract](./storage-layout.md).

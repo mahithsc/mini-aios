@@ -38,8 +38,6 @@ def test_data_root_defaults_and_typed_helpers(
     assert workspace.get_state_dir() == repository / ".mini-aios" / "state"
     assert workspace.get_projects_dir() == repository / ".mini-aios" / "projects"
     assert workspace.get_sessions_dir() == repository / ".mini-aios" / "sessions"
-    assert workspace.get_uploads_dir() == repository / ".mini-aios" / "uploads"
-    assert workspace.get_artifacts_dir() == repository / ".mini-aios" / "artifacts"
     assert workspace.get_runs_dir() == repository / ".mini-aios" / "runs"
     assert workspace.get_skills_dir() == repository / ".mini-aios" / "skills"
     assert workspace.get_memories_dir() == repository / ".mini-aios" / "memories"
@@ -63,6 +61,14 @@ def test_explicit_data_root_is_isolated_from_checkout(
     (legacy_workspace / "do-not-move.txt").write_text("live", encoding="utf-8")
     configured = tmp_path / "isolated-data"
     _create_sqlite_database(configured / "workspace" / "aios.db", "configured")
+    configured_upload = configured / "workspace" / "session" / "chat-1" / "uploads"
+    configured_upload.mkdir(parents=True)
+    (configured_upload / "input.txt").write_text("input", encoding="utf-8")
+    configured_artifact = (
+        configured / "workspace" / "session" / "chat-1" / "artifacts"
+    )
+    configured_artifact.mkdir()
+    (configured_artifact / "preview.html").write_text("preview", encoding="utf-8")
 
     monkeypatch.setattr(workspace, "_PROJECT_ROOT", repository)
     monkeypatch.setenv("AIOS_DATA_DIR", str(configured))
@@ -73,7 +79,24 @@ def test_explicit_data_root_is_isolated_from_checkout(
     assert (
         configured / "state" / "migrations" / "storage-layout-v1.json"
     ).is_file()
+    assert (
+        configured / "state" / "migrations" / "session-layout-v2.json"
+    ).is_file()
     assert all(path.is_dir() for path in workspace._layout_directories(configured))
+    assert (
+        configured / "sessions" / "chat-1" / "uploads" / "input.txt"
+    ).read_text(encoding="utf-8") == "input"
+    assert (
+        configured
+        / "state"
+        / "migration-backups"
+        / "session-layout-v2"
+        / "artifacts"
+        / "chat-1"
+        / "preview.html"
+    ).read_text(encoding="utf-8") == "preview"
+    assert not (configured / "uploads").exists()
+    assert not (configured / "artifacts").exists()
 
 
 def test_storage_migration_promotes_active_db_and_preserves_collisions(
@@ -200,6 +223,59 @@ def test_storage_migration_promotes_active_db_and_preserves_collisions(
         project_root=repository,
         production=False,
     ) == report
+
+
+def test_session_layout_nests_uploads_and_archives_removed_artifacts(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / ".mini-aios"
+    canonical_uploads = data_dir / "sessions" / "chat-1" / "uploads"
+    canonical_uploads.mkdir(parents=True)
+    (canonical_uploads / "same.txt").write_text("canonical", encoding="utf-8")
+    legacy_uploads = data_dir / "uploads" / "chat-1"
+    legacy_uploads.mkdir(parents=True)
+    (legacy_uploads / "input.txt").write_text("upload", encoding="utf-8")
+    (legacy_uploads / "same.txt").write_text("legacy", encoding="utf-8")
+    (data_dir / "artifacts" / "chat-1").mkdir(parents=True)
+    (data_dir / "artifacts" / "chat-1" / "preview.html").write_text(
+        "preview",
+        encoding="utf-8",
+    )
+    nested_artifacts = data_dir / "sessions" / "chat-2" / "artifacts"
+    nested_artifacts.mkdir(parents=True)
+    (nested_artifacts / "result.txt").write_text("result", encoding="utf-8")
+
+    report = workspace.migrate_session_layout(data_dir=data_dir)
+
+    assert report["version"] == 2
+    assert report["migration"] == "session-layout-v2"
+    assert report["status"] == "complete"
+    assert (canonical_uploads / "input.txt").read_text(encoding="utf-8") == "upload"
+    assert (canonical_uploads / "same.txt").read_text(encoding="utf-8") == "canonical"
+    backup_root = data_dir / "state" / "migration-backups" / "session-layout-v2"
+    assert (backup_root / "uploads" / "chat-1" / "same.txt").read_text(
+        encoding="utf-8"
+    ) == "legacy"
+    assert (backup_root / "artifacts" / "chat-1" / "preview.html").is_file()
+    assert (
+        backup_root / "sessions" / "chat-2" / "artifacts" / "result.txt"
+    ).is_file()
+    assert not (data_dir / "uploads").exists()
+    assert not (data_dir / "artifacts").exists()
+    assert not nested_artifacts.exists()
+
+    report_path = data_dir / "state" / "migrations" / "session-layout-v2.json"
+    assert json.loads(report_path.read_text(encoding="utf-8")) == report
+    assert workspace.migrate_session_layout(data_dir=data_dir) == report
+
+    late_uploads = data_dir / "uploads" / "chat-3"
+    late_uploads.mkdir(parents=True)
+    (late_uploads / "later.txt").write_text("later", encoding="utf-8")
+    repaired = workspace.migrate_session_layout(data_dir=data_dir)
+    assert (
+        data_dir / "sessions" / "chat-3" / "uploads" / "later.txt"
+    ).is_file()
+    assert "repairedAt" in repaired
 
 
 def test_production_migration_archives_preexisting_state_database(

@@ -46,11 +46,26 @@ func TestBackupPrefersAndRecordsActiveLegacyDatabase(t *testing.T) {
 func TestCanonicalBackupHonorsNoRestorePolicy(t *testing.T) {
 	root := t.TempDir()
 	system := transitionTestSystem(root)
-	writeTestFile(t, filepath.Join(system.Config.AIOSDataDir, "state", "aios.db"), "canonical database")
+	dataRoot := system.Config.AIOSDataDir
+	writeTestFile(t, filepath.Join(dataRoot, "state", "aios.db"), "canonical database")
+	canonicalUpload := filepath.Join(dataRoot, "sessions", "chat-1", "uploads", "input.txt")
+	writeTestFile(t, canonicalUpload, "input")
+	reportPath := filepath.Join(
+		dataRoot,
+		filepath.FromSlash(sessionLayoutMigrationReportRelativePath),
+	)
+	writeSessionLayoutReport(t, reportPath, dataRoot, nil)
 
 	backupDir, err := system.Backup("release-3")
 	if err != nil {
 		t.Fatal(err)
+	}
+	metadata, err := readBackupMetadata(backupDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.SessionLayoutVersion != 2 {
+		t.Fatalf("sessionLayoutVersion = %d, want 2", metadata.SessionLayoutVersion)
 	}
 	required, err := system.BackupRestoreRequired(backupDir, false)
 	if err != nil {
@@ -58,6 +73,89 @@ func TestCanonicalBackupHonorsNoRestorePolicy(t *testing.T) {
 	}
 	if required {
 		t.Fatal("canonical database backup overrode a no-restore release policy")
+	}
+	if err := system.Restore(backupDir); err != nil {
+		t.Fatal(err)
+	}
+	assertTestFile(t, canonicalUpload, "input")
+	if _, err := os.Stat(reportPath); err != nil {
+		t.Fatalf("established session layout report was removed: %v", err)
+	}
+}
+
+func TestRestoreReturnsUploadsAndArtifactsToPreSessionLayout(t *testing.T) {
+	root := t.TempDir()
+	system := transitionTestSystem(root)
+	dataRoot := system.Config.AIOSDataDir
+	legacyUploads := filepath.Join(dataRoot, "uploads", "chat-1")
+	canonicalUploads := filepath.Join(dataRoot, "sessions", "chat-1", "uploads")
+	legacyArtifacts := filepath.Join(dataRoot, "artifacts")
+	archivedArtifacts := filepath.Join(
+		dataRoot,
+		"state",
+		"migration-backups",
+		sessionLayoutMigrationName,
+		"artifacts",
+	)
+
+	writeTestFile(t, filepath.Join(dataRoot, "state", "aios.db"), "canonical database")
+	writeTestFile(t, filepath.Join(legacyUploads, "input.txt"), "input")
+	writeTestFile(t, filepath.Join(legacyArtifacts, "chat-1", "preview.html"), "preview")
+	backupDir, err := system.Backup("release-session-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(canonicalUploads), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(legacyUploads, canonicalUploads); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(archivedArtifacts), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(legacyArtifacts, archivedArtifacts); err != nil {
+		t.Fatal(err)
+	}
+
+	actions := []storageLayoutMigrationAction{
+		{
+			Action:      "moved",
+			Source:      legacyUploads,
+			Destination: canonicalUploads,
+			Status:      "complete",
+		},
+		{
+			Action:      "archived",
+			Source:      legacyArtifacts,
+			Destination: archivedArtifacts,
+			Status:      "complete",
+		},
+	}
+	reportPath := filepath.Join(
+		dataRoot,
+		filepath.FromSlash(sessionLayoutMigrationReportRelativePath),
+	)
+	writeSessionLayoutReport(t, reportPath, dataRoot, actions)
+
+	required, err := system.BackupRestoreRequired(backupDir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !required {
+		t.Fatal("session layout transition did not require a rollback restore")
+	}
+	if err := system.Restore(backupDir); err != nil {
+		t.Fatal(err)
+	}
+	assertTestFile(t, filepath.Join(legacyUploads, "input.txt"), "input")
+	assertTestFile(t, filepath.Join(legacyArtifacts, "chat-1", "preview.html"), "preview")
+	if _, err := os.Stat(canonicalUploads); !os.IsNotExist(err) {
+		t.Fatalf("nested uploads remain after rollback: %v", err)
+	}
+	if _, err := os.Stat(reportPath); !os.IsNotExist(err) {
+		t.Fatalf("session migration report remains after rollback: %v", err)
 	}
 }
 
@@ -347,4 +445,24 @@ func assertTestFile(t *testing.T, path, expected string) {
 	if string(contents) != expected {
 		t.Fatalf("%s = %q, want %q", path, contents, expected)
 	}
+}
+
+func writeSessionLayoutReport(
+	t *testing.T,
+	path string,
+	dataRoot string,
+	actions []storageLayoutMigrationAction,
+) {
+	t.Helper()
+	reportData, err := json.Marshal(storageLayoutMigrationReport{
+		Version:   2,
+		Migration: sessionLayoutMigrationName,
+		DataRoot:  dataRoot,
+		Status:    "complete",
+		Actions:   actions,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, path, string(reportData))
 }

@@ -25,6 +25,9 @@ const (
 	storageLayoutMigrationName               = "storage-layout-v1"
 	storageLayoutMigrationReportRelativePath = "state/migrations/storage-layout-v1.json"
 	storageLayoutRollbackJournalName         = "storage-layout-v1-rollback.json"
+	sessionLayoutMigrationName               = "session-layout-v2"
+	sessionLayoutMigrationReportRelativePath = "state/migrations/session-layout-v2.json"
+	sessionLayoutRollbackJournalName         = "session-layout-v2-rollback.json"
 )
 
 type cappedBuffer struct {
@@ -335,6 +338,7 @@ type backupMetadata struct {
 	ReleaseID            string            `json:"releaseId"`
 	CreatedAt            time.Time         `json:"createdAt"`
 	DatabaseRelativePath string            `json:"databaseRelativePath,omitempty"`
+	SessionLayoutVersion int               `json:"sessionLayoutVersion,omitempty"`
 	Files                map[string]string `json:"files"`
 }
 
@@ -346,7 +350,14 @@ func (s System) Backup(releaseID string) (string, error) {
 	if err := os.Remove(filepath.Join(backupDir, storageLayoutRollbackJournalName)); err != nil && !os.IsNotExist(err) {
 		return "", err
 	}
+	if err := os.Remove(filepath.Join(backupDir, sessionLayoutRollbackJournalName)); err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
 	databaseRelativePath, err := s.activeDatabaseRelativePath()
+	if err != nil {
+		return "", err
+	}
+	sessionLayoutVersion, err := s.sessionLayoutVersion()
 	if err != nil {
 		return "", err
 	}
@@ -358,6 +369,7 @@ func (s System) Backup(releaseID string) (string, error) {
 		ReleaseID:            releaseID,
 		CreatedAt:            time.Now().UTC(),
 		DatabaseRelativePath: filepath.ToSlash(databaseRelativePath),
+		SessionLayoutVersion: sessionLayoutVersion,
 		Files:                map[string]string{},
 	}
 	for _, suffix := range []string{"", "-wal"} {
@@ -389,10 +401,10 @@ func (s System) Backup(releaseID string) (string, error) {
 	return backupDir, nil
 }
 
-// BackupRestoreRequired extends the signed database policy for the one-time
-// storage-layout transition. A backup taken from workspace/aios.db must be
-// restored even when the schema is backward-compatible, because the previous
-// release also needs its legacy filesystem layout put back.
+// BackupRestoreRequired extends the signed database policy for journaled
+// filesystem transitions. A legacy database backup or a completed session
+// layout migration must be restored even when the schema is backward-compatible,
+// because the previous release also needs its filesystem layout put back.
 func (s System) BackupRestoreRequired(backupDir string, policyRequiresRestore bool) (bool, error) {
 	if policyRequiresRestore {
 		return true, nil
@@ -405,7 +417,23 @@ func (s System) BackupRestoreRequired(backupDir string, policyRequiresRestore bo
 	if err != nil {
 		return false, err
 	}
-	return filepath.ToSlash(databaseRelativePath) == legacyDatabaseRelativePath, nil
+	if filepath.ToSlash(databaseRelativePath) == legacyDatabaseRelativePath {
+		return true, nil
+	}
+	if metadata.SessionLayoutVersion >= 2 {
+		return false, nil
+	}
+	_, err = os.Stat(filepath.Join(
+		s.Config.AIOSDataDir,
+		filepath.FromSlash(sessionLayoutMigrationReportRelativePath),
+	))
+	if err == nil {
+		return true, nil
+	}
+	if !os.IsNotExist(err) {
+		return false, err
+	}
+	return policyRequiresRestore, nil
 }
 
 func (s System) Restore(backupDir string) error {
@@ -420,6 +448,11 @@ func (s System) Restore(backupDir string) error {
 	databaseBase := filepath.Base(databaseRelativePath)
 	if err := verifyBackupFiles(backupDir, databaseBase, metadata.Files); err != nil {
 		return err
+	}
+	if metadata.SessionLayoutVersion < 2 {
+		if err := s.reverseSessionLayoutMigration(backupDir); err != nil {
+			return fmt.Errorf("reverse session layout migration: %w", err)
+		}
 	}
 	if filepath.ToSlash(databaseRelativePath) == legacyDatabaseRelativePath {
 		if err := s.reverseStorageLayoutMigration(backupDir); err != nil {
@@ -508,6 +541,31 @@ func readBackupMetadata(backupDir string) (backupMetadata, error) {
 	return metadata, nil
 }
 
+func (s System) sessionLayoutVersion() (int, error) {
+	reportPath := filepath.Join(
+		s.Config.AIOSDataDir,
+		filepath.FromSlash(sessionLayoutMigrationReportRelativePath),
+	)
+	reportData, err := os.ReadFile(reportPath)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	var report storageLayoutMigrationReport
+	if err := json.Unmarshal(reportData, &report); err != nil {
+		return 0, fmt.Errorf("decode %s: %w", sessionLayoutMigrationName, err)
+	}
+	if report.Version != 2 || report.Migration != sessionLayoutMigrationName || (report.Status != "in_progress" && report.Status != "complete") {
+		return 0, fmt.Errorf("unsupported session layout migration report")
+	}
+	if !filepath.IsAbs(report.DataRoot) {
+		return 0, fmt.Errorf("session layout migration data root is not absolute")
+	}
+	return report.Version, nil
+}
+
 func verifyBackupFiles(backupDir, databaseBase string, files map[string]string) error {
 	if len(files) == 0 {
 		return fmt.Errorf("database backup metadata contains no files")
@@ -574,8 +632,34 @@ type storageLayoutRollbackJournal struct {
 }
 
 func (s System) reverseStorageLayoutMigration(backupDir string) error {
-	reportPath := filepath.Join(s.Config.AIOSDataDir, filepath.FromSlash(storageLayoutMigrationReportRelativePath))
-	journalPath := filepath.Join(backupDir, storageLayoutRollbackJournalName)
+	return s.reverseLayoutMigration(
+		backupDir,
+		storageLayoutMigrationName,
+		storageLayoutMigrationReportRelativePath,
+		storageLayoutRollbackJournalName,
+		1,
+	)
+}
+
+func (s System) reverseSessionLayoutMigration(backupDir string) error {
+	return s.reverseLayoutMigration(
+		backupDir,
+		sessionLayoutMigrationName,
+		sessionLayoutMigrationReportRelativePath,
+		sessionLayoutRollbackJournalName,
+		2,
+	)
+}
+
+func (s System) reverseLayoutMigration(
+	backupDir string,
+	migrationName string,
+	reportRelativePath string,
+	journalName string,
+	expectedVersion int,
+) error {
+	reportPath := filepath.Join(s.Config.AIOSDataDir, filepath.FromSlash(reportRelativePath))
+	journalPath := filepath.Join(backupDir, journalName)
 	reportData, err := os.ReadFile(reportPath)
 	if os.IsNotExist(err) {
 		if removeErr := os.Remove(journalPath); removeErr != nil && !os.IsNotExist(removeErr) {
@@ -588,9 +672,9 @@ func (s System) reverseStorageLayoutMigration(backupDir string) error {
 	}
 	var report storageLayoutMigrationReport
 	if err := json.Unmarshal(reportData, &report); err != nil {
-		return fmt.Errorf("decode %s: %w", storageLayoutMigrationName, err)
+		return fmt.Errorf("decode %s: %w", migrationName, err)
 	}
-	if report.Version != 1 || report.Migration != storageLayoutMigrationName || (report.Status != "in_progress" && report.Status != "complete") {
+	if report.Version != expectedVersion || report.Migration != migrationName || (report.Status != "in_progress" && report.Status != "complete") {
 		return fmt.Errorf("unsupported storage migration report")
 	}
 	if !filepath.IsAbs(report.DataRoot) {

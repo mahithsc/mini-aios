@@ -21,6 +21,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _PROD_ENV_VALUES = {"prod", "production"}
 _STORAGE_LAYOUT_VERSION = 1
 _MIGRATION_NAME = f"storage-layout-v{_STORAGE_LAYOUT_VERSION}"
+_SESSION_LAYOUT_VERSION = 2
+_SESSION_MIGRATION_NAME = f"session-layout-v{_SESSION_LAYOUT_VERSION}"
 _MIGRATION_LOCK = threading.RLock()
 _DATABASE_FILES = ("aios.db", "aios.db-wal", "aios.db-shm")
 _LEGACY_DATABASE_FILES = ("crons.db", "crons.db-wal", "crons.db-shm")
@@ -74,14 +76,6 @@ def get_sessions_dir() -> Path:
     return get_data_dir() / "sessions"
 
 
-def get_uploads_dir() -> Path:
-    return get_data_dir() / "uploads"
-
-
-def get_artifacts_dir() -> Path:
-    return get_data_dir() / "artifacts"
-
-
 def get_runs_dir() -> Path:
     return get_data_dir() / "runs"
 
@@ -115,8 +109,6 @@ def _layout_directories(data_dir: Path) -> tuple[Path, ...]:
             "state",
             "projects",
             "sessions",
-            "uploads",
-            "artifacts",
             "runs",
             "skills",
             "memories",
@@ -1046,6 +1038,158 @@ def migrate_storage_layout(
         return report
 
 
+def _load_session_layout_report(
+    report_path: Path,
+    *,
+    canonical_root: Path,
+) -> dict[str, Any] | None:
+    if not report_path.exists():
+        return None
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Session migration report is unreadable: {report_path}"
+        ) from exc
+    if not isinstance(report, dict):
+        raise RuntimeError(f"Session migration report is invalid: {report_path}")
+
+    expected = {
+        "version": _SESSION_LAYOUT_VERSION,
+        "migration": _SESSION_MIGRATION_NAME,
+        "dataRoot": str(canonical_root),
+    }
+    mismatches = [key for key, value in expected.items() if report.get(key) != value]
+    if mismatches:
+        raise RuntimeError(
+            "Session migration report does not match this data root: "
+            + ", ".join(mismatches)
+        )
+    if report.get("status") not in {"in_progress", "complete"}:
+        raise RuntimeError(
+            f"Session migration report has an invalid status: {report.get('status')!r}"
+        )
+    if not isinstance(report.get("actions"), list):
+        raise RuntimeError("Session migration report has an invalid actions list")
+    return report
+
+
+def _apply_session_layout(
+    *,
+    canonical_root: Path,
+    report: dict[str, Any],
+) -> None:
+    sessions_dir = canonical_root / "sessions"
+    backup_root = (
+        canonical_root
+        / "state"
+        / "migration-backups"
+        / _SESSION_MIGRATION_NAME
+    )
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+
+    legacy_uploads = canonical_root / "uploads"
+    if legacy_uploads.is_dir() and not legacy_uploads.is_symlink():
+        for chat_uploads in sorted(legacy_uploads.iterdir(), key=lambda path: path.name):
+            if chat_uploads.is_dir() and not chat_uploads.is_symlink():
+                _merge_path(
+                    chat_uploads,
+                    sessions_dir / chat_uploads.name / "uploads",
+                    backup_root / "uploads" / chat_uploads.name,
+                    report,
+                )
+            else:
+                _archive_path(
+                    chat_uploads,
+                    backup_root / "uploads" / chat_uploads.name,
+                    report,
+                    reason="invalid legacy upload owner",
+                )
+        try:
+            legacy_uploads.rmdir()
+        except OSError:
+            pass
+    else:
+        _archive_path(
+            legacy_uploads,
+            backup_root / "uploads",
+            report,
+            reason="invalid legacy uploads root",
+        )
+
+    _archive_path(
+        canonical_root / "artifacts",
+        backup_root / "artifacts",
+        report,
+        reason="session artifacts feature removed",
+    )
+
+    for session_dir in sorted(sessions_dir.iterdir(), key=lambda path: path.name):
+        if not session_dir.is_dir() or session_dir.is_symlink():
+            continue
+        _archive_path(
+            session_dir / "artifacts",
+            backup_root / "sessions" / session_dir.name / "artifacts",
+            report,
+            reason="session artifacts feature removed",
+        )
+
+
+def migrate_session_layout(*, data_dir: Path | None = None) -> dict[str, Any]:
+    """Nest uploads inside their chat session and retire artifact storage.
+
+    The separate v2 report lets the host updater reverse this filesystem-only
+    transition without replaying the older database/workspace migration.
+    Canonical session data wins collisions; displaced legacy files remain in
+    ``state/migration-backups/session-layout-v2``.
+    """
+
+    canonical_root = (data_dir or get_data_dir()).expanduser().resolve(strict=False)
+    state_dir = canonical_root / "state"
+    report_path = state_dir / "migrations" / f"{_SESSION_MIGRATION_NAME}.json"
+    lock_path = report_path.with_suffix(".lock")
+
+    canonical_root.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with _MIGRATION_LOCK, _migration_file_lock(lock_path):
+        report = _load_session_layout_report(
+            report_path,
+            canonical_root=canonical_root,
+        )
+        if report is None:
+            report = {
+                "version": _SESSION_LAYOUT_VERSION,
+                "migration": _SESSION_MIGRATION_NAME,
+                "dataRoot": str(canonical_root),
+                "startedAt": datetime.now(timezone.utc).isoformat(),
+                "status": "in_progress",
+                "actions": [],
+            }
+        elif report.get("status") == "in_progress":
+            resumed_at = report.setdefault("resumedAt", [])
+            if not isinstance(resumed_at, list):
+                raise RuntimeError(
+                    "Session migration report has an invalid resumedAt list"
+                )
+            resumed_at.append(datetime.now(timezone.utc).isoformat())
+
+        initial_action_count = len(report["actions"])
+        report["_reportPath"] = str(report_path)
+        _write_report(report_path, report)
+        _apply_session_layout(canonical_root=canonical_root, report=report)
+
+        now = datetime.now(timezone.utc).isoformat()
+        if report.get("status") == "complete":
+            if len(report["actions"]) != initial_action_count:
+                report["repairedAt"] = now
+        else:
+            report["completedAt"] = now
+        report["status"] = "complete"
+        report.pop("_reportPath", None)
+        _write_report(report_path, report)
+        return report
+
+
 def ensure_data_dir() -> Path:
     data_dir = get_data_dir()
     configured = _configured_data_dir()
@@ -1059,6 +1203,7 @@ def ensure_data_dir() -> Path:
             project_root=data_dir,
             production=True,
         )
+    migrate_session_layout(data_dir=data_dir)
     return data_dir
 
 
@@ -1101,9 +1246,12 @@ def resolve_workspace_path(path: str | Path) -> Path:
     parts = raw_path.parts
     if not parts or parts == (".",):
         return ensure_data_dir()
-    translated = _LEGACY_PATH_PREFIXES.get(parts[0])
-    if translated is not None:
-        raw_path = Path(translated, *parts[1:])
+    if len(parts) >= 2 and parts[0] == "uploads":
+        raw_path = Path("sessions", parts[1], "uploads", *parts[2:])
+    else:
+        translated = _LEGACY_PATH_PREFIXES.get(parts[0])
+        if translated is not None:
+            raw_path = Path(translated, *parts[1:])
 
     data_dir = ensure_data_dir().resolve(strict=False)
     resolved_path = (data_dir / raw_path).resolve(strict=False)
