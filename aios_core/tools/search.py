@@ -39,6 +39,27 @@ def _is_noise(path: str) -> bool:
     return bool(_NOISE_DIRS.intersection(Path(path).parts))
 
 
+def _expand_braces(pattern: str, max_patterns: int = 64) -> list[str]:
+    """Expand shell-style {a,b} groups because pathlib/glob does not."""
+    start = pattern.find("{")
+    if start < 0:
+        return [pattern]
+    end = pattern.find("}", start + 1)
+    if end < 0:
+        raise ValueError("unclosed brace group")
+    options = pattern[start + 1:end].split(",")
+    if len(options) < 2 or any(not option for option in options):
+        raise ValueError("brace groups require at least two non-empty options")
+    expanded: list[str] = []
+    for option in options:
+        expanded.extend(
+            _expand_braces(pattern[:start] + option + pattern[end + 1:], max_patterns)
+        )
+        if len(expanded) > max_patterns:
+            raise ValueError(f"brace expansion exceeds {max_patterns} patterns")
+    return expanded
+
+
 def glob(pat: str, path: str = "."):
     """Find files matching a glob pattern, newest first.
 
@@ -49,10 +70,14 @@ def glob(pat: str, path: str = "."):
     resolved_path = resolve_chat_files_path(path)
     if not resolved_path.exists():
         return f"error: path does not exist: {resolved_path}"
-    pattern = (str(resolved_path) + "/" + pat).replace("//", "/")
     try:
-        files = globlib.glob(pattern, recursive=True)
-    except re.error as exc:
+        patterns = _expand_braces(pat)
+        files = []
+        for expanded_pattern in patterns:
+            pattern = (str(resolved_path) + "/" + expanded_pattern).replace("//", "/")
+            files.extend(globlib.glob(pattern, recursive=True))
+        files = list(dict.fromkeys(files))
+    except (re.error, ValueError) as exc:
         return f"error: invalid glob pattern: {exc}"
 
     # Hide dependency/VCS noise unless the pattern explicitly targets it.

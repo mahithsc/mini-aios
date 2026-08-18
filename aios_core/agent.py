@@ -15,14 +15,20 @@ from .skills import load_skills
 from .tools import (
     bash,
     edit,
+    find_app_references,
+    find_relevant_apps,
     glob,
     grep,
+    inspect_app,
+    list_app_files,
     process_kill,
     process_list,
     process_poll,
     process_send,
     process_spawn,
     read,
+    read_app_file,
+    search_app_content,
     tavily_search,
     write,
 )
@@ -64,7 +70,18 @@ BASE_TOOLS = [
     tavily_search,
     fetch,
 ]
-MAIN_TOOLS = [*BASE_TOOLS, memory, session_search, subagent]
+MAIN_TOOLS = [
+    *BASE_TOOLS,
+    find_relevant_apps,
+    inspect_app,
+    list_app_files,
+    search_app_content,
+    find_app_references,
+    read_app_file,
+    memory,
+    session_search,
+    subagent,
+]
 
 
 def _build_prompt(
