@@ -58,7 +58,7 @@ func (c *Config) applyDefaults() {
 		c.ReleaseEnvPath = filepath.Join(c.ComposeProjectDir, "release.env")
 	}
 	if c.DatabaseRelativePath == "" {
-		c.DatabaseRelativePath = filepath.Join("workspace", "aios.db")
+		c.DatabaseRelativePath = filepath.Join("state", "aios.db")
 	}
 	if c.DockerBinary == "" {
 		c.DockerBinary = "docker"
