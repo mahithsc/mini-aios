@@ -7,13 +7,13 @@ apps deployed before cloud deployment became authoritative.
 
 from __future__ import annotations
 
+from ..agent.context import get_current_chat_id
 from ..app_workspaces import (
     AppWorkspaceError,
     create_app_workspace,
     list_app_workspaces,
     resolve_app_workspace,
 )
-from ..runtime_context import get_current_chat_id
 from .cloud_client import CloudDeployClient, CloudDeployError
 from .store import ProjectStore
 from .supervisor import Supervisor

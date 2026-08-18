@@ -13,6 +13,12 @@ from agents.result import RunResultStreaming
 from agents.stream_events import StreamEvent
 
 from aios_core.agent import create_agent
+from aios_core.agent.context import (
+    AgentRuntimeContext,
+    pop_chat_runtime_context,
+    push_chat_runtime_context,
+)
+from aios_core.agent.openai import OpenAIEventTranslator
 from aios_core.conversation_store import (
     CanonicalConversationSession,
     ConversationRecorder,
@@ -21,11 +27,6 @@ from aios_core.conversation_store import (
     MAIN_SCOPE,
 )
 from aios_core.execution.service import RunsService, build_run_event
-from aios_core.openai_runtime import AgentRuntimeContext, OpenAIEventTranslator
-from aios_core.runtime_context import (
-    pop_chat_runtime_context,
-    push_chat_runtime_context,
-)
 from aios_core.sessions import load_chat_session
 from server.lights import lights
 from server.types.chat import ChatMessage, UserMessage

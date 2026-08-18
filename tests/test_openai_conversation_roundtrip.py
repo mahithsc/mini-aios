@@ -7,6 +7,8 @@ from agents import Agent, RunConfig, Runner
 from agents.testing import ScriptedModel, assistant_message, function_call
 from openai.types.responses import ResponseReasoningItem
 
+from aios_core.agent.context import AgentRuntimeContext
+from aios_core.agent.openai import as_function_tool
 from aios_core.conversation_store import (
     CanonicalConversationSession,
     ConversationRecorder,
@@ -14,7 +16,6 @@ from aios_core.conversation_store import (
     DurableRunHooks,
 )
 from aios_core.db import get_db_connection, initialize_app_db
-from aios_core.openai_runtime import AgentRuntimeContext, as_function_tool
 
 
 def _user(text: str) -> dict:

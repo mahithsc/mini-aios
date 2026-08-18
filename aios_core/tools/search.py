@@ -8,7 +8,7 @@ import subprocess
 import glob as globlib
 from pathlib import Path
 
-from ..runtime_context import resolve_chat_files_path
+from ..agent.context import resolve_chat_files_path
 from .toolcore import (
     looks_binary,
     repeat_notice,

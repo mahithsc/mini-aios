@@ -1,3 +1,5 @@
+"""Build the system prompt used by AIOS agents."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

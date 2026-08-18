@@ -5,7 +5,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from ..runtime_context import resolve_chat_files_path
+from ..agent.context import resolve_chat_files_path
 from . import file_state
 from .binary_extensions import has_binary_extension
 from .toolcore import (

@@ -2,8 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from string import Template
 
-
-_PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+_PROMPTS_DIR = Path(__file__).resolve().parent / "templates"
 
 
 @lru_cache(maxsize=None)

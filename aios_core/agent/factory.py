@@ -5,8 +5,7 @@ from agents import Agent, ModelSettings
 from dotenv import load_dotenv
 from openai.types.shared import Reasoning
 
-from .agent_prompt import build_agent_prompt
-from .deploy.agent_tools import (
+from ..deploy.agent_tools import (
     app_create,
     app_info,
     app_logs,
@@ -18,15 +17,14 @@ from .deploy.agent_tools import (
     legacy_apps_list,
     secrets_list,
 )
-from .memory import build_memory_prompt
-from .openai_runtime import as_function_tool
-from .sessions import (
+from ..memory import build_memory_prompt
+from ..sessions import (
     get_chat_artifacts_dir,
     get_chat_files_dir,
     get_chat_session_relative_dir,
 )
-from .skills import load_skills
-from .tools import (
+from ..skills import load_skills
+from ..tools import (
     bash,
     edit,
     glob,
@@ -35,16 +33,18 @@ from .tools import (
     tavily_search,
     write,
 )
-from .tools.canvas import show_canvas
-from .tools.cron import cron
-from .tools.fetch import fetch
-from .tools.generative_widget import generative_widget
-from .tools.memory import memory
-from .tools.notify import notify
-from .tools.pi import pi
-from .tools.session_search import session_search
-from .tools.subagent import subagent
-from .workspace import resolve_workspace_path
+from ..tools.canvas import show_canvas
+from ..tools.cron import cron
+from ..tools.fetch import fetch
+from ..tools.generative_widget import generative_widget
+from ..tools.memory import memory
+from ..tools.notify import notify
+from ..tools.pi import pi
+from ..tools.session_search import session_search
+from ..tools.subagent import subagent
+from ..workspace import resolve_workspace_path
+from .openai import as_function_tool
+from .prompts.builder import build_agent_prompt
 
 load_dotenv()
 

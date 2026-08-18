@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aios_core.agent_prompt import build_agent_prompt
+from aios_core.agent.prompts import build_agent_prompt
 
 
 def _build_prompt(*, include_memory_tools: bool) -> str:

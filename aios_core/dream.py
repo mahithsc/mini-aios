@@ -1,7 +1,7 @@
 from agents import RunConfig, Runner
 
 from .agent import create_agent
-from .prompt_loader import load_prompt
+from .agent.prompts import load_prompt
 
 DREAM_PROMPT = load_prompt("dream.md")
 

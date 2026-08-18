@@ -8,8 +8,8 @@ from uuid import uuid4
 
 from agents import RunConfig, Runner
 
-from ..openai_runtime import OpenAIEventTranslator
-from ..prompt_loader import render_prompt
+from ..agent.openai import OpenAIEventTranslator
+from ..agent.prompts import render_prompt
 from .subagent_events import (
     SubagentStreamEvent,
     build_subagent_stream_event as _build_subagent_stream_event,

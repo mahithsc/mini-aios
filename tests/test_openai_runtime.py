@@ -9,11 +9,8 @@ from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 from agents.tool_context import ToolContext
 from openai.types.responses import ResponseFunctionToolCall, ResponseTextDeltaEvent
 
-from aios_core.openai_runtime import (
-    AgentRuntimeContext,
-    OpenAIEventTranslator,
-    as_function_tool,
-)
+from aios_core.agent.context import AgentRuntimeContext
+from aios_core.agent.openai import OpenAIEventTranslator, as_function_tool
 from aios_core.tools.subagent_events import build_subagent_stream_event
 
 

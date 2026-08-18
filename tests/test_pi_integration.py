@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from aios_core.agent_prompt import build_agent_prompt
+from aios_core.agent.prompts import build_agent_prompt
 
 
 def _prompt() -> str:
@@ -29,7 +29,7 @@ def test_prompt_exposes_one_pi_tool_and_documents_its_lifecycle() -> None:
 
 
 def test_agent_registers_pi_as_the_only_external_coding_agent_tool() -> None:
-    from aios_core.agent import BASE_TOOLS
+    from aios_core.agent.factory import BASE_TOOLS
     from aios_core.tools.pi import pi
 
     tool_names = [tool.__name__ for tool in BASE_TOOLS]

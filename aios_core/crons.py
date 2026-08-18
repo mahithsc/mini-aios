@@ -12,7 +12,7 @@ from agents import RunConfig, Runner
 
 from .agent import create_agent
 from .db import DB_PATH, get_db_connection, initialize_app_db
-from .prompt_loader import render_prompt
+from .agent.prompts import render_prompt
 from .workspace import ensure_workspace_dir
 
 _WORKSPACE_DIR = ensure_workspace_dir()

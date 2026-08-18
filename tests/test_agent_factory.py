@@ -1,10 +1,10 @@
 from aios_core.agent import (
     DEFAULT_MODEL_ID,
     DEFAULT_REASONING_EFFORT,
-    _resolve_model_configuration,
     create_main_agent,
     create_subagent_worker,
 )
+from aios_core.agent.factory import _resolve_model_configuration
 
 
 def test_agent_factory_wraps_tools_and_prevents_recursive_subagents() -> None:
