@@ -2,9 +2,26 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 
+import pytest
+
 from aios_core import workspace
+
+
+def _create_sqlite_database(path: Path, marker: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE marker (value TEXT NOT NULL)")
+        connection.execute("INSERT INTO marker (value) VALUES (?)", (marker,))
+
+
+def _database_marker(path: Path) -> str:
+    with sqlite3.connect(path) as connection:
+        row = connection.execute("SELECT value FROM marker").fetchone()
+    assert row is not None
+    return str(row[0])
 
 
 def test_data_root_defaults_and_typed_helpers(
@@ -27,7 +44,9 @@ def test_data_root_defaults_and_typed_helpers(
     assert workspace.get_skills_dir() == repository / ".mini-aios" / "skills"
     assert workspace.get_memories_dir() == repository / ".mini-aios" / "memories"
     assert workspace.get_deployments_dir() == repository / ".mini-aios" / "deployments"
-    assert workspace.get_cron_logs_dir() == repository / ".mini-aios" / "cron_logs"
+    assert workspace.get_cron_logs_dir() == (
+        repository / ".mini-aios" / "runs" / "cron_logs"
+    )
 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("AIOS_ENV", "production")
@@ -43,13 +62,17 @@ def test_explicit_data_root_is_isolated_from_checkout(
     legacy_workspace.mkdir(parents=True)
     (legacy_workspace / "do-not-move.txt").write_text("live", encoding="utf-8")
     configured = tmp_path / "isolated-data"
+    _create_sqlite_database(configured / "workspace" / "aios.db", "configured")
 
     monkeypatch.setattr(workspace, "_PROJECT_ROOT", repository)
     monkeypatch.setenv("AIOS_DATA_DIR", str(configured))
 
     assert workspace.ensure_data_dir() == configured
     assert (legacy_workspace / "do-not-move.txt").read_text(encoding="utf-8") == "live"
-    assert not (configured / "state" / "migrations").exists()
+    assert _database_marker(configured / "state" / "aios.db") == "configured"
+    assert (
+        configured / "state" / "migrations" / "storage-layout-v1.json"
+    ).is_file()
     assert all(path.is_dir() for path in workspace._layout_directories(configured))
 
 
@@ -71,12 +94,15 @@ def test_storage_migration_promotes_active_db_and_preserves_collisions(
     (old_workspace / "applications" / "abandoned").mkdir(parents=True)
     (old_state / "runs").mkdir(parents=True)
     (repository / "memories").mkdir(parents=True)
+    (repository / "uploads" / "chat-root").mkdir(parents=True)
+    (repository / "artifacts" / "chat-root").mkdir(parents=True)
     (data_dir / "runs").mkdir(parents=True)
 
-    (old_workspace / "aios.db").write_bytes(b"active-workspace-db")
-    (old_workspace / "aios.db-wal").write_bytes(b"active-wal")
-    (old_state / "aios.db").write_bytes(b"older-state-db")
-    (old_state / "aios.db-wal").write_bytes(b"older-state-wal")
+    _create_sqlite_database(old_workspace / "aios.db", "active-workspace-db")
+    (old_workspace / "aios.db-wal").write_bytes(b"")
+    (old_workspace / "aios.db-shm").write_bytes(b"")
+    _create_sqlite_database(old_state / "aios.db", "older-state-db")
+    (old_state / "aios.db-wal").write_bytes(b"")
     (old_state / "credentials.key").write_text("secret", encoding="utf-8")
     (old_workspace / "session" / "session_manifest.json").write_text(
         "[]", encoding="utf-8"
@@ -91,12 +117,36 @@ def test_storage_migration_promotes_active_db_and_preserves_collisions(
         "artifact", encoding="utf-8"
     )
     (old_workspace / "apps" / "app-1" / "app.py").write_text("app", encoding="utf-8")
-    (old_workspace / "deploy" / "projects.json").write_text("{}", encoding="utf-8")
+    deployed_source = (
+        old_workspace / "session" / "chat-1" / "files" / "deployed-app"
+    )
+    deployed_source.mkdir()
+    (deployed_source / "app.py").write_text("deployed", encoding="utf-8")
+    (old_workspace / "deploy" / "projects.json").write_text(
+        json.dumps(
+            {
+                "deployed-app": {
+                    "slug": "deployed-app",
+                    "source_dir": str(deployed_source),
+                    "id": "",
+                    "status": "running",
+                    "spec": {"run": ["python", "app.py"], "port": 8000},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     (old_workspace / "skills" / "index.json").write_text("{}", encoding="utf-8")
     (old_workspace / "runs" / "same.json").write_text("workspace", encoding="utf-8")
     (old_state / "runs" / "same.json").write_text("state", encoding="utf-8")
     (data_dir / "runs" / "same.json").write_text("canonical", encoding="utf-8")
     (repository / "memories" / "MEMORY.md").write_text("remember", encoding="utf-8")
+    (repository / "uploads" / "chat-root" / "input.txt").write_text(
+        "upload", encoding="utf-8"
+    )
+    (repository / "artifacts" / "chat-root" / "output.txt").write_text(
+        "artifact", encoding="utf-8"
+    )
 
     report = workspace.migrate_storage_layout(
         data_dir=data_dir,
@@ -110,8 +160,7 @@ def test_storage_migration_promotes_active_db_and_preserves_collisions(
         "gateway_events",
         "unrecognized tables",
     ]
-    assert (data_dir / "state" / "aios.db").read_bytes() == b"active-workspace-db"
-    assert (data_dir / "state" / "aios.db-wal").read_bytes() == b"active-wal"
+    assert _database_marker(data_dir / "state" / "aios.db") == "active-workspace-db"
     assert (data_dir / "state" / "credentials.key").read_text(encoding="utf-8") == "secret"
     assert (data_dir / "sessions" / "session_manifest.json").is_file()
     assert (data_dir / "sessions" / "chat-1" / "scratch" / "draft.txt").is_file()
@@ -119,12 +168,25 @@ def test_storage_migration_promotes_active_db_and_preserves_collisions(
     assert (data_dir / "artifacts" / "chat-1" / "result.txt").is_file()
     assert (data_dir / "projects" / "app-1" / "app.py").is_file()
     assert (data_dir / "deployments" / "projects.json").is_file()
+    deployment_registry = json.loads(
+        (data_dir / "deployments" / "projects.json").read_text(encoding="utf-8")
+    )
+    canonical_deployed_source = (
+        data_dir / "sessions" / "chat-1" / "scratch" / "deployed-app"
+    )
+    assert deployment_registry["deployed-app"]["source_dir"] == str(
+        canonical_deployed_source
+    )
+    assert (canonical_deployed_source / "app.py").is_file()
     assert (data_dir / "skills" / "index.json").is_file()
     assert (data_dir / "memories" / "MEMORY.md").is_file()
+    assert (data_dir / "uploads" / "chat-root" / "input.txt").is_file()
+    assert (data_dir / "artifacts" / "chat-root" / "output.txt").is_file()
     assert (data_dir / "runs" / "same.json").read_text(encoding="utf-8") == "canonical"
 
     archive = data_dir / "legacy" / "storage-layout-v1"
-    assert (archive / "state" / "aios.db").read_bytes() == b"older-state-db"
+    assert _database_marker(archive / "state" / "aios.db") == "older-state-db"
+    assert _database_marker(archive / "workspace" / "aios.db") == "active-workspace-db"
     assert (archive / "workspace" / "applications" / "abandoned").is_dir()
     archived_run_contents = {
         path.read_text(encoding="utf-8")
@@ -148,9 +210,11 @@ def test_production_migration_archives_preexisting_state_database(
     data_dir = tmp_path / ".mini-aios"
     (data_dir / "state").mkdir(parents=True)
     (data_dir / "workspace").mkdir()
-    (data_dir / "state" / "aios.db").write_bytes(b"older-state-db")
+    _create_sqlite_database(data_dir / "state" / "aios.db", "older-state-db")
     (data_dir / "state" / "credentials.key").write_text("secret", encoding="utf-8")
-    (data_dir / "workspace" / "aios.db").write_bytes(b"active-workspace-db")
+    _create_sqlite_database(
+        data_dir / "workspace" / "aios.db", "active-workspace-db"
+    )
 
     workspace.migrate_storage_layout(
         data_dir=data_dir,
@@ -158,11 +222,139 @@ def test_production_migration_archives_preexisting_state_database(
         production=True,
     )
 
-    assert (data_dir / "state" / "aios.db").read_bytes() == b"active-workspace-db"
+    assert _database_marker(data_dir / "state" / "aios.db") == "active-workspace-db"
     assert (data_dir / "state" / "credentials.key").read_text(encoding="utf-8") == "secret"
-    assert (
+    assert _database_marker(
         data_dir / "legacy" / "storage-layout-v1" / "state" / "aios.db"
-    ).read_bytes() == b"older-state-db"
+    ) == "older-state-db"
+
+
+def test_database_promotion_resumes_after_sidecar_archive_interruption(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repository = tmp_path / "mini-aios"
+    workspace_dir = repository / "workspace"
+    data_dir = repository / ".mini-aios"
+    _create_sqlite_database(workspace_dir / "aios.db", "active")
+    (workspace_dir / "aios.db-wal").write_bytes(b"")
+    (workspace_dir / "aios.db-shm").write_bytes(b"")
+
+    original_archive_path = workspace._archive_path
+    interrupted = False
+
+    def interrupt_once(source, *args, **kwargs):
+        nonlocal interrupted
+        if source == workspace_dir / "aios.db-wal" and not interrupted:
+            interrupted = True
+            raise RuntimeError("simulated interruption")
+        return original_archive_path(source, *args, **kwargs)
+
+    monkeypatch.setattr(workspace, "_archive_path", interrupt_once)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        workspace.migrate_storage_layout(
+            data_dir=data_dir,
+            project_root=repository,
+            production=False,
+        )
+
+    assert _database_marker(data_dir / "state" / "aios.db") == "active"
+    assert not (workspace_dir / "aios.db").exists()
+    assert (workspace_dir / "aios.db-wal").exists()
+    in_progress = json.loads(
+        (
+            data_dir / "state" / "migrations" / "storage-layout-v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert in_progress["status"] == "in_progress"
+
+    monkeypatch.setattr(workspace, "_archive_path", original_archive_path)
+    report = workspace.migrate_storage_layout(
+        data_dir=data_dir,
+        project_root=repository,
+        production=False,
+    )
+
+    assert report["status"] == "complete"
+    assert report["resumedAt"]
+    assert not any((workspace_dir / name).exists() for name in workspace._DATABASE_FILES)
+    assert _database_marker(data_dir / "state" / "aios.db") == "active"
+
+
+def test_migration_rejects_a_report_for_another_data_root(tmp_path: Path) -> None:
+    repository = tmp_path / "mini-aios"
+    data_dir = repository / ".mini-aios"
+    report_path = data_dir / "state" / "migrations" / "storage-layout-v1.json"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "migration": "storage-layout-v1",
+                "dataRoot": str(tmp_path / "different-root"),
+                "status": "complete",
+                "actions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="does not match this data root"):
+        workspace.migrate_storage_layout(
+            data_dir=data_dir,
+            project_root=repository,
+            production=False,
+        )
+
+
+def test_completed_v1_layout_receives_idempotent_finalizers(tmp_path: Path) -> None:
+    repository = tmp_path / "mini-aios"
+    data_dir = repository / ".mini-aios"
+    old_source = repository / "workspace" / "session" / "chat-1" / "files" / "app"
+    canonical_source = data_dir / "sessions" / "chat-1" / "scratch" / "app"
+    canonical_source.mkdir(parents=True)
+    registry_path = data_dir / "deployments" / "projects.json"
+    registry_path.parent.mkdir(parents=True)
+    registry_path.write_text(
+        json.dumps({"app": {"source_dir": str(old_source)}}),
+        encoding="utf-8",
+    )
+    (data_dir / "cron_logs").mkdir(parents=True)
+    (repository / "uploads" / "chat-1").mkdir(parents=True)
+    (repository / "uploads" / "chat-1" / "input.txt").write_text(
+        "upload", encoding="utf-8"
+    )
+    report_path = data_dir / "state" / "migrations" / "storage-layout-v1.json"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "migration": "storage-layout-v1",
+                "dataRoot": str(data_dir),
+                "status": "complete",
+                "actions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    repaired = workspace.migrate_storage_layout(
+        data_dir=data_dir,
+        project_root=repository,
+        production=False,
+    )
+
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert registry["app"]["source_dir"] == str(canonical_source)
+    assert (data_dir / "runs" / "cron_logs").is_dir()
+    assert (data_dir / "uploads" / "chat-1" / "input.txt").is_file()
+    assert repaired["repairedAt"]
+    assert workspace.migrate_storage_layout(
+        data_dir=data_dir,
+        project_root=repository,
+        production=False,
+    ) == repaired
 
 
 def test_compatibility_path_resolution_translates_legacy_prefixes(
@@ -182,6 +374,8 @@ def test_compatibility_path_resolution_translates_legacy_prefixes(
         data_dir / "deployments" / "projects.json"
     )
     assert workspace.resolve_workspace_path("aios.db") == data_dir / "state" / "aios.db"
+    with pytest.raises(ValueError, match="cannot escape"):
+        workspace.resolve_workspace_path("../outside.txt")
 
 
 def test_runtime_start_does_not_change_process_working_directory(

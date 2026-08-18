@@ -966,12 +966,11 @@ def migrate_legacy_chat_database(
     *,
     db_path: str = DB_PATH,
 ) -> ChatImportReport:
-    """Import chats from the later state-database layout exactly once.
+    """Import chats from a legacy or archived SQLite database exactly once.
 
-    Some versions of the SQLite branch moved ``aios.db`` from ``workspace``
-    to ``state``. The current branch still owns ``workspace/aios.db``, so copy
-    only chat rows into that canonical database. Existing destination chats
-    win, and the source database remains read-only and untouched.
+    The canonical database now lives at ``state/aios.db`` beneath the data
+    root. Existing destination chats win, and the source database remains
+    read-only and untouched.
     """
     initialize_app_db(db_path)
     source_path = Path(source_db).expanduser().resolve()

@@ -51,7 +51,8 @@ the active data root.
   paths are relative to the data root, for example
   `uploads/<chat-id>/report.pdf`.
 - `artifacts/<chat-id>/` contains outputs deliberately exposed to the user.
-- `runs/` contains durable agent-run metadata, event logs, and snapshots.
+- `runs/` contains durable agent-run metadata, event logs, snapshots, and
+  scheduled-run logs beneath `runs/cron_logs/`.
 - `skills/` and `memories/` contain user-owned agent extensions and curated
   memory respectively.
 - `deployments/` contains deployment registry and lifecycle state. Project

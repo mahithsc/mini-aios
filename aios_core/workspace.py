@@ -3,11 +3,18 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Mini AIOS ships on macOS/Linux.
+    fcntl = None
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _PROD_ENV_VALUES = {"prod", "production"}
@@ -91,7 +98,7 @@ def get_deployments_dir() -> Path:
 
 
 def get_cron_logs_dir() -> Path:
-    return get_data_dir() / "cron_logs"
+    return get_runs_dir() / "cron_logs"
 
 
 def get_legacy_state_db_path() -> Path:
@@ -113,7 +120,7 @@ def _layout_directories(data_dir: Path) -> tuple[Path, ...]:
             "skills",
             "memories",
             "deployments",
-            "cron_logs",
+            "runs/cron_logs",
         )
     )
 
@@ -122,20 +129,32 @@ def _paths_are_equal(first: Path, second: Path) -> bool:
     return first.resolve(strict=False) == second.resolve(strict=False)
 
 
-def _record(
+def _plan_action(
     report: dict[str, Any],
     action: str,
     source: Path,
     destination: Path,
     **details: object,
-) -> None:
+) -> dict[str, object]:
     entry: dict[str, object] = {
         "action": action,
         "source": str(source),
         "destination": str(destination),
+        "status": "planned",
     }
     entry.update(details)
     report["actions"].append(entry)
+    report_path = report.get("_reportPath")
+    if isinstance(report_path, str):
+        _write_report(Path(report_path), report)
+    return entry
+
+
+def _complete_action(report: dict[str, Any], entry: dict[str, object]) -> None:
+    entry["status"] = "complete"
+    report_path = report.get("_reportPath")
+    if isinstance(report_path, str):
+        _write_report(Path(report_path), report)
 
 
 def _available_archive_path(destination: Path) -> Path:
@@ -164,11 +183,12 @@ def _archive_path(
     if not source.exists() and not source.is_symlink():
         return
     destination = _available_archive_path(archive_destination)
-    _move_unchecked(source, destination)
     details: dict[str, object] = {"reason": reason}
     if canonical_destination is not None:
         details["canonicalDestination"] = str(canonical_destination)
-    _record(report, "archived", source, destination, **details)
+    action = _plan_action(report, "archived", source, destination, **details)
+    _move_unchecked(source, destination)
+    _complete_action(report, action)
 
 
 def _merge_path(
@@ -189,8 +209,9 @@ def _merge_path(
     destination_is_directory = destination.is_dir() and not destination.is_symlink()
 
     if not destination_exists:
+        action = _plan_action(report, "moved", source, destination)
         _move_unchecked(source, destination)
-        _record(report, "moved", source, destination)
+        _complete_action(report, action)
         return
 
     if source_is_directory and destination_is_directory:
@@ -234,6 +255,46 @@ def _archive_database_group(
         )
 
 
+def _backup_sqlite_database(source: Path, destination: Path) -> None:
+    """Create and atomically install a self-contained SQLite snapshot."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=".backup",
+        dir=str(destination.parent),
+    )
+    os.close(descriptor)
+    temporary_path = Path(temporary_name)
+    try:
+        source_uri = f"{source.resolve().as_uri()}?mode=ro"
+        with (
+            sqlite3.connect(source_uri, uri=True, timeout=5.0) as source_connection,
+            sqlite3.connect(temporary_path) as destination_connection,
+        ):
+            source_connection.execute("PRAGMA busy_timeout = 5000")
+            source_connection.backup(destination_connection)
+            result = destination_connection.execute("PRAGMA integrity_check").fetchone()
+            if result != ("ok",):
+                raise RuntimeError(
+                    f"SQLite backup integrity check failed for {source}: {result!r}"
+                )
+        os.chmod(temporary_path, source.stat().st_mode & 0o7777)
+        with temporary_path.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, destination)
+        try:
+            directory_descriptor = os.open(destination.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        except OSError:
+            pass
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def _promote_database_group(
     source_dir: Path,
     state_dir: Path,
@@ -242,30 +303,58 @@ def _promote_database_group(
     *,
     replace_existing: bool,
 ) -> None:
-    for name in _DATABASE_FILES:
-        source = source_dir / name
-        if not source.exists() and not source.is_symlink():
-            continue
-        destination = state_dir / name
-        if destination.exists() or destination.is_symlink():
-            if not replace_existing:
-                _archive_path(
-                    source,
-                    archive_dir / name,
-                    report,
-                    reason="canonical database already exists",
-                    canonical_destination=destination,
-                )
-                continue
+    source = source_dir / "aios.db"
+    destination = state_dir / "aios.db"
+    if not source.is_file():
+        for name in _DATABASE_FILES[1:]:
             _archive_path(
-                destination,
+                source_dir / name,
                 archive_dir / name,
                 report,
-                reason="replaced by active workspace database",
-                canonical_destination=destination,
+                reason="orphaned legacy database sidecar",
+                canonical_destination=state_dir / name,
             )
-        _move_unchecked(source, destination)
-        _record(report, "promoted-database", source, destination)
+        return
+
+    if destination.exists() or destination.is_symlink():
+        if not replace_existing:
+            _archive_database_group(
+                source_dir,
+                archive_dir,
+                report,
+                canonical_state_dir=state_dir,
+            )
+            return
+        _archive_database_group(
+            state_dir,
+            archive_dir,
+            report,
+            canonical_state_dir=state_dir,
+        )
+
+    for name in _DATABASE_FILES[1:]:
+        _archive_path(
+            state_dir / name,
+            archive_dir / name,
+            report,
+            reason="orphaned canonical database sidecar",
+            canonical_destination=state_dir / name,
+        )
+
+    action = _plan_action(
+        report,
+        "promoted-database-snapshot",
+        source,
+        destination,
+    )
+    _backup_sqlite_database(source, destination)
+    _complete_action(report, action)
+    _archive_database_group(
+        source_dir,
+        archive_dir,
+        report,
+        canonical_state_dir=state_dir,
+    )
 
 
 def _migrate_session_tree(
@@ -341,7 +430,7 @@ def _migrate_workspace(
         "runs": "runs",
         "deploy": "deployments",
         "deployments": "deployments",
-        "cron_logs": "cron_logs",
+        "cron_logs": "runs/cron_logs",
         "uploads": "uploads",
         "artifacts": "artifacts",
     }
@@ -388,6 +477,15 @@ def _migrate_workspace(
         reason="unmapped legacy application storage",
     )
 
+    for name in _DATABASE_FILES:
+        _archive_path(
+            workspace_dir / name,
+            archive_dir / name,
+            report,
+            reason="orphaned database file after promotion",
+            canonical_destination=data_dir / "state" / name,
+        )
+
     handled = {
         "session",
         "applications",
@@ -412,7 +510,180 @@ def _migrate_workspace(
         pass
 
 
+def _canonical_deployment_source_path(
+    source_value: str,
+    *,
+    workspace_dir: Path,
+    source_root: Path,
+    data_dir: Path,
+) -> Path | None:
+    """Translate a project source that lived in a legacy workspace tree."""
+
+    raw_path = Path(source_value).expanduser()
+    relative_path: Path | None = None
+
+    if raw_path.is_absolute():
+        resolved_path = raw_path.resolve(strict=False)
+        for legacy_root, prefix in (
+            (workspace_dir, Path()),
+            (source_root / "session", Path("session")),
+        ):
+            try:
+                suffix = resolved_path.relative_to(legacy_root.resolve(strict=False))
+            except ValueError:
+                continue
+            relative_path = prefix / suffix
+            break
+    else:
+        parts = raw_path.parts
+        if parts[:1] == ("workspace",):
+            parts = parts[1:]
+        if parts[:1] and parts[0] in {"apps", "projects", "session", "sessions"}:
+            relative_path = Path(*parts)
+
+    if relative_path is None:
+        return None
+
+    parts = relative_path.parts
+    if parts[:1] in (("apps",), ("projects",)) and len(parts) > 1:
+        return data_dir / "projects" / Path(*parts[1:])
+
+    if parts[:1] not in (("session",), ("sessions",)) or len(parts) < 2:
+        return None
+
+    chat_id = parts[1]
+    category = parts[2] if len(parts) > 2 else None
+    suffix = parts[3:] if category is not None else ()
+    if category in {"files", "scratch"}:
+        return data_dir / "sessions" / chat_id / "scratch" / Path(*suffix)
+    if category == "uploads":
+        return data_dir / "uploads" / chat_id / Path(*suffix)
+    if category == "artifacts":
+        return data_dir / "artifacts" / chat_id / Path(*suffix)
+    return data_dir / "sessions" / chat_id / Path(*parts[2:])
+
+
+def _rewrite_deployment_registry_paths(
+    registry_path: Path,
+    *,
+    workspace_dir: Path,
+    source_root: Path,
+    data_dir: Path,
+    report: dict[str, Any],
+) -> None:
+    """Keep deployed project records usable after their source trees move."""
+
+    if not registry_path.is_file():
+        return
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(registry, dict):
+        return
+
+    changed = False
+    planned_actions: list[dict[str, object]] = []
+    for slug, raw_project in registry.items():
+        if not isinstance(raw_project, dict):
+            continue
+        source_value = raw_project.get("source_dir")
+        if not isinstance(source_value, str):
+            continue
+        canonical_path = _canonical_deployment_source_path(
+            source_value,
+            workspace_dir=workspace_dir,
+            source_root=source_root,
+            data_dir=data_dir,
+        )
+        if canonical_path is None or str(canonical_path) == source_value:
+            continue
+        raw_project["source_dir"] = str(canonical_path)
+        changed = True
+        planned_actions.append(
+            _plan_action(
+                report,
+                "rewrote-deployment-source",
+                Path(source_value),
+                canonical_path,
+                project=str(slug),
+                registry=str(registry_path),
+            )
+        )
+
+    if not changed:
+        return
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{registry_path.name}.",
+        dir=str(registry_path.parent),
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(registry, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, registry_path)
+        for action in planned_actions:
+            _complete_action(report, action)
+    finally:
+        Path(temporary_name).unlink(missing_ok=True)
+
+
+def _repair_completed_layout(
+    report: dict[str, Any],
+    *,
+    report_path: Path,
+    canonical_root: Path,
+    source_root: Path,
+    production_mode: bool,
+) -> dict[str, Any]:
+    """Apply safe finalizers added after the original v1 migration shipped."""
+
+    initial_action_count = len(report["actions"])
+    archive_root = canonical_root / "legacy" / _MIGRATION_NAME
+    workspace_dir = (
+        canonical_root / "workspace"
+        if production_mode
+        else source_root / "workspace"
+    )
+    report["_reportPath"] = str(report_path)
+    _rewrite_deployment_registry_paths(
+        canonical_root / "deployments" / "projects.json",
+        workspace_dir=workspace_dir,
+        source_root=source_root,
+        data_dir=canonical_root,
+        report=report,
+    )
+    _merge_path(
+        canonical_root / "cron_logs",
+        canonical_root / "runs" / "cron_logs",
+        archive_root / "canonical-cron-logs",
+        report,
+    )
+    if not production_mode:
+        for source_name in ("uploads", "artifacts"):
+            _merge_path(
+                source_root / source_name,
+                canonical_root / source_name,
+                archive_root / f"root-{source_name}",
+                report,
+            )
+    for directory in _layout_directories(canonical_root):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    report.pop("_reportPath", None)
+    if len(report["actions"]) != initial_action_count:
+        report["repairedAt"] = datetime.now(timezone.utc).isoformat()
+        _write_report(report_path, report)
+    return report
+
+
 def _write_report(report_path: Path, report: dict[str, Any]) -> None:
+    persisted_report = {
+        key: value for key, value in report.items() if not key.startswith("_")
+    }
     report_path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{_MIGRATION_NAME}.",
@@ -420,13 +691,62 @@ def _write_report(report_path: Path, report: dict[str, Any]) -> None:
     )
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(report, handle, indent=2, sort_keys=True)
+            json.dump(persisted_report, handle, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_name, report_path)
     finally:
         Path(temporary_name).unlink(missing_ok=True)
+
+
+@contextmanager
+def _migration_file_lock(lock_path: Path):
+    """Serialize storage migration across server/updater processes."""
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _load_migration_report(
+    report_path: Path,
+    *,
+    canonical_root: Path,
+) -> dict[str, Any] | None:
+    if not report_path.exists():
+        return None
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Storage migration report is unreadable: {report_path}") from exc
+    if not isinstance(report, dict):
+        raise RuntimeError(f"Storage migration report is invalid: {report_path}")
+
+    expected = {
+        "version": _STORAGE_LAYOUT_VERSION,
+        "migration": _MIGRATION_NAME,
+        "dataRoot": str(canonical_root),
+    }
+    mismatches = [key for key, value in expected.items() if report.get(key) != value]
+    if mismatches:
+        raise RuntimeError(
+            "Storage migration report does not match this data root: "
+            + ", ".join(mismatches)
+        )
+    if report.get("status") not in {"in_progress", "complete"}:
+        raise RuntimeError(
+            f"Storage migration report has an invalid status: {report.get('status')!r}"
+        )
+    if not isinstance(report.get("actions"), list):
+        raise RuntimeError("Storage migration report has an invalid actions list")
+    return report
 
 
 def migrate_storage_layout(
@@ -449,26 +769,42 @@ def migrate_storage_layout(
     production_mode = is_production() if production is None else production
     state_dir = canonical_root / "state"
     report_path = state_dir / "migrations" / f"{_MIGRATION_NAME}.json"
+    lock_path = report_path.with_suffix(".lock")
 
-    with _MIGRATION_LOCK:
-        if report_path.is_file():
-            try:
-                existing = json.loads(report_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                existing = None
-            if isinstance(existing, dict) and existing.get("version") == _STORAGE_LAYOUT_VERSION:
-                return existing
+    canonical_root.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with _MIGRATION_LOCK, _migration_file_lock(lock_path):
+        existing = _load_migration_report(
+            report_path,
+            canonical_root=canonical_root,
+        )
+        if existing is not None and existing.get("status") == "complete":
+            return _repair_completed_layout(
+                existing,
+                report_path=report_path,
+                canonical_root=canonical_root,
+                source_root=source_root,
+                production_mode=production_mode,
+            )
 
-        canonical_root.mkdir(parents=True, exist_ok=True)
-        state_dir.mkdir(parents=True, exist_ok=True)
         archive_root = canonical_root / "legacy" / _MIGRATION_NAME
-        report: dict[str, Any] = {
-            "version": _STORAGE_LAYOUT_VERSION,
-            "migration": _MIGRATION_NAME,
-            "dataRoot": str(canonical_root),
-            "startedAt": datetime.now(timezone.utc).isoformat(),
-            "actions": [],
-        }
+        if existing is None:
+            report: dict[str, Any] = {
+                "version": _STORAGE_LAYOUT_VERSION,
+                "migration": _MIGRATION_NAME,
+                "dataRoot": str(canonical_root),
+                "startedAt": datetime.now(timezone.utc).isoformat(),
+                "status": "in_progress",
+                "actions": [],
+            }
+        else:
+            report = existing
+            resumed_at = report.setdefault("resumedAt", [])
+            if not isinstance(resumed_at, list):
+                raise RuntimeError("Storage migration report has an invalid resumedAt list")
+            resumed_at.append(datetime.now(timezone.utc).isoformat())
+        report["_reportPath"] = str(report_path)
+        _write_report(report_path, report)
 
         if production_mode:
             workspace_dir = canonical_root / "workspace"
@@ -545,6 +881,13 @@ def migrate_storage_layout(
             archive_root=archive_root,
             report=report,
         )
+        _rewrite_deployment_registry_paths(
+            canonical_root / "deployments" / "projects.json",
+            workspace_dir=workspace_dir,
+            source_root=source_root,
+            data_dir=canonical_root,
+            report=report,
+        )
 
         if not _paths_are_equal(legacy_state_dir, state_dir) and legacy_state_dir.is_dir():
             _merge_path(
@@ -593,7 +936,9 @@ def migrate_storage_layout(
             for source_name, destination_name in (
                 ("skills", "skills"),
                 ("runs", "runs"),
-                ("cron_logs", "cron_logs"),
+                ("cron_logs", "runs/cron_logs"),
+                ("uploads", "uploads"),
+                ("artifacts", "artifacts"),
             ):
                 _merge_path(
                     source_root / source_name,
@@ -622,22 +967,24 @@ def migrate_storage_layout(
 
         report["completedAt"] = datetime.now(timezone.utc).isoformat()
         report["status"] = "complete"
+        report.pop("_reportPath", None)
         _write_report(report_path, report)
         return report
 
 
 def ensure_data_dir() -> Path:
     data_dir = get_data_dir()
-    # An explicit override is deliberately isolated: importing Mini AIOS with
-    # a temporary/test root must never sweep legacy data out of the checkout.
-    # Administrative migrations can call migrate_storage_layout with injected
-    # roots before initialization.
-    if _configured_data_dir() is None:
+    configured = _configured_data_dir()
+    if configured is None:
         migrate_storage_layout(data_dir=data_dir)
     else:
-        data_dir.mkdir(parents=True, exist_ok=True)
-        for directory in _layout_directories(data_dir):
-            directory.mkdir(parents=True, exist_ok=True)
+        # An override selects an isolated root; migrate legacy children inside
+        # that root without ever scanning or moving checkout-local data.
+        migrate_storage_layout(
+            data_dir=data_dir,
+            project_root=data_dir,
+            production=True,
+        )
     return data_dir
 
 
@@ -661,6 +1008,7 @@ _LEGACY_PATH_PREFIXES = {
     "session": "sessions",
     "apps": "projects",
     "deploy": "deployments",
+    "cron_logs": "runs/cron_logs",
     "aios.db": "state/aios.db",
     "crons.db": "state/crons.db",
 }
@@ -681,5 +1029,14 @@ def resolve_workspace_path(path: str | Path) -> Path:
         return ensure_data_dir()
     translated = _LEGACY_PATH_PREFIXES.get(parts[0])
     if translated is not None:
-        return ensure_data_dir() / Path(translated, *parts[1:])
-    return ensure_data_dir() / raw_path
+        raw_path = Path(translated, *parts[1:])
+
+    data_dir = ensure_data_dir().resolve(strict=False)
+    resolved_path = (data_dir / raw_path).resolve(strict=False)
+    try:
+        resolved_path.relative_to(data_dir)
+    except ValueError as exc:
+        raise ValueError(
+            "data-relative paths cannot escape the Mini AIOS data root"
+        ) from exc
+    return resolved_path
