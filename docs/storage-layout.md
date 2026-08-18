@@ -88,3 +88,9 @@ Compatibility code may read or adopt those locations during migration. New
 records and files use the canonical directories above, and legacy paths should
 remain described as legacy wherever they appear in code, tests, or operations
 documentation.
+
+An archived legacy SQLite database is retained intact after migration. Chats,
+crons, cron runs, and device pairing are imported with canonical destination
+data taking precedence; pairing is restored only when the canonical database
+is unpaired. Legacy `gateway_events` and unrecognized tables remain archive-only
+and are not imported.
