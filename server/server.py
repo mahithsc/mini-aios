@@ -8,12 +8,24 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from aios_core.initialize import register_runtime_shutdown, shutdown_runtime, start_runtime
+from aios_core.initialize import (
+    register_runtime_shutdown,
+    shutdown_runtime,
+    start_runtime,
+)
 from aios_core.sessions import get_chat_artifacts_dir
+from server.cloud_events import (
+    cloud_device_events_enabled,
+    shutdown_cloud_device_events,
+    start_cloud_device_events,
+)
 from server.execution.runtime import shutdown_runs_service, start_runs_service
 from server.gateway.routes import router as gateway_router
 from server.lights import lights
-from server.notifications.runtime import shutdown_notification_service, start_notification_service
+from server.notifications.runtime import (
+    shutdown_notification_service,
+    start_notification_service,
+)
 from server.transcriptions import TranscriptionResponse, transcribe_upload
 from server.updater import router as updater_router
 from server.uploads import save_uploads
@@ -42,14 +54,19 @@ async def lifespan(_: FastAPI):
     start_runtime()
     await lights.start()
     await start_notification_service()
+    receive_cloud_events = cloud_device_events_enabled()
     await start_runs_service()
     _install_pi_progress_sink()
     try:
+        if receive_cloud_events:
+            await start_cloud_device_events()
         yield
     finally:
         from aios_core.tools.pi_job import set_progress_sink
 
         set_progress_sink(None)
+        if receive_cloud_events:
+            await shutdown_cloud_device_events()
         await lights.shutdown()
         await shutdown_notification_service()
         await shutdown_runs_service()
@@ -83,7 +100,11 @@ async def upload_attachments(
     files: list[UploadFile] = File(...),
 ) -> dict[str, object]:
     attachments = await save_uploads(chatId, files)
-    return {"attachments": [attachment.model_dump(mode="json") for attachment in attachments]}
+    return {
+        "attachments": [
+            attachment.model_dump(mode="json") for attachment in attachments
+        ]
+    }
 
 
 @app.post("/transcriptions", response_model=TranscriptionResponse)

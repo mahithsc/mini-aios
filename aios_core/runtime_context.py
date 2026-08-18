@@ -6,7 +6,9 @@ from pathlib import Path
 from .sessions import get_chat_artifacts_dir, get_chat_files_dir
 from .workspace import ensure_workspace_dir, resolve_workspace_path
 
-_CURRENT_CHAT_ID: ContextVar[str | None] = ContextVar("aios_current_chat_id", default=None)
+_CURRENT_CHAT_ID: ContextVar[str | None] = ContextVar(
+    "aios_current_chat_id", default=None
+)
 _CURRENT_CHAT_FILES_DIR: ContextVar[str | None] = ContextVar(
     "aios_current_chat_files_dir", default=None
 )
@@ -14,6 +16,7 @@ _CURRENT_CHAT_ARTIFACTS_DIR: ContextVar[str | None] = ContextVar(
     "aios_current_chat_artifacts_dir", default=None
 )
 _WORKSPACE_ROOT_SENTINELS = {
+    "apps",
     "cron_logs",
     "runs",
     "session",

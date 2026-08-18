@@ -25,7 +25,9 @@ FIXTURES = Path(__file__).parent / "fixtures" / "pi_rpc"
 
 
 def _fixture_events(name: str) -> list[dict]:
-    return [json.loads(line) for line in (FIXTURES / name).read_text().splitlines() if line]
+    return [
+        json.loads(line) for line in (FIXTURES / name).read_text().splitlines() if line
+    ]
 
 
 class _QueueStdout:
@@ -49,7 +51,7 @@ class _QueueStdout:
 
 
 class _ReactiveStdin:
-    def __init__(self, process: "_FakePiProcess") -> None:
+    def __init__(self, process: _FakePiProcess) -> None:
         self.process = process
         self.buffer = bytearray()
 
@@ -98,7 +100,9 @@ class _FakePiProcess:
             self.respond(request_id, "get_state", data={"isStreaming": False})
         elif command_type == "prompt":
             if self.reject_prompt:
-                self.respond(request_id, "prompt", success=False, error=self.reject_prompt)
+                self.respond(
+                    request_id, "prompt", success=False, error=self.reject_prompt
+                )
             else:
                 self.respond(request_id, "prompt")
                 for event in self.prompt_events:
@@ -177,7 +181,9 @@ def valid_workdir(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _install_process(monkeypatch, process: _FakePiProcess, captured: dict | None = None) -> None:
+def _install_process(
+    monkeypatch, process: _FakePiProcess, captured: dict | None = None
+) -> None:
     def popen(command, **kwargs):
         if captured is not None:
             captured["command"] = command
@@ -190,7 +196,10 @@ def _install_process(monkeypatch, process: _FakePiProcess, captured: dict | None
 def _wait_terminal(manager: PiJobManager, job_id: str, *, session_id=None, timeout=3.0):
     deadline = time.monotonic() + timeout
     result = manager.poll(job_id, wait=0.1, session_id=session_id)
-    while result.get("status") not in {"done", "error", "stopped"} and time.monotonic() < deadline:
+    while (
+        result.get("status") not in {"done", "error", "stopped"}
+        and time.monotonic() < deadline
+    ):
         result = manager.poll(
             job_id,
             cursor=0,
@@ -200,7 +209,9 @@ def _wait_terminal(manager: PiJobManager, job_id: str, *, session_id=None, timeo
     return result
 
 
-def test_start_handshakes_then_settled_completes_with_result(valid_workdir, monkeypatch):
+def test_start_handshakes_then_settled_completes_with_result(
+    valid_workdir, monkeypatch
+):
     process = _FakePiProcess(prompt_events=_fixture_events("success.jsonl"))
     captured: dict = {}
     _install_process(monkeypatch, process, captured)
@@ -211,7 +222,10 @@ def test_start_handshakes_then_settled_completes_with_result(valid_workdir, monk
     assert result["status"] == "done"
     assert result["result"] == "Task complete."
     assert result["stats"] == {"tokens": {"total": 42}}
-    assert [command["type"] for command in process.commands[:2]] == ["get_state", "prompt"]
+    assert [command["type"] for command in process.commands[:2]] == [
+        "get_state",
+        "prompt",
+    ]
     assert captured["kwargs"]["text"] is False
     assert captured["kwargs"]["start_new_session"] is True
     kinds = [event["kind"] for event in result["events"]]
@@ -221,12 +235,17 @@ def test_start_handshakes_then_settled_completes_with_result(valid_workdir, monk
     assert "agent_settled" in kinds
 
 
-def test_agent_end_or_message_end_without_agent_settled_stays_running(valid_workdir, monkeypatch):
+def test_agent_end_or_message_end_without_agent_settled_stays_running(
+    valid_workdir, monkeypatch
+):
     events = [
         {"type": "agent_end"},
         {
             "type": "message_end",
-            "message": {"role": "assistant", "content": [{"type": "text", "text": "not settled"}]},
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "not settled"}],
+            },
         },
     ]
     process = _FakePiProcess(prompt_events=events, final_text="now settled")
@@ -242,7 +261,9 @@ def test_agent_end_or_message_end_without_agent_settled_stays_running(valid_work
     assert result["result"] == "now settled"
 
 
-def test_settled_completion_race_orders_started_before_completed(valid_workdir, monkeypatch):
+def test_settled_completion_race_orders_started_before_completed(
+    valid_workdir, monkeypatch
+):
     process = _FakePiProcess(prompt_events=[{"type": "agent_settled"}])
     _install_process(monkeypatch, process)
     emitted: list[str] = []
@@ -255,7 +276,9 @@ def test_settled_completion_race_orders_started_before_completed(valid_workdir, 
     assert emitted[-1] == "pi.completed"
 
 
-def test_accepted_prompt_crash_race_replays_terminal_after_started(valid_workdir) -> None:
+def test_accepted_prompt_crash_race_replays_terminal_after_started(
+    valid_workdir,
+) -> None:
     emitted: list[str] = []
     set_progress_sink(lambda _sid, event_type, _payload: emitted.append(event_type))
     job = PiJob(
@@ -353,15 +376,21 @@ def test_extension_ui_requests_are_cancelled_fail_closed(valid_workdir, monkeypa
     ):
         time.sleep(0.01)
     responses = [
-        command for command in process.commands if command.get("type") == "extension_ui_response"
+        command
+        for command in process.commands
+        if command.get("type") == "extension_ui_response"
     ]
-    assert responses == [{"type": "extension_ui_response", "id": "ui-1", "cancelled": True}]
+    assert responses == [
+        {"type": "extension_ui_response", "id": "ui-1", "cancelled": True}
+    ]
     polled = manager.poll(started["job_id"])
     assert any(event["kind"] == "extension_ui_cancelled" for event in polled["events"])
     manager.stop(started["job_id"])
 
 
-def test_stop_sends_abort_then_term_and_kill_to_stubborn_process(valid_workdir, monkeypatch):
+def test_stop_sends_abort_then_term_and_kill_to_stubborn_process(
+    valid_workdir, monkeypatch
+):
     process = _FakePiProcess(ignore_term=True)
     _install_process(monkeypatch, process)
     manager = PiJobManager()
@@ -405,7 +434,9 @@ def test_protocol_failure_marks_error_and_reaps_process(valid_workdir, monkeypat
     assert process.terminate_calls == 1
 
 
-def test_absolute_cursor_resets_after_bounded_event_trimming(valid_workdir, monkeypatch):
+def test_absolute_cursor_resets_after_bounded_event_trimming(
+    valid_workdir, monkeypatch
+):
     process = _FakePiProcess()
     _install_process(monkeypatch, process)
     job = PiJob(
@@ -501,7 +532,11 @@ def test_poll_pages_events_by_count(valid_workdir, monkeypatch):
     first = manager.poll(started["job_id"], cursor=0)
     second = manager.poll(started["job_id"], cursor=first["cursor"])
     third = manager.poll(started["job_id"], cursor=second["cursor"])
-    assert [len(first["events"]), len(second["events"]), len(third["events"])] == [3, 3, 2]
+    assert [len(first["events"]), len(second["events"]), len(third["events"])] == [
+        3,
+        3,
+        2,
+    ]
     assert first["has_more"] is True
     assert second["has_more"] is True
     assert third["has_more"] is False
@@ -538,9 +573,13 @@ def test_poll_and_retained_events_are_bounded_by_bytes(valid_workdir, monkeypatc
     assert result["cursor_reset"] is True
     assert result["buffer_start_cursor"] == 3
     assert job._event_bytes <= 900
-    assert sum(
-        len(json.dumps(event, separators=(",", ":")).encode()) for event in result["events"]
-    ) <= 500
+    assert (
+        sum(
+            len(json.dumps(event, separators=(",", ":")).encode())
+            for event in result["events"]
+        )
+        <= 500
+    )
     assert "payload omitted" in result["events"][0]["detail"]
     manager.stop(started["job_id"])
 
@@ -586,7 +625,14 @@ def test_command_disables_discovery_and_enforces_profiles(tmp_path) -> None:
     assert coding[:4] == ["pi", "--mode", "rpc", "--no-session"]
     assert "--no-extensions" in coding
     assert "--no-context-files" in coding
-    assert coding[coding.index("--tools") + 1] == "read,grep,find,ls,bash,edit,write,deploy"
+    assert coding[coding.index("--tools") + 1] == (
+        "read,grep,find,ls,bash,edit,write,deploy,deployment_status,"
+        "get_deployment_status,get_deployment_events,get_app_info,"
+        "check_app_status,cancel_cloud_deployment,resume_cloud_deployment,"
+        "rollback_cloud_deployment,upload_app_media,list_app_media,"
+        "get_app_media_url,delete_app_media,list_database_tables,"
+        "inspect_database_table,query_database_table,list_database_migrations"
+    )
     assert "--extension" in coding
     assert read_only[read_only.index("--tools") + 1] == "read,grep,find,ls"
     assert "--extension" not in read_only
@@ -601,6 +647,7 @@ def test_environment_is_minimal_but_keeps_provider_auth() -> None:
             "APP_ENV": "production",
             "AIOS_ENV": "prod",
             "ENV": "production",
+            "AIOS_CLOUD_DEVICE_TOKEN": "device-control-plane-token",
             "DATABASE_URL": "must-not-leak",
             "RANDOM_APP_SECRET": "must-not-leak",
         }
@@ -609,6 +656,7 @@ def test_environment_is_minimal_but_keeps_provider_auth() -> None:
     assert env["APP_ENV"] == "production"
     assert env["AIOS_ENV"] == "prod"
     assert env["ENV"] == "production"
+    assert env["AIOS_CLOUD_DEVICE_TOKEN"] == "device-control-plane-token"
     assert env["AIOS_PYTHON"]
     assert "DATABASE_URL" not in env
     assert "RANDOM_APP_SECRET" not in env

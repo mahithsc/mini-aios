@@ -5,7 +5,8 @@ import json
 import os
 import time
 import uuid
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
@@ -18,7 +19,13 @@ from aios_core.sessions import (
     load_chat_session,
 )
 from server.execution.runtime import get_runs_service
+from server.notifications.runtime import get_notification_service
 from server.types.chat import AssistantMessage, ChatMetadata, UserMessage
+from server.types.notification import (
+    Notification,
+    NotificationDismissRequest,
+    NotificationListResponse,
+)
 from server.types.run import RunCreateRequest
 from server.updater import require_accepting_work
 
@@ -55,6 +62,54 @@ def require_gateway_auth(authorization: str | None = Header(default=None)) -> No
 router = APIRouter(dependencies=[Depends(require_gateway_auth)])
 
 
+@router.get("/notifications", response_model=NotificationListResponse)
+async def list_notifications() -> NotificationListResponse:
+    return get_notification_service().list_notifications()
+
+
+@router.post("/notifications/dismiss", response_model=Notification)
+async def dismiss_notification(body: NotificationDismissRequest) -> Notification:
+    notification = get_notification_service().dismiss_notification(body.id)
+    if notification is None:
+        raise HTTPException(status_code=404, detail="notification not found")
+    return notification
+
+
+@router.get("/notifications/events")
+async def stream_notification_events() -> StreamingResponse:
+    service = get_notification_service()
+    queue = service.broadcaster.subscribe()
+
+    async def event_source() -> AsyncIterator[str]:
+        try:
+            snapshot: dict[str, object] = {
+                "type": "notification.snapshot",
+                **service.list_notifications().model_dump(mode="json"),
+            }
+            yield (f"event: notification.snapshot\ndata: {json.dumps(snapshot)}\n\n")
+            while True:
+                try:
+                    message = await asyncio.wait_for(
+                        queue.get(), timeout=_SSE_KEEPALIVE_SECONDS
+                    )
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"event: {message['type']}\ndata: {json.dumps(message)}\n\n"
+        finally:
+            service.broadcaster.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 def _get_chat_or_404(session_id: str) -> ChatMetadata:
     chat = get_chat_metadata(session_id)
     if chat is None:
@@ -77,7 +132,9 @@ def _gateway_status(chat: ChatMetadata, active_chat_ids: set[str] | None = None)
     return status
 
 
-def _session_out(chat: ChatMetadata, active_chat_ids: set[str] | None = None) -> SessionOut:
+def _session_out(
+    chat: ChatMetadata, active_chat_ids: set[str] | None = None
+) -> SessionOut:
     return SessionOut(
         id=chat.id,
         hermes_session_id=chat.id,
@@ -175,7 +232,9 @@ async def submit_message(session_id: str, body: MessageCreate) -> MessageSubmitO
 
 
 @router.get("/sessions/{session_id}/events/history", response_model=list[EventOut])
-async def get_event_history(session_id: str, after: int = 0, limit: int = 200) -> list[EventOut]:
+async def get_event_history(
+    session_id: str, after: int = 0, limit: int = 200
+) -> list[EventOut]:
     _get_chat_or_404(session_id)
     rows = list_gateway_events_after(session_id, after=after, limit=limit)
     return [EventOut(**row) for row in rows]
@@ -212,8 +271,10 @@ async def stream_events(
                 yield _format_sse(row)
             while True:
                 try:
-                    row = await asyncio.wait_for(queue.get(), timeout=_SSE_KEEPALIVE_SECONDS)
-                except asyncio.TimeoutError:
+                    row = await asyncio.wait_for(
+                        queue.get(), timeout=_SSE_KEEPALIVE_SECONDS
+                    )
+                except TimeoutError:
                     yield ": keepalive\n\n"
                     continue
                 if row["id"] <= cursor:
@@ -240,7 +301,9 @@ async def interrupt_session(session_id: str) -> dict[str, Any]:
 
     runs_service = get_runs_service()
     active = runs_service.list_active_runs(kinds=["chat"])
-    target = next((snapshot for snapshot in active if snapshot.chatId == session_id), None)
+    target = next(
+        (snapshot for snapshot in active if snapshot.chatId == session_id), None
+    )
     if target is None:
         return {"status": "idle", "hermes": None}
 

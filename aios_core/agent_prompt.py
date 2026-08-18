@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Mapping, Sequence
+from typing import Any
 from zoneinfo import ZoneInfo
 
 _BASE_TOOLS_BLOCK = """
@@ -75,32 +76,6 @@ _BASE_TOOLS_BLOCK = """
      "thinking_level": "string?", "profile": "string? (coding|read_only)"},
     pi,
 ),
-"apps_list": (
-    "List the apps you've deployed (slug, status, whether the container is running). "
-    "Deployed apps are durable services that outlive the chat.",
-    {},
-    apps_list,
-),
-"app_status": (
-    "Get one deployed app's status (running?, stored status, port).",
-    {"slug": "string"},
-    app_status,
-),
-"app_logs": (
-    "Fetch recent container logs for a deployed app to debug it.",
-    {"slug": "string", "tail": "number? (lines, default 100)"},
-    app_logs,
-),
-"app_restart": (
-    "Restart a deployed app's container.",
-    {"slug": "string"},
-    app_restart,
-),
-"app_stop": (
-    "Stop a deployed app's container (its definition is kept so it can be restarted).",
-    {"slug": "string"},
-    app_stop,
-),
 "cron": (
     "Manage scheduled cron jobs (actions: create, list, edit, delete)",
     {"action": "string", "name": "string?", "description": "string?",
@@ -129,6 +104,63 @@ _BASE_TOOLS_BLOCK = """
     "Fetch a web page by URL and return its contents as readable text. HTML is converted to plain text automatically.",
     {"url": "string", "timeout": "number?"},
     fetch,
+),
+""".strip()
+
+_APP_TOOLS_BLOCK = """
+"app_create": (
+    "Reserve a cloud app identity and create its durable workspace/apps/<app-id> "
+    "source directory. Returns the app_id and absolute workspace_path to give Pi.",
+    {"name": "string (human-readable app name)"},
+    app_create,
+),
+"app_workspace": (
+    "Resolve an existing app ID to its durable local source workspace. May safely "
+    "adopt legacy source; never fabricate replacement source when found=false.",
+    {"app_id": "string"},
+    app_workspace,
+),
+"app_info": (
+    "Get cloud app metadata, component deployment state, and active URLs.",
+    {"app_id": "string"},
+    app_info,
+),
+"secrets_list": (
+    "List cloud secret references and configured metadata without returning values.",
+    {},
+    secrets_list,
+),
+"apps_list": (
+    "List durable local app workspaces, including unfinished apps. Returns each "
+    "app_id, name, absolute workspace_path, manifest state, and components.",
+    {},
+    apps_list,
+),
+"legacy_apps_list": (
+    "List legacy device-local Supervisor apps by slug for use with the legacy "
+    "status, logs, restart, and stop tools.",
+    {},
+    legacy_apps_list,
+),
+"app_status": (
+    "Get one legacy device-local app's status (running?, stored status, port).",
+    {"slug": "string"},
+    app_status,
+),
+"app_logs": (
+    "Fetch recent logs for a legacy device-local app.",
+    {"slug": "string", "tail": "number? (lines, default 100)"},
+    app_logs,
+),
+"app_restart": (
+    "Restart a legacy device-local app container.",
+    {"slug": "string"},
+    app_restart,
+),
+"app_stop": (
+    "Stop a legacy device-local app container while retaining its definition.",
+    {"slug": "string"},
+    app_stop,
 ),
 """.strip()
 
@@ -199,6 +231,28 @@ def build_agent_prompt(
         "%Y-%m-%d %H:%M:%S %Z"
     )
     utc_now = datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%d %H:%M:%S %Z")
+    if include_subagent_tool:
+        app_workspace_guidance = (
+            f"Durable application source belongs in `{workspace_dir}/apps/<app-id>`, "
+            "never in a chat session directory. Use `app_create` for a new app and "
+            "give Pi the returned absolute `workspace_path`. For an existing app, "
+            "use `apps_list` or `app_workspace` and continue from its canonical "
+            "workspace rather than creating replacement source."
+        )
+        app_deploy_guidance = """
+            Building runnable apps — AUTO-DEPLOY: when the user EXPLICITLY asks you to build a runnable website, server, dashboard, API, or similar app, first call `app_create` to reserve its cloud identity and durable source directory. Delegate Pi in the same turn with `path` set to the returned `workspace_path`; include the returned `app_id` in its self-contained task. Tell Pi to create `aios.deploy.yaml`, declare only the components the app actually contains, build and test them, call its trusted `deploy` tool once to enqueue the ordered cloud pipeline, and call `deployment_status` until the pipeline reaches a terminal state. For an existing app, resolve its canonical workspace with `apps_list` or `app_workspace` and never rebuild it in chat scratch space.
+            The cloud pipeline owns dependency order and deploys database, server, and frontend from one uploaded artifact. Pi must not use provider CLIs, direct provider APIs, bundled hosting tools, or the legacy device-local `project.json` deployer. If the AIOS deploy tool returns an actionable manifest or artifact error, Pi should correct the app and retry. A queued or running pipeline is not a successful deployment; include a live URL only when the cloud reports terminal success and returns one.
+            Only auto-deploy when the user explicitly asked to build an app. For ordinary code edits, snippets, scripts, one-off programs, or library/package work, do NOT deploy.
+        """
+    else:
+        app_workspace_guidance = (
+            "When a task concerns an existing app, work only in the canonical app "
+            "workspace supplied by the caller. Do not reserve app identities, create "
+            "session-scoped copies, or fabricate missing application source."
+        )
+        app_deploy_guidance = """
+            The main agent owns cloud app identity and durable-workspace selection. If it delegates an explicitly requested app build in a supplied app workspace, pass that exact path and app ID to Pi. Pi may create `aios.deploy.yaml` and use its trusted cloud deployment tools only when deployment is part of the delegated task. Never use provider CLIs, direct provider APIs, or the legacy device-local `project.json` deployer.
+        """
 
     sections = [
         _section(
@@ -240,7 +294,8 @@ def build_agent_prompt(
             f"""
             All work for the user must happen inside the workspace.
             Workspace path: {workspace_dir}
-            If you create a new project folder, create a `WORKSPACE.md` file in that folder and keep it updated with project-specific documentation.
+            {app_workspace_guidance}
+            For non-app projects, create a `WORKSPACE.md` file and keep it updated with project-specific documentation.
             For longer-horizon work, it is encouraged to keep a `TICKETS.md` task board so progress and decisions remain visible.
             """,
         ),
@@ -277,14 +332,12 @@ def build_agent_prompt(
         ),
         _section(
             "writing_code",
-            """
+            f"""
             A big part of your job is writing code.
             Use `pi(action="start")` to delegate coding tasks — implementing, editing, refactoring, or building apps — to the Pi coding agent. It runs in the background, so retain its job_id and call `pi(action="poll")` with the latest cursor for progress and the result. Hand it a clear, self-contained task that names the target files, includes the context it needs, and says how to verify the result; Pi cannot see this chat. Keep polling until its status is done, error, or stopped. If the user's direction changes while the job is active, use `pi(action="steer")`; use `pi(action="stop")` when its work is no longer wanted.
             Do simple, quick edits yourself with the file tools; reserve Pi for substantial coding work rather than trivial one-liners.
 
-            Building runnable apps — AUTO-DEPLOY: when the user EXPLICITLY asks you to build an app that runs (a website, web server, dashboard, API, or similar runnable app), instruct Pi in the very same task to DEPLOY it after building. Pi has a `deploy` tool that builds and runs the app in a container and returns a live URL. Tell Pi to create a `project.json` (the run command + port), call `deploy`, inspect returned logs on error, fix the app, and retry. Deliver the running app and its URL; the user should NOT have to separately ask you to start or run it.
-            CRITICAL — the deploy runtime is PYTHON-ONLY (a `python:3.12-slim` container with pip; NO Node/npm). Only build things it can actually run: either a static site (plain HTML/CSS/JS, no build step) served by a tiny Python stdlib server, or a Python app (Flask / FastAPI / stdlib `http.server`). Do NOT use React, Vue, Angular, Next, or anything that needs `npm`, a build step, or Node because the runtime cannot run them. E.g. a weather app or dashboard should be plain HTML + vanilla JS calling the API client-side, served by a small Python server; `project.json` runs that Python server on a port.
-            Only auto-deploy when the user explicitly asked to build an app. For ordinary code edits, snippets, scripts, one-off programs, or library/package work, do NOT deploy.
+            {app_deploy_guidance}
 
             When coding, explain the intended change before delegating, and summarize the outcome after Pi finishes — including the live URL when you built an app.
             """,
@@ -332,7 +385,7 @@ def build_agent_prompt(
         sections.append(
             _section(
                 "generative_ui",
-                f"""
+                """
                 You may create generative UI when a visual explanation or interactive artifact would materially help the user.
                 Use `generative_widget` for generative UI.
                 Call `generative_widget(function="documentation")` first when you need the widget guidelines.
@@ -364,7 +417,7 @@ def build_agent_prompt(
     if include_memory_tools:
         tools_block = f"{tools_block}\n{_MEMORY_TOOLS_BLOCK}"
     if include_subagent_tool:
-        tools_block = f"{tools_block}\n{_SUBAGENT_TOOLS_BLOCK}"
+        tools_block = f"{tools_block}\n{_APP_TOOLS_BLOCK}\n{_SUBAGENT_TOOLS_BLOCK}"
     sections.append(_section("tools", tools_block))
 
     return "\n\n".join(sections)

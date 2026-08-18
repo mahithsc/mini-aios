@@ -9,10 +9,11 @@ services:
       AIOS_ENV: production
       AIOS_SERVER_HOST: 0.0.0.0
       AIOS_SERVER_PORT: 8765
-      AIOS_CLOUD_URL: https://computer.trywink.io
+      AIOS_CLOUD_URL: https://computer.winkapiserver.org
       AIOS_RELEASE_ID: ${AIOS_RELEASE_ID}
       AIOS_VERSION: ${AIOS_VERSION}
       AIOS_RELEASE_SEQUENCE: ${AIOS_RELEASE_SEQUENCE}
+      AIOS_DATABASE_SCHEMA: ${AIOS_DATABASE_SCHEMA:-5}
       AIOS_IMAGE_DIGEST: ${AIOS_IMAGE_DIGEST}
       AIOS_REVISION: ${AIOS_REVISION}
       AIOS_DISABLE_MDNS: "0"

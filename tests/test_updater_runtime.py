@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from aios_core import runtime_control
+from aios_core.db import initialize_app_db
 from aios_core.runtime_control import RuntimeControl, RuntimeDrainingError
 from server import updater
 
@@ -39,8 +40,7 @@ def test_updater_api_auth_drain_ready_and_resume(
     for name in ("skills", "session", "runs"):
         (workspace / name).mkdir()
     database = workspace / "aios.db"
-    with sqlite3.connect(database) as connection:
-        connection.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)")
+    initialize_app_db(str(database))
 
     control = RuntimeControl(workspace / "update-drain.json")
     monkeypatch.setattr(runtime_control, "_runtime_control", control)
@@ -71,6 +71,8 @@ def test_updater_api_auth_drain_ready_and_resume(
     assert ready.json()["status"] == "ready"
     assert ready.json()["releaseId"] == "test-release"
     assert ready.json()["sequence"] == 7
+    assert ready.json()["migrationState"] == "complete"
+    assert ready.json()["checks"]["databaseSchema"] == "ok"
 
     drained = client.post("/internal/updater/drain", headers=headers)
     assert drained.status_code == 200
@@ -80,3 +82,39 @@ def test_updater_api_auth_drain_ready_and_resume(
     resumed = client.post("/internal/updater/resume", headers=headers)
     assert resumed.status_code == 200
     assert resumed.json()["draining"] is False
+
+
+def test_updater_ready_rejects_migration_checksum_mismatch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("skills", "session", "runs"):
+        (workspace / name).mkdir()
+    database = workspace / "aios.db"
+    initialize_app_db(str(database))
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE schema_migrations SET checksum = 'wrong' WHERE version = 5"
+        )
+
+    monkeypatch.setattr(updater, "ensure_workspace_dir", lambda: workspace)
+    monkeypatch.setattr(
+        updater,
+        "get_db_connection",
+        lambda: sqlite3.connect(database),
+    )
+    monkeypatch.setenv("AIOS_UPDATER_TOKEN", "test-updater-token")
+
+    app = FastAPI()
+    app.include_router(updater.router)
+    response = TestClient(app).get(
+        "/internal/updater/ready",
+        headers={"Authorization": "Bearer test-updater-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "not_ready"
+    assert response.json()["migrationState"] == "error"
+    assert response.json()["checks"]["databaseSchema"] == "error"

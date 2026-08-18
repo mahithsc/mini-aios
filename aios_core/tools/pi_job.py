@@ -8,9 +8,10 @@ import signal
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from time import monotonic
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from ..runtime_context import (
@@ -25,6 +26,25 @@ PiProfile = Literal["coding", "read_only"]
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEPLOY_EXTENSION = _REPO_ROOT / "aios_core" / "pi_extensions" / "deploy.ts"
+_CLOUD_TOOL_NAMES = (
+    "deploy",
+    "deployment_status",
+    "get_deployment_status",
+    "get_deployment_events",
+    "get_app_info",
+    "check_app_status",
+    "cancel_cloud_deployment",
+    "resume_cloud_deployment",
+    "rollback_cloud_deployment",
+    "upload_app_media",
+    "list_app_media",
+    "get_app_media_url",
+    "delete_app_media",
+    "list_database_tables",
+    "inspect_database_table",
+    "query_database_table",
+    "list_database_migrations",
+)
 _ACTIVE_STATUSES = {"starting", "running", "stopping"}
 _TERMINAL_STATUSES = {"done", "error", "stopped"}
 _ANONYMOUS_OWNER = "default"
@@ -132,13 +152,19 @@ _ENV_ALLOWLIST = {
     "AIOS_ENV",
     "APP_ENV",
     "ENV",
+    "AIOS_CLOUD_URL",
+    # This device-scoped control-plane credential is required only by the
+    # trusted deploy extension. Application/database secrets remain excluded.
+    "AIOS_CLOUD_DEVICE_TOKEN",
 }
 
 
 def sanitized_pi_environment(source: dict[str, str] | None = None) -> dict[str, str]:
     """Build the deliberately small environment inherited by a Pi worker."""
     source = os.environ if source is None else source
-    env = {key: str(source[key]) for key in _ENV_ALLOWLIST if source.get(key) is not None}
+    env = {
+        key: str(source[key]) for key in _ENV_ALLOWLIST if source.get(key) is not None
+    }
     env.setdefault("PATH", os.defpath)
     env.setdefault("LANG", "C.UTF-8")
     env.setdefault("TERM", "dumb")
@@ -179,7 +205,7 @@ def build_pi_command(
         tools.extend(["bash", "edit", "write"])
         if extension.is_file():
             command.extend(["--extension", str(extension.resolve())])
-            tools.append("deploy")
+            tools.extend(_CLOUD_TOOL_NAMES)
     command.extend(["--tools", ",".join(tools)])
     if isinstance(provider, str) and provider.strip():
         command.extend(["--provider", provider.strip()])
@@ -238,7 +264,11 @@ def _extract_assistant_text(message: Any) -> str | None:
         return None
     chunks: list[str] = []
     for block in content:
-        if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
+        if (
+            isinstance(block, dict)
+            and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+        ):
             chunks.append(block["text"])
     return "".join(chunks)
 
@@ -369,7 +399,9 @@ class PiJob:
                 raise PiRPCError("Pi get_state returned no state data")
             rpc.request("prompt", timeout=HANDSHAKE_TIMEOUT_SECONDS, message=self.task)
         except Exception as exc:
-            detail = self._stderr_text() or str(exc) or "Pi RPC startup handshake failed"
+            detail = (
+                self._stderr_text() or str(exc) or "Pi RPC startup handshake failed"
+            )
             self._finish("error", error=detail)
             self._shutdown_process()
             raise
@@ -392,7 +424,9 @@ class PiJob:
             self._prompt_accepted = True
             if self.status == "starting":
                 self.status = "running"
-            self._emit("pi.started", {"task_summary": self.task[:200], "workdir": self.workdir})
+            self._emit(
+                "pi.started", {"task_summary": self.task[:200], "workdir": self.workdir}
+            )
             self._emit_completion_once_locked()
             should_finalize = (
                 self._settled_pending_acceptance
@@ -415,18 +449,25 @@ class PiJob:
             while monotonic() < deadline:
                 with self._lock:
                     ready = (
-                        any(sequence >= requested_cursor for sequence, _, _ in self._events)
+                        any(
+                            sequence >= requested_cursor
+                            for sequence, _, _ in self._events
+                        )
                         or self.status in _TERMINAL_STATUSES
                     )
                 if ready:
                     break
-                self._new_event.wait(timeout=min(0.25, max(0.0, deadline - monotonic())))
+                self._new_event.wait(
+                    timeout=min(0.25, max(0.0, deadline - monotonic()))
+                )
                 self._new_event.clear()
         with self._lock:
             latest_cursor = self._next_event_cursor
             buffer_start = self._events[0][0] if self._events else latest_cursor
             normalized_cursor = min(max(requested_cursor, buffer_start), latest_cursor)
-            available = [record for record in self._events if record[0] >= normalized_cursor]
+            available = [
+                record for record in self._events if record[0] >= normalized_cursor
+            ]
             page: list[dict[str, Any]] = []
             page_bytes = 0
             page_cursor = latest_cursor
@@ -453,7 +494,9 @@ class PiJob:
                 "buffer_start_cursor": buffer_start,
                 "cursor_reset": requested_cursor < buffer_start,
                 "result": self.result if self.status == "done" else None,
-                "result_truncated": self._result_truncated if self.status == "done" else False,
+                "result_truncated": self._result_truncated
+                if self.status == "done"
+                else False,
                 "stats": dict(self.stats) if self.stats is not None else None,
                 "error": self.error,
             }
@@ -470,7 +513,11 @@ class PiJob:
         try:
             rpc.request("steer", timeout=RPC_TIMEOUT_SECONDS, message=message.strip())
         except PiRPCError as exc:
-            return {"error": str(exc), "job_id": self.id, "status": self.current_status()}
+            return {
+                "error": str(exc),
+                "job_id": self.id,
+                "status": self.current_status(),
+            }
         return {"job_id": self.id, "status": self.current_status(), "accepted": True}
 
     def stop(self, *, reason: str = "stopped by request") -> None:
@@ -575,7 +622,10 @@ class PiJob:
             with self._lock:
                 if self._stop_requested:
                     return
-                if self.status not in _ACTIVE_STATUSES or self._settle_finalizer_started:
+                if (
+                    self.status not in _ACTIVE_STATUSES
+                    or self._settle_finalizer_started
+                ):
                     return
                 if not self._prompt_accepted:
                     self._settled_pending_acceptance = True
@@ -598,7 +648,9 @@ class PiJob:
         stats: dict[str, Any] | None = None
         if rpc is not None and not rpc.closed:
             try:
-                response = rpc.request("get_last_assistant_text", timeout=RPC_TIMEOUT_SECONDS)
+                response = rpc.request(
+                    "get_last_assistant_text", timeout=RPC_TIMEOUT_SECONDS
+                )
                 data = response.get("data")
                 if isinstance(data, dict) and isinstance(data.get("text"), str):
                     text = data["text"]
@@ -630,7 +682,11 @@ class PiJob:
         with self._lock:
             if self._intentional_shutdown or self.status in _TERMINAL_STATUSES:
                 return
-        detail = protocol_error or self._stderr_text() or "Pi RPC stream closed before agent_settled"
+        detail = (
+            protocol_error
+            or self._stderr_text()
+            or "Pi RPC stream closed before agent_settled"
+        )
         self._finish("error", error=detail)
         self._shutdown_process()
 
@@ -689,9 +745,14 @@ class PiJob:
         """
         try:
             event_bytes = len(
-                json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode(
+                    "utf-8"
+                )
             )
-        except (TypeError, ValueError):  # pragma: no cover - normalized events are JSON-safe
+        except (
+            TypeError,
+            ValueError,
+        ):  # pragma: no cover - normalized events are JSON-safe
             event_bytes = len(str(event).encode("utf-8", errors="replace"))
         should_emit = True
         with self._lock:
@@ -701,7 +762,10 @@ class PiJob:
             now = monotonic()
             if kind == "tool_update" and key:
                 previous = self._tool_update_state.get(key)
-                if previous is not None and now - previous[0] < TOOL_UPDATE_COALESCE_SECONDS:
+                if (
+                    previous is not None
+                    and now - previous[0] < TOOL_UPDATE_COALESCE_SECONDS
+                ):
                     previous_sequence = previous[1]
                     for index, (sequence, _, stored_bytes) in enumerate(self._events):
                         if sequence == previous_sequence:
@@ -717,7 +781,9 @@ class PiJob:
 
             if kind == "tool_update" and key:
                 prior = self._tool_update_state.get(key)
-                last_emitted_at = prior[0] if prior is not None and not should_emit else now
+                last_emitted_at = (
+                    prior[0] if prior is not None and not should_emit else now
+                )
                 self._tool_update_state[key] = (last_emitted_at, sequence)
             elif kind == "tool_end" and key:
                 self._tool_update_state.pop(key, None)
@@ -729,7 +795,10 @@ class PiJob:
                 removed_sequence, removed_event, removed_bytes = self._events.pop(0)
                 self._event_bytes -= removed_bytes
                 removed_id = removed_event.get("tool_call_id")
-                if removed_event.get("kind") == "tool_update" and removed_id is not None:
+                if (
+                    removed_event.get("kind") == "tool_update"
+                    and removed_id is not None
+                ):
                     removed_key = str(removed_id)
                     state = self._tool_update_state.get(removed_key)
                     if state is not None and state[1] == removed_sequence:
@@ -803,7 +872,11 @@ class PiJob:
             sink(
                 self.progress_session_id,
                 event_type,
-                {"job_id": self.id, "parent_tool_call_id": self.parent_tool_call_id, **payload},
+                {
+                    "job_id": self.id,
+                    "parent_tool_call_id": self.parent_tool_call_id,
+                    **payload,
+                },
             )
         except Exception:
             pass
@@ -998,7 +1071,11 @@ class PiJobManager:
         owner = self._owner(session_id)
         with self._lock:
             self._prune_locked()
-            jobs = [job.summary() for job in self._jobs.values() if job.owner_session_id == owner]
+            jobs = [
+                job.summary()
+                for job in self._jobs.values()
+                if job.owner_session_id == owner
+            ]
         return {"jobs": jobs}
 
     def close_all(self) -> None:

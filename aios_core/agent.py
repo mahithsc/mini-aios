@@ -6,6 +6,18 @@ from dotenv import load_dotenv
 from openai.types.shared import Reasoning
 
 from .agent_prompt import build_agent_prompt
+from .deploy.agent_tools import (
+    app_create,
+    app_info,
+    app_logs,
+    app_restart,
+    app_status,
+    app_stop,
+    app_workspace,
+    apps_list,
+    legacy_apps_list,
+    secrets_list,
+)
 from .memory import build_memory_prompt
 from .openai_runtime import as_function_tool
 from .sessions import (
@@ -24,13 +36,12 @@ from .tools import (
     write,
 )
 from .tools.canvas import show_canvas
-from .tools.pi import pi
-from .deploy.agent_tools import app_logs, app_restart, app_status, app_stop, apps_list
 from .tools.cron import cron
 from .tools.fetch import fetch
 from .tools.generative_widget import generative_widget
 from .tools.memory import memory
 from .tools.notify import notify
+from .tools.pi import pi
 from .tools.session_search import session_search
 from .tools.subagent import subagent
 from .workspace import resolve_workspace_path
@@ -74,7 +85,12 @@ MAIN_TOOLS = [
     memory,
     session_search,
     subagent,
+    app_create,
+    app_workspace,
+    app_info,
+    secrets_list,
     apps_list,
+    legacy_apps_list,
     app_status,
     app_logs,
     app_restart,

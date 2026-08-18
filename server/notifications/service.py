@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 
 from aios_core.db import DB_PATH, get_db_connection
 from server.notifications.broadcaster import NotificationBroadcaster
-from server.types.notification import Notification, NotificationListResponse, NotificationSource
+from server.types.notification import (
+    Notification,
+    NotificationListResponse,
+    NotificationSource,
+)
 
 DEFAULT_NOTIFICATION_LOOKBACK_DAYS = 7
 
@@ -20,6 +25,10 @@ class NotificationService:
     ) -> None:
         self._db_path = db_path
         self._broadcaster = broadcaster
+
+    @property
+    def broadcaster(self) -> NotificationBroadcaster:
+        return self._broadcaster
 
     async def start(self) -> None:
         return
@@ -79,12 +88,85 @@ class NotificationService:
         self._broadcast(self._broadcaster.broadcast_created(notification))
         return notification
 
+    def create_cloud_event_notification(
+        self,
+        *,
+        event_id: str,
+        sequence: int,
+        event_type: str,
+        payload: dict,
+        title: str,
+        body: str,
+        level: str = "info",
+    ) -> Notification | None:
+        """Persist one cloud event and its notification in one transaction."""
+        now = int(time.time() * 1000)
+        notification = Notification(
+            id=str(uuid.uuid4()),
+            source="system",
+            sourceId=event_id,
+            runId=(
+                str(payload["pipeline_id"])
+                if payload.get("pipeline_id") is not None
+                else None
+            ),
+            chatId=None,
+            level=level,
+            title=title,
+            body=body,
+            createdAt=now,
+            updatedAt=now,
+            dismissedAt=None,
+        )
+        with get_db_connection(self._db_path) as conn:
+            inserted = conn.execute(
+                """
+                INSERT OR IGNORE INTO cloud_device_events (
+                    event_id, sequence, event_type, payload_json, received_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    sequence,
+                    event_type,
+                    json.dumps(payload, separators=(",", ":"), sort_keys=True),
+                    now,
+                ),
+            )
+            if inserted.rowcount == 0:
+                return None
+            conn.execute(
+                """
+                INSERT INTO notifications (
+                    id, source, source_id, run_id, chat_id, level,
+                    title, body, created_at, updated_at, dismissed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    notification.id,
+                    notification.source,
+                    notification.sourceId,
+                    notification.runId,
+                    notification.chatId,
+                    notification.level,
+                    notification.title,
+                    notification.body,
+                    notification.createdAt,
+                    notification.updatedAt,
+                    notification.dismissedAt,
+                ),
+            )
+        self._broadcast(self._broadcaster.broadcast_created(notification))
+        return notification
+
     def list_notifications(
         self,
         *,
         lookback_days: int = DEFAULT_NOTIFICATION_LOOKBACK_DAYS,
     ) -> NotificationListResponse:
-        threshold_ms = int(time.time() * 1000) - max(0, lookback_days) * 24 * 60 * 60 * 1000
+        threshold_ms = (
+            int(time.time() * 1000) - max(0, lookback_days) * 24 * 60 * 60 * 1000
+        )
         with get_db_connection(self._db_path) as conn:
             rows = conn.execute(
                 """
@@ -105,8 +187,10 @@ class NotificationService:
         existing = self.get_notification(notification_id)
         if existing is None:
             return None
+        if existing.dismissedAt is not None:
+            return existing
 
-        dismissed_at = existing.dismissedAt or int(time.time() * 1000)
+        dismissed_at = int(time.time() * 1000)
         updated = existing.model_copy(
             update={
                 "updatedAt": dismissed_at,
@@ -115,14 +199,16 @@ class NotificationService:
         )
 
         with get_db_connection(self._db_path) as conn:
-            conn.execute(
+            changed = conn.execute(
                 """
                 UPDATE notifications
                 SET updated_at = ?, dismissed_at = ?
-                WHERE id = ?
+                WHERE id = ? AND dismissed_at IS NULL
                 """,
                 (updated.updatedAt, updated.dismissedAt, notification_id),
             )
+        if changed.rowcount == 0:
+            return self.get_notification(notification_id)
 
         self._broadcast(self._broadcaster.broadcast_dismissed(updated))
         return updated

@@ -40,10 +40,25 @@ because the RPC protocol has no version-negotiation handshake.
 ## Deployment
 
 Pi intentionally has no MCP client. Mini AIOS therefore supplies a trusted Pi
-extension that registers `deploy`. The extension calls a one-shot Python bridge,
-which delegates to the existing deployment core and returns structured build,
-health, URL, and log feedback to Pi. This preserves the build/fix/redeploy loop
-without exposing another tool to the main agent.
+extension backed by a finite one-shot Python bridge. The bridge exposes:
+
+- `deploy` plus durable pipeline and component status/lifecycle tools;
+- cloud app information and status;
+- workspace-confined app media upload/list/URL/delete operations; and
+- structured, policy-checked database table inspection and read-only queries.
+
+`deploy` is locked to Pi's current manifest-rooted workspace, validates and
+uploads one artifact, and asks aios-cloud to orchestrate database, server, and
+frontend tiers in dependency order. Its Pi tool-call-derived operation ID makes
+one invocation idempotent; the cloud client rejects pipeline calls without a
+stable operation key. Durable workspace metadata must match the manifest and is
+never included in the artifact. Dependency/cache trees, credential files, local
+database files, and high-confidence embedded credentials are also excluded or
+rejected before upload. Pipeline status prevents Pi from mistaking an
+accepted request for a live deployment. The database bridge accepts structured
+filters and ordering, never raw SQL. Provider credentials, user secret values,
+generic HTTP access, arbitrary source roots, and direct provider deployment
+tools are not exposed through the extension.
 
 ## Safety boundary
 
@@ -54,12 +69,17 @@ environment to an allowlist, caps concurrent jobs and retained output, drains
 stderr concurrently, uses an independent watchdog, and starts each worker in a
 new process group. Production deployments that need a stronger trust boundary
 must run workers as a restricted OS user or in a dedicated container with only
-the target workspace mounted writable and only the selected provider credential.
+the target workspace mounted writable. The filtered worker environment contains
+model-provider authentication and the device-scoped aios-cloud credential needed
+by the trusted bridge; because Pi also has a shell, these credentials are inside
+the same OS trust boundary even though application and infrastructure-provider
+secrets remain excluded.
 
 ## Verification
 
 The deterministic suite uses a fake RPC subprocess to cover framing, correlated
 responses, retry/settlement semantics, steering, stopping, ownership, capacity,
-buffer limits, and process cleanup. Live Pi and full build/deploy tests remain
-opt-in because they require provider access, network usage, and potentially
-Docker.
+buffer limits, bridge validation, trusted-extension loading, and process cleanup.
+Live Pi and full cloud deployment tests remain opt-in because they require
+provider access, network usage, model spend, and cloud resources. Legacy local
+Supervisor tests additionally require Docker.

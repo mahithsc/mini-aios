@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import os
 import secrets
+import sqlite3
 from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException
 
-from aios_core.db import get_db_connection
+from aios_core.db import get_db_connection, validate_app_db_schema
 from aios_core.release import get_release_info
 from aios_core.runtime_control import RuntimeDrainingError, get_runtime_control
 from aios_core.workspace import ensure_workspace_dir
@@ -78,12 +79,17 @@ async def updater_ready(
     workspace = ensure_workspace_dir()
     checks: dict[str, str] = {}
     status = "ready"
+    migration_state = "error"
     try:
         with get_db_connection() as connection:
             result = connection.execute("PRAGMA quick_check").fetchone()
+            validate_app_db_schema(connection)
         checks["database"] = "ok" if result and result[0] == "ok" else "error"
-    except Exception:
+        checks["databaseSchema"] = "ok"
+        migration_state = "complete"
+    except (OSError, RuntimeError, sqlite3.Error):
         checks["database"] = "error"
+        checks["databaseSchema"] = "error"
     try:
         required = (
             workspace,
@@ -92,7 +98,9 @@ async def updater_ready(
             workspace / "runs",
         )
         checks["runtimeDirectories"] = (
-            "ok" if all(path.exists() and path.is_dir() for path in required) else "error"
+            "ok"
+            if all(path.exists() and path.is_dir() for path in required)
+            else "error"
         )
     except OSError:
         checks["runtimeDirectories"] = "error"
@@ -102,7 +110,7 @@ async def updater_ready(
     return {
         "status": status,
         **get_release_info().as_dict(),
-        "migrationState": "complete",
+        "migrationState": migration_state,
         "acceptingWork": not drain.draining,
         "drain": drain.as_dict(),
         "checks": checks,

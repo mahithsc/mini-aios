@@ -3,8 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-
-DATABASE_SCHEMA_VERSION = 1
+DATABASE_SCHEMA_VERSION = 5
 
 
 def _integer_environment(name: str, default: int) -> int:

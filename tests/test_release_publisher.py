@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from cryptography.exceptions import InvalidSignature
 
+from aios_core.release import DATABASE_SCHEMA_VERSION
 from release.publish_update import (
+    _DATABASE_SCHEMA_VERSION,
     build_manifest,
     generate_keypair,
     sign_manifest,
@@ -16,8 +18,12 @@ from release.publish_update import (
 )
 
 
+def test_publisher_schema_default_matches_runtime() -> None:
+    assert _DATABASE_SCHEMA_VERSION == DATABASE_SCHEMA_VERSION
+
+
 def _arguments() -> argparse.Namespace:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return argparse.Namespace(
         release_id="release-2",
         version="0.2.0",
@@ -28,11 +34,7 @@ def _arguments() -> argparse.Namespace:
         minimum_updater_version="0.1.0",
         release_notes_url="https://github.com/mahithsc/mini-aios/releases/tag/v0.2.0",
         revision="abc123",
-        artifact=[
-            "linux-arm64=ghcr.io/mahithsc/mini-aios@sha256:"
-            + "a" * 64
-            + ":0"
-        ],
+        artifact=["linux-arm64=ghcr.io/mahithsc/mini-aios@sha256:" + "a" * 64 + ":0"],
         from_schema_minimum=1,
         from_schema_maximum=1,
         to_schema=1,

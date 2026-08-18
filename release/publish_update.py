@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 _DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 _PLATFORMS = {"linux-amd64", "linux-arm64"}
+_DATABASE_SCHEMA_VERSION = 5
 
 
 def _write_new(path: Path, data: bytes, mode: int = 0o600) -> None:
@@ -177,7 +178,9 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--release-id", required=True)
     create.add_argument("--version", required=True)
     create.add_argument("--sequence", required=True, type=int)
-    create.add_argument("--channel", choices=("dev", "beta", "stable", "pinned"), default="stable")
+    create.add_argument(
+        "--channel", choices=("dev", "beta", "stable", "pinned"), default="stable"
+    )
     create.add_argument("--published-at", required=True)
     create.add_argument("--expires-at", required=True)
     create.add_argument("--minimum-updater-version", default="0.1.0")
@@ -185,10 +188,18 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument("--revision", default="")
     create.add_argument("--artifact", action="append", default=[])
     create.add_argument("--from-schema-minimum", type=int, default=1)
-    create.add_argument("--from-schema-maximum", type=int, default=1)
-    create.add_argument("--to-schema", type=int, default=1)
-    create.add_argument("--previous-app-can-read", action=argparse.BooleanOptionalAction, default=True)
-    create.add_argument("--restore-backup-on-rollback", action=argparse.BooleanOptionalAction, default=True)
+    create.add_argument(
+        "--from-schema-maximum", type=int, default=_DATABASE_SCHEMA_VERSION
+    )
+    create.add_argument("--to-schema", type=int, default=_DATABASE_SCHEMA_VERSION)
+    create.add_argument(
+        "--previous-app-can-read", action=argparse.BooleanOptionalAction, default=True
+    )
+    create.add_argument(
+        "--restore-backup-on-rollback",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     create.add_argument("--destructive", action="store_true")
     create.add_argument("--critical", action="store_true")
     create.add_argument("--allow-forced-drain", action="store_true")

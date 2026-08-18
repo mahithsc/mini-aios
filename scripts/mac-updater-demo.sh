@@ -155,7 +155,7 @@ if [ ! -f "$RELEASE_ENV" ]; then
     'AIOS_RELEASE_SEQUENCE=0' \
     "AIOS_IMAGE_DIGEST=${BASELINE_DIGEST}" \
     'AIOS_REVISION=local' \
-    'AIOS_DATABASE_SCHEMA=1' > "$RELEASE_ENV"
+    'AIOS_DATABASE_SCHEMA=5' > "$RELEASE_ENV"
 fi
 
 docker compose \

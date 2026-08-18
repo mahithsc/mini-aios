@@ -6,11 +6,24 @@ import sqlite3
 import time
 from pathlib import Path
 
+from .release import DATABASE_SCHEMA_VERSION
 from .workspace import ensure_workspace_dir
 
 _WORKSPACE_DIR = ensure_workspace_dir()
 DB_PATH = str(_WORKSPACE_DIR / "aios.db")
 LEGACY_DB_PATH = str(_WORKSPACE_DIR / "crons.db")
+_EXPECTED_SCHEMA_MIGRATIONS = {
+    1: ("baseline", "baseline-v1"),
+    2: ("chat_sqlite_storage", "chat-sqlite-v1"),
+    3: ("canonical_conversation_storage", "conversation-v1"),
+    4: ("conversation_rail_metadata", "conversation-v2"),
+    5: ("cloud_deployment_runtime", "cloud-deploy-v1"),
+}
+
+if max(_EXPECTED_SCHEMA_MIGRATIONS) != DATABASE_SCHEMA_VERSION:
+    raise RuntimeError(
+        "Database migration registry does not match release schema version"
+    )
 
 
 def _migrate_legacy_db_if_needed(db_path: str) -> None:
@@ -32,8 +45,55 @@ def get_db_connection(db_path: str = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+def validate_app_db_schema(
+    connection: sqlite3.Connection, *, require_current: bool = True
+) -> None:
+    """Reject unknown, future, missing, or checksum-mismatched migrations."""
+
+    table_exists = connection.execute(
+        """
+        SELECT 1 FROM sqlite_master
+        WHERE type = 'table' AND name = 'schema_migrations'
+        """
+    ).fetchone()
+    if table_exists is None:
+        if require_current:
+            raise RuntimeError("Database schema migration table is missing")
+        return
+
+    rows = connection.execute(
+        "SELECT version, name, checksum FROM schema_migrations ORDER BY version"
+    ).fetchall()
+    present: set[int] = set()
+    for raw_version, raw_name, raw_checksum in rows:
+        version = int(raw_version)
+        expected = _EXPECTED_SCHEMA_MIGRATIONS.get(version)
+        if expected is None:
+            if version > DATABASE_SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Database schema {version} is newer than supported schema "
+                    f"{DATABASE_SCHEMA_VERSION}"
+                )
+            raise RuntimeError(f"Database contains unknown migration version {version}")
+        actual = (str(raw_name), str(raw_checksum))
+        if actual != expected:
+            raise RuntimeError(
+                f"Database migration {version} does not match the expected name/checksum"
+            )
+        present.add(version)
+
+    if require_current:
+        missing = sorted(set(_EXPECTED_SCHEMA_MIGRATIONS).difference(present))
+        if missing:
+            raise RuntimeError(
+                "Database is missing required migration(s): "
+                + ", ".join(str(version) for version in missing)
+            )
+
+
 def initialize_app_db(db_path: str = DB_PATH) -> None:
     with get_db_connection(db_path) as conn:
+        validate_app_db_schema(conn, require_current=False)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -69,6 +129,22 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
 
             CREATE INDEX IF NOT EXISTS idx_notifications_source
                 ON notifications(source, source_id);
+
+            CREATE TABLE IF NOT EXISTS cloud_device_events (
+                event_id       TEXT PRIMARY KEY,
+                sequence       INTEGER NOT NULL,
+                event_type     TEXT NOT NULL,
+                payload_json   TEXT NOT NULL,
+                received_at    INTEGER NOT NULL
+            );
+
+            -- Device pairing owns this singleton credential. Cloud deployment
+            -- and event delivery read it without coupling those services to
+            -- the pairing transport.
+            CREATE TABLE IF NOT EXISTS device_link (
+                id              INTEGER PRIMARY KEY CHECK (id = 1),
+                device_token    TEXT NOT NULL
+            );
 
             CREATE TABLE IF NOT EXISTS gateway_events (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -437,3 +513,15 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
                 os.getenv("AIOS_RELEASE_ID", "development"),
             ),
         )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO schema_migrations (
+                version, name, checksum, applied_at, app_release
+            ) VALUES (5, 'cloud_deployment_runtime', 'cloud-deploy-v1', ?, ?)
+            """,
+            (
+                int(time.time() * 1000),
+                os.getenv("AIOS_RELEASE_ID", "development"),
+            ),
+        )
+        validate_app_db_schema(conn)

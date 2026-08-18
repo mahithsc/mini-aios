@@ -28,6 +28,13 @@ def test_agent_factory_wraps_tools_and_prevents_recursive_subagents() -> None:
     assert "subagent" not in worker_tools
     assert "memory" in main_tools
     assert "memory" not in worker_tools
+    assert "app_create" in main_tools
+    assert "app_workspace" in main_tools
+    assert "apps_list" in main_tools
+    assert "legacy_apps_list" in main_tools
+    assert "app_create" not in worker_tools
+    assert '"app_create"' in main.instructions
+    assert '"app_create"' not in worker.instructions
 
     for tool in main.tools:
         assert "fc" not in tool.params_json_schema.get("properties", {})

@@ -27,19 +27,114 @@ def test_unknown_app_errors(temp_store):
     assert "error" in agent_tools.app_restart("nope")
 
 
-def test_apps_list(temp_store, monkeypatch):
+def test_apps_list_uses_durable_workspace_inventory(monkeypatch):
+    monkeypatch.setattr(
+        agent_tools,
+        "list_app_workspaces",
+        lambda: {
+            "apps_dir": "/workspace/apps",
+            "apps": [
+                {
+                    "app_id": "app_cloud123",
+                    "name": "Example",
+                    "workspace_path": "/workspace/apps/app_cloud123",
+                    "has_manifest": False,
+                }
+            ],
+        },
+    )
+    result = agent_tools.apps_list()
+    assert result["apps"][0]["app_id"] == "app_cloud123"
+    assert result["apps"][0]["workspace_path"] == "/workspace/apps/app_cloud123"
+
+
+def test_legacy_apps_list_preserves_supervisor_inventory(temp_store, monkeypatch):
     store, _ = temp_store
     store.save(
-        Project(slug="a", source_dir=Path("/x"), spec=Spec(run=["python", "app.py"], port=8000), status="running")
+        Project(
+            slug="legacy",
+            source_dir=Path("/x"),
+            spec=Spec(run=["python", "app.py"], port=8000),
+            status="running",
+        )
     )
 
     class FakeSup:
         def is_running(self, project):
             return False
 
-    monkeypatch.setattr(agent_tools, "_sup", lambda: FakeSup())
-    result = agent_tools.apps_list()
-    assert result["apps"] == [{"slug": "a", "status": "running", "running": False, "port": 8000}]
+    monkeypatch.setattr(agent_tools, "_sup", FakeSup)
+    assert agent_tools.legacy_apps_list() == {
+        "apps": [
+            {
+                "slug": "legacy",
+                "status": "running",
+                "running": False,
+                "port": 8000,
+            }
+        ]
+    }
+
+
+def test_app_create_reserves_cloud_identity_and_workspace(monkeypatch):
+    class FakeCloud:
+        def create_app(self, name):
+            return {"id": "app_cloud123", "name": name}
+
+    monkeypatch.setattr(agent_tools, "_cloud", FakeCloud)
+    monkeypatch.setattr(
+        agent_tools,
+        "create_app_workspace",
+        lambda app_id, name, origin_chat_id=None: {
+            "app_id": app_id,
+            "name": name,
+            "found": True,
+            "workspace_path": f"/workspace/apps/{app_id}",
+        },
+    )
+
+    result = agent_tools.app_create("Example")
+    assert result["app_id"] == "app_cloud123"
+    assert result["workspace_path"] == "/workspace/apps/app_cloud123"
+
+
+def test_app_workspace_resolves_durable_source(monkeypatch):
+    monkeypatch.setattr(
+        agent_tools,
+        "resolve_app_workspace",
+        lambda app_id, origin_chat_id=None: {
+            "app_id": app_id,
+            "found": True,
+            "workspace_path": f"/workspace/apps/{app_id}",
+        },
+    )
+
+    assert agent_tools.app_workspace("app_cloud123")["workspace_path"] == (
+        "/workspace/apps/app_cloud123"
+    )
+
+
+def test_app_info_and_secret_metadata_use_cloud_client(monkeypatch):
+    class FakeCloud:
+        def get_app_info(self, app_id):
+            return {"app": {"id": app_id}, "components": {}}
+
+        def list_secret_metadata(self):
+            return {
+                "secrets": [
+                    {
+                        "id": "sec_cloud123",
+                        "kind": "api_key",
+                        "configured": True,
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(agent_tools, "_cloud", FakeCloud)
+    assert agent_tools.app_info("app_cloud123")["app"]["id"] == "app_cloud123"
+    secret = agent_tools.secrets_list()["secrets"][0]
+    assert secret["id"] == "sec_cloud123"
+    assert "value" not in secret
 
 
 def _write_app(dir_path: Path):
@@ -56,7 +151,9 @@ def _write_app(dir_path: Path):
             """
         )
     )
-    (dir_path / "project.json").write_text('{"run": ["python", "app.py"], "port": 8000}')
+    (dir_path / "project.json").write_text(
+        '{"run": ["python", "app.py"], "port": 8000}'
+    )
 
 
 @pytest.mark.skipif(not docker_available(), reason="Docker not available")
@@ -66,7 +163,11 @@ def test_lifecycle_status_logs_stop_restart(temp_store):
     store, tmp_path = temp_store
     _write_app(tmp_path)
     assert deploy("life1", tmp_path, store=store)["status"] == "running"
-    project = Project(slug="life1", source_dir=tmp_path, spec=Spec(run=["python", "app.py"], port=8000))
+    project = Project(
+        slug="life1",
+        source_dir=tmp_path,
+        spec=Spec(run=["python", "app.py"], port=8000),
+    )
     try:
         assert agent_tools.app_status("life1")["running"] is True
         assert "logs" in agent_tools.app_logs("life1")
