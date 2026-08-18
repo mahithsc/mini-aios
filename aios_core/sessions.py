@@ -296,6 +296,16 @@ def _ensure_chat_dirs(chat_id: str) -> Path:
     return _ensure_sandbox_dirs(chat_id)
 
 
+def ensure_chat_storage_dirs(chat_id: str) -> Path:
+    """Create the typed filesystem roots owned by ``chat_id``.
+
+    A chat can exist only in SQLite after an import or restore. Runtime callers
+    use this public helper before exposing scratch/artifact paths to tools.
+    """
+
+    return _ensure_chat_dirs(chat_id)
+
+
 def ensure_chat_artifact_dir(chat_id: str, artifact_id: str) -> Path:
     _ensure_chat_dirs(chat_id)
     artifact_dir = get_chat_artifact_dir(chat_id, artifact_id)
@@ -335,29 +345,41 @@ def _canonical_attachment_path(chat_id: str, file_path: str) -> str:
     untouched because they may point at explicitly imported external data.
     """
 
+    chat_segment = _sanitize_path_segment(chat_id, "chat")
+    invalid_path = Path("uploads", chat_segment, ".invalid-path").as_posix()
     normalized_path = file_path.replace("\\", "/")
-    if normalized_path.startswith("scratch:/"):
+    if normalized_path == "scratch:":
+        scratch_suffix = Path(".")
+    elif normalized_path.startswith("scratch:/"):
         scratch_suffix = Path(normalized_path[len("scratch:/") :])
+    elif normalized_path.startswith("scratch:"):
+        return invalid_path
+    else:
+        scratch_suffix = None
+    if scratch_suffix is not None:
         if scratch_suffix.is_absolute() or ".." in scratch_suffix.parts:
-            return file_path
-        return (
-            Path("sessions", _sanitize_path_segment(chat_id, "chat"), "scratch")
-            / scratch_suffix
-        ).as_posix()
-    data_scoped = normalized_path.startswith("data:/")
-    if data_scoped:
+            return invalid_path
+        return (Path("sessions", chat_segment, "scratch") / scratch_suffix).as_posix()
+    if normalized_path == "data:":
+        normalized_path = "."
+        data_scoped = True
+    elif normalized_path.startswith("data:/"):
         normalized_path = normalized_path[len("data:/") :]
+        data_scoped = True
+    elif normalized_path.startswith("data:"):
+        return invalid_path
+    else:
+        data_scoped = False
 
     raw_path = Path(normalized_path)
     if raw_path.is_absolute():
-        return file_path if data_scoped else str(raw_path)
+        return invalid_path if data_scoped else str(raw_path)
 
-    chat_segment = _sanitize_path_segment(chat_id, "chat")
     parts = raw_path.parts
     if parts[:1] == ("workspace",):
         parts = parts[1:]
     if ".." in parts:
-        return raw_path.as_posix()
+        return invalid_path
 
     if (
         len(parts) >= 3
@@ -661,6 +683,12 @@ def _remap_imported_attachment_paths(
                 canonical_relative.parts[:2] == canonical_upload_prefix
                 and len(canonical_relative.parts) > 2
             )
+            invalid_path = Path(*canonical_upload_prefix, ".invalid-path").as_posix()
+            if canonical_path == invalid_path:
+                next_attachments.append(
+                    attachment.model_copy(update={"filePath": canonical_path})
+                )
+                continue
             if not raw_path.is_absolute() and is_chat_upload:
                 source_candidates = [
                     (source_workspace / raw_path).resolve(),
@@ -1514,6 +1542,7 @@ def _load_chat_session_from_db(chat_id: str) -> list[ChatMessage]:
 
 def load_chat_session(chat_id: str) -> list[ChatMessage]:
     initialize_chat_storage()
+    ensure_chat_storage_dirs(chat_id)
     return _load_chat_session_from_db(chat_id)
 
 
@@ -1604,6 +1633,7 @@ def append_user_message(
     chat_status: str | None = None,
 ) -> bool:
     initialize_chat_storage()
+    ensure_chat_storage_dirs(chat_id)
     parsed = _normalize_chat_message(message)
     if not isinstance(parsed, UserMessage):
         raise TypeError("append_user_message requires a user message")

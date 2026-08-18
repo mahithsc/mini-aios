@@ -48,12 +48,67 @@ def test_explicit_scratch_scope_requires_an_active_chat(
         context.resolve_agent_path("scratch:/notes.txt")
 
 
-@pytest.mark.parametrize("path", ["data:/../outside", "scratch://outside"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../outside",
+        "nested/../../outside",
+        "data:/../outside",
+        "data:../outside",
+        "scratch://outside",
+        "scratch:outside",
+    ],
+)
 def test_explicit_scopes_reject_escape_paths(
     path: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(context, "get_current_chat_scratch_dir", lambda: Path("/scratch"))
+    monkeypatch.setattr(
+        context, "get_current_chat_scratch_dir", lambda: Path("/scratch")
+    )
 
     with pytest.raises(ValueError, match="cannot escape"):
         context.resolve_agent_path(path)
+
+
+def test_absolute_agent_paths_remain_compatible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        context,
+        "get_current_chat_scratch_dir",
+        lambda: tmp_path / "scratch",
+    )
+
+    assert context.resolve_agent_path(tmp_path / "external.txt") == (
+        tmp_path / "external.txt"
+    )
+
+
+def test_runtime_context_ensures_chat_storage_before_publishing_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scratch_dir = tmp_path / "sessions" / "chat-1" / "scratch"
+    artifacts_dir = tmp_path / "artifacts" / "chat-1"
+    calls: list[str] = []
+    monkeypatch.setattr(
+        context,
+        "ensure_chat_storage_dirs",
+        lambda chat_id: calls.append(chat_id),
+    )
+    monkeypatch.setattr(context, "get_chat_scratch_dir", lambda _chat_id: scratch_dir)
+    monkeypatch.setattr(
+        context,
+        "get_chat_artifacts_dir",
+        lambda _chat_id: artifacts_dir,
+    )
+
+    tokens = context.push_chat_runtime_context("chat-1")
+    try:
+        assert calls == ["chat-1"]
+        assert context.get_current_chat_scratch_dir() == scratch_dir
+        assert context.get_current_chat_artifacts_dir() == artifacts_dir
+    finally:
+        context.pop_chat_runtime_context(tokens)

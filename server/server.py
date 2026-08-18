@@ -128,7 +128,10 @@ async def create_transcription(
 
 @app.get("/session-artifacts/{chat_id}/{artifact_path:path}")
 async def get_session_artifact_file(chat_id: str, artifact_path: str) -> FileResponse:
-    artifacts_root = get_chat_artifacts_dir(chat_id).resolve()
+    raw_artifacts_root = get_chat_artifacts_dir(chat_id)
+    if raw_artifacts_root.is_symlink():
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+    artifacts_root = raw_artifacts_root.resolve()
     requested_relative_path = Path(artifact_path)
     requested_path = (artifacts_root / requested_relative_path).resolve()
 

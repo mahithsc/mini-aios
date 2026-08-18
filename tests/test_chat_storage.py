@@ -77,6 +77,81 @@ def test_chat_storage_uses_separate_scratch_upload_and_artifact_roots(
     assert (data_dir / "artifacts/chat-unsafe").is_dir()
 
 
+def test_loading_db_only_chat_creates_its_filesystem_roots(
+    isolated_chat_storage,
+):
+    data_dir, db_path = isolated_chat_storage
+    initialize_app_db(str(db_path))
+    with get_db_connection(str(db_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO chats (id, title, status, created_at, updated_at)
+            VALUES ('db-only', NULL, 'idle', 1, 1)
+            """
+        )
+
+    assert not (data_dir / "sessions/db-only").exists()
+    assert sessions.load_chat_session("db-only") == []
+    assert (data_dir / "sessions/db-only/scratch").is_dir()
+    assert (data_dir / "uploads/db-only").is_dir()
+    assert (data_dir / "artifacts/db-only").is_dir()
+
+
+@pytest.mark.parametrize(
+    "file_path",
+    [
+        "../outside.txt",
+        "workspace/../../outside.txt",
+        "data:/../outside.txt",
+        "data:../outside.txt",
+        "data://outside.txt",
+        "scratch:/../outside.txt",
+        "scratch://outside.txt",
+        "scratch:outside.txt",
+    ],
+)
+def test_unsafe_attachment_paths_are_quarantined_to_chat_storage(file_path):
+    assert sessions._canonical_attachment_path("chat/unsafe", file_path) == (
+        "uploads/chat-unsafe/.invalid-path"
+    )
+
+
+def test_import_does_not_read_unsafe_relative_attachment_path(tmp_path):
+    source_workspace = tmp_path / "source"
+    target_workspace = tmp_path / "target"
+    source_workspace.mkdir()
+    target_workspace.mkdir()
+    (tmp_path / "outside.txt").write_text("private", encoding="utf-8")
+    message = UserMessage(
+        id="unsafe-message",
+        content="See file",
+        status="complete",
+        createdAt=1000,
+        updatedAt=1000,
+        attachments=[
+            {
+                "id": "unsafe-attachment",
+                "kind": "file",
+                "name": "outside.txt",
+                "filePath": "../outside.txt",
+                "mimeType": "text/plain",
+                "sizeBytes": 7,
+                "uploadedAt": 900,
+            }
+        ],
+    )
+
+    remapped = sessions._remap_imported_attachment_paths(
+        "chat-1",
+        [message],
+        source_workspace=source_workspace,
+        target_workspace=target_workspace,
+    )
+
+    assert remapped[0].attachments[0].filePath == "uploads/chat-1/.invalid-path"
+    assert not (target_workspace / "uploads/chat-1/.invalid-path").exists()
+
+
 def test_new_and_existing_attachment_rows_are_canonicalized(
     isolated_chat_storage,
 ):

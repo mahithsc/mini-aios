@@ -11,7 +11,11 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
-from ..sessions import get_chat_artifacts_dir, get_chat_scratch_dir
+from ..sessions import (
+    ensure_chat_storage_dirs,
+    get_chat_artifacts_dir,
+    get_chat_scratch_dir,
+)
 from ..workspace import ensure_workspace_dir, resolve_workspace_path
 from .tools.subagent_events import SubagentStreamEvent
 
@@ -47,6 +51,9 @@ _SCRATCH_SCOPE = "scratch:"
 
 
 def push_chat_runtime_context(chat_id: str) -> tuple[object, object, object]:
+    # Chats imported from SQLite may not have ever had filesystem state. Make
+    # the per-chat roots real before any prompt or tool receives their paths.
+    ensure_chat_storage_dirs(chat_id)
     return (
         _CURRENT_CHAT_ID.set(chat_id),
         _CURRENT_CHAT_SCRATCH_DIR.set(str(get_chat_scratch_dir(chat_id))),
@@ -95,6 +102,10 @@ def _scoped_suffix(raw_value: str, scope: str) -> Path | None:
         if suffix.is_absolute() or ".." in suffix.parts:
             raise ValueError(f"{scope} paths cannot escape their storage scope")
         return suffix
+    if normalized.startswith(scope):
+        raise ValueError(
+            f"{scope} paths cannot escape their storage scope; use the {prefix}... form"
+        )
     return None
 
 
@@ -141,6 +152,8 @@ def resolve_agent_path(path: str | Path) -> Path:
         return current_chat_scratch_dir / scratch_suffix
 
     current_chat_scratch_dir = get_current_chat_scratch_dir()
+    if ".." in raw_path.parts:
+        raise ValueError("relative agent paths cannot escape their storage scope")
     if current_chat_scratch_dir is not None and not _is_data_root_relative(raw_path):
         return current_chat_scratch_dir / raw_path
 
