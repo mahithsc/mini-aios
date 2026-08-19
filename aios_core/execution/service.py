@@ -44,14 +44,6 @@ class ConversationRecoveryStore(Protocol):
     def recover_stale_run(self, run_id: str, *, error: str) -> bool:
         ...
 
-    def recover_stale_runs(
-        self,
-        *,
-        error: str,
-        chat_id: str | None = None,
-    ) -> list[str]:
-        ...
-
 
 @dataclass(slots=True)
 class ActiveRun:
@@ -84,14 +76,6 @@ class RunsService:
         if self._started:
             return
 
-        # Canonical SQLite can remain nonterminal even when a cleanup failure
-        # already made the file-backed run snapshot terminal. Reconcile it
-        # independently before consulting the run projection.
-        if self._conversation_store is not None:
-            await asyncio.to_thread(
-                self._conversation_store.recover_stale_runs,
-                error=_STALE_RUN_ERROR_MESSAGE,
-            )
         await self._reconcile_stale_runs()
         self._started = True
         self._workers = [
@@ -186,22 +170,19 @@ class RunsService:
         if run is None:
             raise KeyError(f"Run {run_id} does not exist.")
 
-        persisted_event = self._store.append_event(
-            run_id,
-            event.model_copy(
-                update={
-                    "kind": run.kind,
-                    "userId": event.userId if event.userId is not None else run.userId,
-                    "chatId": event.chatId if event.chatId is not None else run.chatId,
-                }
-            ),
+        normalized_event = event.model_copy(
+            update={
+                "kind": run.kind,
+                "userId": event.userId if event.userId is not None else run.userId,
+                "chatId": event.chatId if event.chatId is not None else run.chatId,
+            }
         )
-        snapshot = self._store.save_snapshot(
+        persisted_event, snapshot = self._store.record_event(
             run_id,
-            status=self._derive_status(persisted_event),
-            last_sequence=persisted_event.sequence,
-            preview=self._derive_preview(persisted_event),
-            active_step=self._derive_active_step(persisted_event),
+            normalized_event,
+            status=self._derive_status(normalized_event),
+            preview=self._derive_preview(normalized_event),
+            active_step=self._derive_active_step(normalized_event),
         )
         if run is not None and run.chatId:
             self._store.project_chat_state(run_id, run.chatId, persisted_event)
@@ -211,8 +192,15 @@ class RunsService:
         return persisted_event
 
     async def _reconcile_stale_runs(self) -> None:
-        # Include terminal chat projections for canonical-status repair and
-        # non-chat queued/running runs for the existing restart behavior.
+        """Restore safe queued work and reconcile interrupted execution.
+
+        A queued run (or a run marked running before AgentRuntime moved its
+        canonical turn to running) has not crossed a side-effect boundary and
+        is safe to dispatch again. A canonically running turn may have made an
+        external tool call, so it is recovered to an error instead of being
+        replayed blindly.
+        """
+
         snapshots = self._store.list_snapshots()
         for snapshot in snapshots:
             run = self._store.get_run(snapshot.runId)
@@ -225,15 +213,6 @@ class RunsService:
                 and run.chatId
                 and self._conversation_store is not None
             ):
-                if snapshot.status in {"queued", "running"}:
-                    # The file-backed run log and canonical SQLite history have
-                    # separate projections. Repair SQLite first so a restart can
-                    # never expose an orphan call or replay a side effect blindly.
-                    await asyncio.to_thread(
-                        self._conversation_store.recover_stale_run,
-                        snapshot.runId,
-                        error=_STALE_RUN_ERROR_MESSAGE,
-                    )
                 canonical_status = await asyncio.to_thread(
                     self._conversation_store.get_run_status,
                     snapshot.runId,
@@ -253,8 +232,8 @@ class RunsService:
                         ),
                     )
                 else:
-                    # A previous terminal event may have reached the file
-                    # snapshot but failed before updating the SQL chat
+                    # A previous terminal event may have reached the durable
+                    # run snapshot but failed before updating the SQL chat
                     # projection. Reapply the persisted event; assistant-event
                     # IDs make this operation idempotent.
                     await self._restore_canonical_terminal_projection(
@@ -264,16 +243,54 @@ class RunsService:
                     )
                 continue
 
-            if snapshot.status in {"queued", "running"}:
-                await self.emit_event(
-                    snapshot.runId,
-                    build_run_event(
-                        run_id=snapshot.runId,
-                        event_type="error",
-                        chat_id=run.chatId,
-                        data={"error": _STALE_RUN_ERROR_MESSAGE},
-                    ),
+            if snapshot.status not in {"queued", "running"}:
+                continue
+
+            safe_to_requeue = (
+                snapshot.status == "queued"
+                and (run.kind != "chat" or canonical_status in {None, "queued"})
+            ) or (
+                snapshot.status == "running"
+                and run.kind == "chat"
+                and canonical_status in {None, "queued"}
+            )
+            if safe_to_requeue:
+                queued_snapshot = self._store.save_snapshot(
+                    run.id,
+                    status="queued",
+                    last_sequence=snapshot.lastSequence,
+                    preview=snapshot.preview,
+                    active_step=None,
                 )
+                queued_run = run.model_copy(
+                    update={
+                        "status": "queued",
+                        "updatedAt": queued_snapshot.updatedAt,
+                    }
+                )
+                self._active_runs[run.id] = ActiveRun(run=queued_run)
+                self._queue.put_nowait(run.id)
+                continue
+
+            if (
+                run.kind == "chat"
+                and canonical_status == "running"
+                and self._conversation_store is not None
+            ):
+                await asyncio.to_thread(
+                    self._conversation_store.recover_stale_run,
+                    run.id,
+                    error=_STALE_RUN_ERROR_MESSAGE,
+                )
+            await self.emit_event(
+                run.id,
+                build_run_event(
+                    run_id=run.id,
+                    event_type="error",
+                    chat_id=run.chatId,
+                    data={"error": _STALE_RUN_ERROR_MESSAGE, "recovered": True},
+                ),
+            )
 
     @staticmethod
     def _canonical_terminal_projection(
@@ -320,7 +337,7 @@ class RunsService:
         event_type, expected_status, data = terminal
         snapshot = self._store.get_snapshot(run.id)
         if snapshot is not None and snapshot.status == expected_status:
-            # The file event may already have committed before its chat/SSE
+            # The durable run event may already have committed before its chat/SSE
             # projection failed. Replay that exact event idempotently instead
             # of appending a contradictory error terminal.
             events = self._store.list_events_after(

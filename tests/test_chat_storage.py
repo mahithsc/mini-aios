@@ -66,10 +66,14 @@ def test_chat_storage_nests_scratch_and_uploads_under_the_session(
     assert sessions.get_chat_uploads_relative_dir("chat/unsafe").as_posix() == (
         f"sessions/{chat_segment}/uploads"
     )
+    assert sessions.get_chat_artifacts_relative_dir("chat/unsafe").as_posix() == (
+        f"sessions/{chat_segment}/artifacts"
+    )
     assert chat_segment.startswith("chat-unsafe-")
     assert chat_segment != sessions.get_chat_session_relative_dir("chat-unsafe").parts[1]
     assert (data_dir / "sessions" / chat_segment / "scratch").is_dir()
     assert (data_dir / "sessions" / chat_segment / "uploads").is_dir()
+    assert not (data_dir / "sessions" / chat_segment / "artifacts").exists()
 
 
 def test_unsafe_chat_ids_have_collision_resistant_storage_paths() -> None:
@@ -95,6 +99,7 @@ def test_loading_db_only_chat_creates_its_filesystem_roots(
     assert sessions.load_chat_session("db-only") == []
     assert (data_dir / "sessions/db-only/scratch").is_dir()
     assert (data_dir / "sessions/db-only/uploads").is_dir()
+    assert not (data_dir / "sessions/db-only/artifacts").exists()
 
 
 @pytest.mark.parametrize(

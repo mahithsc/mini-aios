@@ -8,7 +8,6 @@ from .db import initialize_app_db
 from .workspace import (
     ensure_data_dir,
     get_memories_dir,
-    get_runs_dir,
     get_sessions_dir,
     get_skills_dir,
 )
@@ -20,10 +19,6 @@ RESET, BOLD, DIM, CYAN, GREEN, YELLOW = (
 DATA_DIR = ensure_data_dir()
 SKILLS_DIR = str(get_skills_dir())
 SESSION_DIR = str(get_sessions_dir())
-RUNS_DIR = str(get_runs_dir())
-RUNS_METADATA_DIR = f"{RUNS_DIR}/metadata"
-RUNS_SNAPSHOTS_DIR = f"{RUNS_DIR}/snapshots"
-RUNS_EVENTS_DIR = f"{RUNS_DIR}/events"
 SESSION_MANIFEST_PATH = f"{SESSION_DIR}/session_manifest.json"
 SKILLS_INDEX_PATH = f"{SKILLS_DIR}/skills_index.json"
 _RUNTIME_STARTED = False
@@ -93,9 +88,6 @@ def initialize_files():
     os.makedirs(get_memories_dir(), exist_ok=True)
     os.makedirs(SKILLS_DIR, exist_ok=True)
     os.makedirs(SESSION_DIR, exist_ok=True)
-    os.makedirs(RUNS_METADATA_DIR, exist_ok=True)
-    os.makedirs(RUNS_SNAPSHOTS_DIR, exist_ok=True)
-    os.makedirs(RUNS_EVENTS_DIR, exist_ok=True)
     os.makedirs(_SKILL_TEMPLATE_DIR, exist_ok=True)
     initialize_app_db()
 

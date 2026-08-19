@@ -41,6 +41,16 @@ def test_prompt_distinguishes_scratch_data_and_project_scopes() -> None:
     assert "generative_widget" not in prompt
 
 
+def test_prompt_requires_verification_for_current_information() -> None:
+    prompt = _prompt()
+
+    assert "<current_information>" in prompt
+    assert "Favor verified, current information" in prompt
+    assert "use `tavily_search`" in prompt
+    assert "publication date from the date the reported event occurred" in prompt
+    assert "do not present recalled knowledge as confirmed current fact" in prompt
+
+
 def test_agent_registers_pi_as_the_only_external_coding_agent_tool() -> None:
     from aios_core.agent.factory import BASE_TOOLS
     from aios_core.agent.pi.tool import pi
@@ -96,10 +106,10 @@ def test_legacy_agent_module_paths_are_removed() -> None:
     assert all(importlib.util.find_spec(name) is None for name in legacy_modules)
 
 
-def test_server_does_not_expose_chat_artifact_routes() -> None:
+def test_server_exposes_session_scoped_artifact_route() -> None:
     from server.server import app
 
-    assert all(not route.path.startswith("/session-artifacts") for route in app.routes)
+    assert any(route.path.startswith("/session-artifacts") for route in app.routes)
 
 
 def test_runtime_shutdown_closes_pi_jobs_even_before_start(monkeypatch) -> None:

@@ -31,8 +31,8 @@ The first implementation should be a single static Go binary installed as a `sys
 The current repository already has several useful boundaries:
 
 - production data lives below `~/.mini-aios`;
-- `state/aios.db`, projects, session scratch files and uploads, runs, skills,
-  memories, and deployments are separate from application code;
+- `state/aios.db`, projects, session scratch files, uploads and artifacts, runs,
+  skills, memories, and deployments are separate from application code;
 - `/health` provides a basic liveness check;
 - the box is packaged as a Docker image and run with Docker Compose;
 - device identity and pairing credentials survive container restarts in SQLite.

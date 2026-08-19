@@ -21,6 +21,14 @@ _BASE_TOOLS_BLOCK = """
     {"path": "string", "content": "string"},
     write,
 ),
+"artifact": (
+    "Write a user-facing text artifact beneath the active chat's artifacts "
+    "directory. Creates the directory and nested parents automatically, "
+    "replaces existing files atomically, and returns a structured descriptor "
+    "with a served URL.",
+    {"path": "string", "content": "string"},
+    artifact,
+),
 "edit": (
     "Replace old with new in file (old must match exactly and be unique "
     "unless all=true). File line endings are preserved automatically.",
@@ -173,6 +181,7 @@ def build_agent_prompt(
     current_chat_id: str | None = None,
     current_chat_scratch_dir: str | None = None,
     current_chat_uploads_dir: str | None = None,
+    current_chat_artifacts_dir: str | None = None,
     include_memory_tools: bool = True,
     memory_context: str | None = None,
     skills: Sequence[Mapping[str, Any]] | None = None,
@@ -259,10 +268,29 @@ def build_agent_prompt(
             """,
         ),
         _section(
+            "current_information",
+            """
+            Favor verified, current information over potentially outdated model knowledge.
+            Treat facts that may have changed over time as unstable, including news, prices, laws and regulations, schedules, public or company office-holders, product specifications, software versions, recommendations, and service availability.
+            For unstable facts, use `tavily_search` and, when useful, `fetch` to verify the answer before presenting it as current. Prefer primary or otherwise authoritative sources and include source URLs near the claims they support.
+            For news, distinguish the publication date from the date the reported event occurred and prioritize the most recent relevant reporting.
+            Use the exact current times in the execution section when interpreting relative dates such as today, tomorrow, or yesterday. If the user's date appears mistaken, clarify with an exact calendar date.
+            If the user explicitly asks you not to browse, respect that request. If verification is unavailable or fails, say so clearly and do not present recalled knowledge as confirmed current fact.
+            """,
+        ),
+        _section(
             "notifications",
             """
             Notifications are useful for longer-running tasks such as research or longer coding work.
             When a long-running task completes, use `notify` so the user gets an update in the desktop app.
+            """,
+        ),
+        _section(
+            "artifacts",
+            """
+            Use `artifact` for user-facing files that belong to the current chat, including reports, generated HTML, diagrams, and other deliverables that should be previewable or downloadable.
+            Pass only a path relative to the current chat's artifacts directory. The tool creates that directory and nested parents when needed.
+            Use ordinary file tools for scratch work and `project` for durable applications; do not use the artifact tool as general-purpose storage.
             """,
         ),
         _section(
@@ -304,9 +332,10 @@ def build_agent_prompt(
                 Current chat id: {current_chat_id}
                 Chat scratch directory: {current_chat_scratch_dir}
                 Chat uploads directory: {current_chat_uploads_dir or "unavailable"}
+                Chat artifacts directory: {current_chat_artifacts_dir or "unavailable"}
                 Ordinary relative paths for file tools, search tools, shell commands, and Pi default to chat scratch.
                 Use `scratch:/...` when you want to state the scratch scope explicitly.
-                Use `data:/projects/...`, `data:/sessions/{current_chat_id}/uploads/...`, or another `data:/...` path when you intentionally need the persistent data root. Canonical paths beginning with `projects/...` or `sessions/...` are also accepted. Legacy `uploads/{current_chat_id}/...` paths are translated only for compatibility.
+                Use `artifact` to write beneath the current chat's artifacts directory. Use `data:/projects/...`, `data:/sessions/{current_chat_id}/uploads/...`, or another `data:/...` path when you intentionally need the persistent data root. Canonical paths beginning with `projects/...` or `sessions/...` are also accepted. Legacy top-level `uploads/{current_chat_id}/...` and `artifacts/{current_chat_id}/...` paths are translated only for compatibility.
                 """,
             )
         )

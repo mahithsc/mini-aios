@@ -6,7 +6,7 @@ import asyncio
 import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from agents import RunConfig, Runner
@@ -20,7 +20,7 @@ from .context import (
     pop_chat_runtime_context,
     push_chat_runtime_context,
 )
-from .events import AgentEvent
+from .events import AgentEvent, normalize_tool_output
 from .factory import create_agent
 from .messages import (
     chat_message_to_model_message,
@@ -262,7 +262,10 @@ class AgentRuntime:
                     tool_call_id=getattr(event, "tool_call_id", None),
                     tool_name=tool_name,
                     input=getattr(event, "input", None),
-                    output=getattr(event, "output", None),
+                    output=normalize_tool_output(
+                        tool_name,
+                        getattr(event, "output", None),
+                    ),
                     error=getattr(event, "error", None),
                 )
             )
@@ -365,6 +368,11 @@ class AgentRuntime:
                 produced_output = True
                 if event.kind == "text_delta":
                     produced_text = True
+                elif event.kind == "tool_call_end":
+                    event = replace(
+                        event,
+                        output=normalize_tool_output(event.tool_name, event.output),
+                    )
                 await emit(event)
 
             if stream_result.run_loop_exception is not None:

@@ -37,6 +37,12 @@ def test_agent_paths_default_to_scratch_and_support_explicit_scopes(
     assert context.resolve_agent_path("data:/uploads/chat-1/old.txt") == (
         data_dir / "sessions" / "chat-1" / "uploads" / "old.txt"
     )
+    assert context.resolve_agent_path("data:/artifacts/chat-1/report.html") == (
+        data_dir / "sessions" / "chat-1" / "artifacts" / "report.html"
+    )
+    assert context.resolve_agent_path(
+        "session/chat-1/artifacts/report.html"
+    ) == (data_dir / "sessions" / "chat-1" / "artifacts" / "report.html")
 
 
 def test_explicit_scratch_scope_requires_an_active_chat(
@@ -91,6 +97,7 @@ def test_runtime_context_ensures_chat_storage_before_publishing_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scratch_dir = tmp_path / "sessions" / "chat-1" / "scratch"
+    artifacts_dir = tmp_path / "sessions" / "chat-1" / "artifacts"
     calls: list[str] = []
     monkeypatch.setattr(
         context,
@@ -98,10 +105,16 @@ def test_runtime_context_ensures_chat_storage_before_publishing_paths(
         lambda chat_id: calls.append(chat_id),
     )
     monkeypatch.setattr(context, "get_chat_scratch_dir", lambda _chat_id: scratch_dir)
+    monkeypatch.setattr(
+        context,
+        "get_chat_artifacts_dir",
+        lambda _chat_id: artifacts_dir,
+    )
 
     tokens = context.push_chat_runtime_context("chat-1")
     try:
         assert calls == ["chat-1"]
         assert context.get_current_chat_scratch_dir() == scratch_dir
+        assert context.get_current_chat_artifacts_dir() == artifacts_dir
     finally:
         context.pop_chat_runtime_context(tokens)

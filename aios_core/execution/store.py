@@ -8,8 +8,10 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from aios_core.initialize import RUNS_EVENTS_DIR, RUNS_METADATA_DIR, RUNS_SNAPSHOTS_DIR
+from aios_core.conversation_store import create_turn_row
+from aios_core.db import DB_PATH, get_db_connection, initialize_app_db
 from aios_core.sessions import append_assistant_event
+from aios_core.workspace import get_runs_dir
 from server.types.run import (
     Run,
     RunCreateRequest,
@@ -34,6 +36,31 @@ class RunStore:
 
     def append_event(self, run_id: str, event: RunEvent) -> RunEvent:
         raise NotImplementedError
+
+    def record_event(
+        self,
+        run_id: str,
+        event: RunEvent,
+        *,
+        status: RunStatus,
+        preview: str | None = None,
+        active_step: str | None = None,
+    ) -> tuple[RunEvent, RunSnapshot]:
+        """Persist an event and its snapshot projection.
+
+        File storage cannot make these writes atomic. Database stores override
+        this method so reconnect cursors and visible run status commit together.
+        """
+
+        persisted_event = self.append_event(run_id, event)
+        snapshot = self.save_snapshot(
+            run_id,
+            status=status,
+            last_sequence=persisted_event.sequence,
+            preview=preview,
+            active_step=active_step,
+        )
+        return persisted_event, snapshot
 
     def save_snapshot(
         self,
@@ -74,14 +101,18 @@ class RunStore:
 class FileRunStore(RunStore):
     def __init__(
         self,
-        metadata_dir: str | Path = RUNS_METADATA_DIR,
-        snapshots_dir: str | Path = RUNS_SNAPSHOTS_DIR,
-        events_dir: str | Path = RUNS_EVENTS_DIR,
+        metadata_dir: str | Path | None = None,
+        snapshots_dir: str | Path | None = None,
+        events_dir: str | Path | None = None,
+        *,
+        create_directories: bool = True,
     ) -> None:
-        self._metadata_dir = Path(metadata_dir)
-        self._snapshots_dir = Path(snapshots_dir)
-        self._events_dir = Path(events_dir)
-        self._ensure_directories()
+        legacy_runs_dir = get_runs_dir()
+        self._metadata_dir = Path(metadata_dir or legacy_runs_dir / "metadata")
+        self._snapshots_dir = Path(snapshots_dir or legacy_runs_dir / "snapshots")
+        self._events_dir = Path(events_dir or legacy_runs_dir / "events")
+        if create_directories:
+            self._ensure_directories()
 
     def create_run(self, request: RunCreateRequest, *, user_id: str | None = None) -> Run:
         now = int(time.time() * 1000)
@@ -253,6 +284,408 @@ class FileRunStore(RunStore):
         if not events:
             return 0
         return events[-1].sequence
+
+
+class SQLiteRunStore(RunStore):
+    """SQLite-backed scheduling state and exact reconnect event stream."""
+
+    def __init__(self, db_path: str = DB_PATH) -> None:
+        self.db_path = db_path
+        initialize_app_db(self.db_path)
+
+    def create_run(self, request: RunCreateRequest, *, user_id: str | None = None) -> Run:
+        now = int(time.time() * 1000)
+        run = Run(
+            id=str(uuid.uuid4()),
+            userId=user_id,
+            kind=request.kind,
+            status="queued",
+            createdAt=now,
+            updatedAt=now,
+            chatId=request.chatId,
+            sourceId=request.sourceId,
+            turnId=request.turnId,
+        )
+        with get_db_connection(self.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._insert_run(conn, run)
+            if run.kind == "chat" and run.chatId and run.turnId:
+                create_turn_row(
+                    conn,
+                    chat_id=run.chatId,
+                    turn_id=run.turnId,
+                    user_message_id=run.sourceId or run.turnId,
+                    run_id=run.id,
+                    now=now,
+                )
+        return run
+
+    def get_run(self, run_id: str, *, user_id: str | None = None) -> Run | None:
+        query = (
+            "SELECT id, user_id, kind, status, created_at, updated_at, "
+            "chat_id, source_id, turn_id FROM runs WHERE id = ?"
+        )
+        params: list[object] = [run_id]
+        if user_id is not None:
+            query += " AND user_id = ?"
+            params.append(user_id)
+        with get_db_connection(self.db_path) as conn:
+            row = conn.execute(query, params).fetchone()
+        return self._run_from_row(row) if row is not None else None
+
+    def save_run(self, run: Run) -> Run:
+        with get_db_connection(self.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT 1 FROM runs WHERE id = ?",
+                (run.id,),
+            ).fetchone()
+            if existing is None:
+                self._insert_run(conn, run)
+            else:
+                conn.execute(
+                    """
+                    UPDATE runs
+                    SET user_id = ?, kind = ?, status = ?, chat_id = ?,
+                        source_id = ?, turn_id = ?, created_at = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        run.userId,
+                        run.kind,
+                        run.status,
+                        run.chatId,
+                        run.sourceId,
+                        run.turnId,
+                        run.createdAt,
+                        run.updatedAt,
+                        run.id,
+                    ),
+                )
+        return run
+
+    def append_event(self, run_id: str, event: RunEvent) -> RunEvent:
+        with get_db_connection(self.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            run_row = self._select_run_row(conn, run_id)
+            next_sequence = int(run_row[9]) + 1
+            persisted_event = self._persist_event(
+                conn,
+                self._run_from_row(run_row[:9]),
+                event,
+                next_sequence,
+            )
+            conn.execute(
+                "UPDATE runs SET last_sequence = ?, updated_at = ? WHERE id = ?",
+                (next_sequence, persisted_event.createdAt, run_id),
+            )
+        return persisted_event
+
+    def record_event(
+        self,
+        run_id: str,
+        event: RunEvent,
+        *,
+        status: RunStatus,
+        preview: str | None = None,
+        active_step: str | None = None,
+    ) -> tuple[RunEvent, RunSnapshot]:
+        with get_db_connection(self.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            run_row = self._select_run_row(conn, run_id)
+            run = self._run_from_row(run_row[:9])
+            next_sequence = int(run_row[9]) + 1
+            persisted_event = self._persist_event(
+                conn,
+                run,
+                event,
+                next_sequence,
+            )
+            updated_at = int(time.time() * 1000)
+            conn.execute(
+                """
+                UPDATE runs
+                SET status = ?, last_sequence = ?, preview = ?, active_step = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    next_sequence,
+                    preview,
+                    active_step,
+                    updated_at,
+                    run_id,
+                ),
+            )
+        return persisted_event, RunSnapshot(
+            runId=run.id,
+            userId=run.userId,
+            kind=run.kind,
+            status=status,
+            updatedAt=updated_at,
+            chatId=run.chatId,
+            lastSequence=next_sequence,
+            preview=preview,
+            activeStep=active_step,
+        )
+
+    def save_snapshot(
+        self,
+        run_id: str,
+        *,
+        status: RunStatus,
+        last_sequence: int,
+        preview: str | None = None,
+        active_step: str | None = None,
+    ) -> RunSnapshot:
+        updated_at = int(time.time() * 1000)
+        with get_db_connection(self.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            run_row = self._select_run_row(conn, run_id)
+            run = self._run_from_row(run_row[:9])
+            conn.execute(
+                """
+                UPDATE runs
+                SET status = ?, last_sequence = ?, preview = ?, active_step = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    last_sequence,
+                    preview,
+                    active_step,
+                    updated_at,
+                    run_id,
+                ),
+            )
+        return RunSnapshot(
+            runId=run.id,
+            userId=run.userId,
+            kind=run.kind,
+            status=status,
+            updatedAt=updated_at,
+            chatId=run.chatId,
+            lastSequence=last_sequence,
+            preview=preview,
+            activeStep=active_step,
+        )
+
+    def get_snapshot(self, run_id: str) -> RunSnapshot | None:
+        with get_db_connection(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT id, user_id, kind, status, updated_at, chat_id,
+                       last_sequence, preview, active_step
+                FROM runs WHERE id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        return self._snapshot_from_row(row) if row is not None else None
+
+    def list_snapshots(
+        self,
+        user_id: str | None = None,
+        statuses: list[RunStatus] | None = None,
+        kinds: list[RunKind] | None = None,
+        limit: int | None = None,
+    ) -> list[RunSnapshot]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        if statuses:
+            clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
+            params.extend(statuses)
+        if kinds:
+            clauses.append(f"kind IN ({','.join('?' for _ in kinds)})")
+            params.extend(kinds)
+        query = (
+            "SELECT id, user_id, kind, status, updated_at, chat_id, "
+            "last_sequence, preview, active_step FROM runs"
+        )
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY updated_at DESC, id ASC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        with get_db_connection(self.db_path) as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [self._snapshot_from_row(row) for row in rows]
+
+    def list_events_after(
+        self,
+        run_id: str,
+        sequence: int,
+        *,
+        user_id: str | None = None,
+    ) -> list[RunEvent]:
+        if user_id is not None and self.get_run(run_id, user_id=user_id) is None:
+            return []
+        with get_db_connection(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT event_json FROM run_events
+                WHERE run_id = ? AND sequence > ?
+                ORDER BY sequence ASC
+                """,
+                (run_id, sequence),
+            ).fetchall()
+        return [RunEvent.model_validate_json(row[0]) for row in rows]
+
+    def project_chat_state(self, run_id: str, chat_id: str, event: RunEvent) -> None:
+        llm_event = _run_event_to_chat_event(event)
+        if llm_event is not None:
+            append_assistant_event(chat_id, run_id, llm_event)
+
+    def import_file_store(self, legacy_store: FileRunStore) -> int:
+        """Copy legacy file runs once, without overwriting newer SQL state."""
+
+        imported = 0
+        for legacy_snapshot in legacy_store.list_snapshots():
+            try:
+                run = legacy_store.get_run(legacy_snapshot.runId)
+                if run is None:
+                    continue
+                events = legacy_store.list_events_after(run.id, 0)
+                with get_db_connection(self.db_path) as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    cursor = conn.execute(
+                        """
+                        INSERT OR IGNORE INTO runs
+                            (id, user_id, kind, status, chat_id, source_id, turn_id,
+                             last_sequence, preview, active_step, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            run.id,
+                            run.userId,
+                            run.kind,
+                            legacy_snapshot.status,
+                            run.chatId,
+                            run.sourceId,
+                            run.turnId,
+                            legacy_snapshot.lastSequence,
+                            legacy_snapshot.preview,
+                            legacy_snapshot.activeStep,
+                            run.createdAt,
+                            legacy_snapshot.updatedAt,
+                        ),
+                    )
+                    if cursor.rowcount == 0:
+                        continue
+                    for event in events:
+                        conn.execute(
+                            """
+                            INSERT OR IGNORE INTO run_events
+                                (run_id, sequence, event_json, created_at)
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (
+                                run.id,
+                                event.sequence,
+                                event.model_dump_json(),
+                                event.createdAt,
+                            ),
+                        )
+                    imported += 1
+            except Exception:
+                log.exception(
+                    "Skipping legacy run that could not be imported: %s",
+                    legacy_snapshot.runId,
+                )
+        return imported
+
+    @staticmethod
+    def _insert_run(conn, run: Run) -> None:
+        conn.execute(
+            """
+            INSERT INTO runs
+                (id, user_id, kind, status, chat_id, source_id, turn_id,
+                 last_sequence, preview, active_step, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?)
+            """,
+            (
+                run.id,
+                run.userId,
+                run.kind,
+                run.status,
+                run.chatId,
+                run.sourceId,
+                run.turnId,
+                run.createdAt,
+                run.updatedAt,
+            ),
+        )
+
+    @staticmethod
+    def _select_run_row(conn, run_id: str):
+        row = conn.execute(
+            """
+            SELECT id, user_id, kind, status, created_at, updated_at,
+                   chat_id, source_id, turn_id, last_sequence
+            FROM runs WHERE id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"Run {run_id} does not exist.")
+        return row
+
+    @staticmethod
+    def _persist_event(conn, run: Run, event: RunEvent, sequence: int) -> RunEvent:
+        persisted_event = event.model_copy(
+            update={
+                "sequence": sequence,
+                "kind": run.kind,
+                "userId": event.userId if event.userId is not None else run.userId,
+                "chatId": event.chatId if event.chatId is not None else run.chatId,
+            }
+        )
+        conn.execute(
+            """
+            INSERT INTO run_events (run_id, sequence, event_json, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                run.id,
+                sequence,
+                persisted_event.model_dump_json(),
+                persisted_event.createdAt,
+            ),
+        )
+        return persisted_event
+
+    @staticmethod
+    def _run_from_row(row) -> Run:
+        return Run(
+            id=row[0],
+            userId=row[1],
+            kind=row[2],
+            status=row[3],
+            createdAt=row[4],
+            updatedAt=row[5],
+            chatId=row[6],
+            sourceId=row[7],
+            turnId=row[8],
+        )
+
+    @staticmethod
+    def _snapshot_from_row(row) -> RunSnapshot:
+        return RunSnapshot(
+            runId=row[0],
+            userId=row[1],
+            kind=row[2],
+            status=row[3],
+            updatedAt=row[4],
+            chatId=row[5],
+            lastSequence=row[6],
+            preview=row[7],
+            activeStep=row[8],
+        )
 
 
 def _run_event_to_chat_event(event: RunEvent) -> dict[str, object] | None:

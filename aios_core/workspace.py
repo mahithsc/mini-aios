@@ -1117,26 +1117,40 @@ def _apply_session_layout(
             reason="invalid legacy uploads root",
         )
 
-    _archive_path(
-        canonical_root / "artifacts",
-        backup_root / "artifacts",
-        report,
-        reason="session artifacts feature removed",
-    )
-
-    for session_dir in sorted(sessions_dir.iterdir(), key=lambda path: path.name):
-        if not session_dir.is_dir() or session_dir.is_symlink():
-            continue
+    legacy_artifacts = canonical_root / "artifacts"
+    if legacy_artifacts.is_dir() and not legacy_artifacts.is_symlink():
+        for chat_artifacts in sorted(
+            legacy_artifacts.iterdir(), key=lambda path: path.name
+        ):
+            if chat_artifacts.is_dir() and not chat_artifacts.is_symlink():
+                _merge_path(
+                    chat_artifacts,
+                    sessions_dir / chat_artifacts.name / "artifacts",
+                    backup_root / "artifacts" / chat_artifacts.name,
+                    report,
+                )
+            else:
+                _archive_path(
+                    chat_artifacts,
+                    backup_root / "artifacts" / chat_artifacts.name,
+                    report,
+                    reason="invalid legacy artifact owner",
+                )
+        try:
+            legacy_artifacts.rmdir()
+        except OSError:
+            pass
+    else:
         _archive_path(
-            session_dir / "artifacts",
-            backup_root / "sessions" / session_dir.name / "artifacts",
+            legacy_artifacts,
+            backup_root / "artifacts",
             report,
-            reason="session artifacts feature removed",
+            reason="invalid legacy artifacts root",
         )
 
 
 def migrate_session_layout(*, data_dir: Path | None = None) -> dict[str, Any]:
-    """Nest uploads inside their chat session and retire artifact storage.
+    """Nest uploads and artifacts inside their owning chat session.
 
     The separate v2 report lets the host updater reverse this filesystem-only
     transition without replaying the older database/workspace migration.
@@ -1248,6 +1262,8 @@ def resolve_workspace_path(path: str | Path) -> Path:
         return ensure_data_dir()
     if len(parts) >= 2 and parts[0] == "uploads":
         raw_path = Path("sessions", parts[1], "uploads", *parts[2:])
+    elif len(parts) >= 2 and parts[0] == "artifacts":
+        raw_path = Path("sessions", parts[1], "artifacts", *parts[2:])
     else:
         translated = _LEGACY_PATH_PREFIXES.get(parts[0])
         if translated is not None:

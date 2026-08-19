@@ -87,13 +87,7 @@ def test_explicit_data_root_is_isolated_from_checkout(
         configured / "sessions" / "chat-1" / "uploads" / "input.txt"
     ).read_text(encoding="utf-8") == "input"
     assert (
-        configured
-        / "state"
-        / "migration-backups"
-        / "session-layout-v2"
-        / "artifacts"
-        / "chat-1"
-        / "preview.html"
+        configured / "sessions" / "chat-1" / "artifacts" / "preview.html"
     ).read_text(encoding="utf-8") == "preview"
     assert not (configured / "uploads").exists()
     assert not (configured / "artifacts").exists()
@@ -225,7 +219,7 @@ def test_storage_migration_promotes_active_db_and_preserves_collisions(
     ) == report
 
 
-def test_session_layout_nests_uploads_and_archives_removed_artifacts(
+def test_session_layout_nests_uploads_and_artifacts(
     tmp_path: Path,
 ) -> None:
     data_dir = tmp_path / ".mini-aios"
@@ -256,13 +250,12 @@ def test_session_layout_nests_uploads_and_archives_removed_artifacts(
     assert (backup_root / "uploads" / "chat-1" / "same.txt").read_text(
         encoding="utf-8"
     ) == "legacy"
-    assert (backup_root / "artifacts" / "chat-1" / "preview.html").is_file()
     assert (
-        backup_root / "sessions" / "chat-2" / "artifacts" / "result.txt"
+        data_dir / "sessions" / "chat-1" / "artifacts" / "preview.html"
     ).is_file()
+    assert nested_artifacts.joinpath("result.txt").is_file()
     assert not (data_dir / "uploads").exists()
     assert not (data_dir / "artifacts").exists()
-    assert not nested_artifacts.exists()
 
     report_path = data_dir / "state" / "migrations" / "session-layout-v2.json"
     assert json.loads(report_path.read_text(encoding="utf-8")) == report

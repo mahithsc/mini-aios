@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import sqlite3
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -278,6 +279,76 @@ class StoredConversationItem:
     dedupe_key: str
 
 
+def create_turn_row(
+    conn: sqlite3.Connection,
+    *,
+    chat_id: str,
+    turn_id: str,
+    user_message_id: str,
+    run_id: str,
+    now: int,
+) -> None:
+    """Create the canonical queued turn inside an existing transaction.
+
+    Run submission uses this helper so the durable run row and its canonical
+    conversation turn become visible in the same commit. AgentRuntime calls
+    :meth:`ConversationStore.create_turn` again when execution begins; the
+    identity checks below deliberately make that second call idempotent.
+    """
+
+    existing = conn.execute(
+        """
+        SELECT chat_id, user_message_id, run_id
+        FROM conversation_turns WHERE turn_id = ?
+        """,
+        (turn_id,),
+    ).fetchone()
+    if existing is not None and tuple(existing) != (
+        chat_id,
+        user_message_id,
+        run_id,
+    ):
+        raise RuntimeError(
+            "Conversation turn identity cannot be rebound to another "
+            f"chat, user message, or run: {turn_id}"
+        )
+    conflicting_user = conn.execute(
+        """
+        SELECT turn_id, run_id FROM conversation_turns
+        WHERE chat_id = ? AND user_message_id = ?
+        """,
+        (chat_id, user_message_id),
+    ).fetchone()
+    if conflicting_user is not None and tuple(conflicting_user) != (
+        turn_id,
+        run_id,
+    ):
+        raise RuntimeError(
+            f"User message {user_message_id} already belongs to another run."
+        )
+    conn.execute(
+        """
+        INSERT INTO conversation_threads
+            (chat_id, format_version, seed_kind, seeded_at,
+             next_item_position, created_at, updated_at)
+        VALUES (?, 1, 'native', NULL, 0, ?, ?)
+        ON CONFLICT(chat_id) DO UPDATE SET updated_at = excluded.updated_at
+        """,
+        (chat_id, now, now),
+    )
+    conn.execute(
+        """
+        INSERT INTO conversation_turns
+            (turn_id, chat_id, user_message_id, run_id, status,
+             created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'queued', ?, ?)
+        ON CONFLICT(turn_id) DO UPDATE SET
+            updated_at = excluded.updated_at
+        """,
+        (turn_id, chat_id, user_message_id, run_id, now, now),
+    )
+
+
 class ConversationStore:
     def __init__(self, db_path: str = DB_PATH) -> None:
         self.db_path = db_path
@@ -298,56 +369,13 @@ class ConversationStore:
         now = _now_ms()
         with get_db_connection(self.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            existing = conn.execute(
-                """
-                SELECT chat_id, user_message_id, run_id
-                FROM conversation_turns WHERE turn_id = ?
-                """,
-                (turn_id,),
-            ).fetchone()
-            if existing is not None and tuple(existing) != (
-                chat_id,
-                user_message_id,
-                run_id,
-            ):
-                raise RuntimeError(
-                    "Conversation turn identity cannot be rebound to another "
-                    f"chat, user message, or run: {turn_id}"
-                )
-            conflicting_user = conn.execute(
-                """
-                SELECT turn_id, run_id FROM conversation_turns
-                WHERE chat_id = ? AND user_message_id = ?
-                """,
-                (chat_id, user_message_id),
-            ).fetchone()
-            if conflicting_user is not None and tuple(conflicting_user) != (
-                turn_id,
-                run_id,
-            ):
-                raise RuntimeError(
-                    f"User message {user_message_id} already belongs to another run."
-                )
-            conn.execute(
-                """
-                INSERT INTO conversation_threads
-                    (chat_id, format_version, seed_kind, seeded_at,
-                     next_item_position, created_at, updated_at)
-                VALUES (?, 1, 'native', NULL, 0, ?, ?)
-                ON CONFLICT(chat_id) DO UPDATE SET updated_at = excluded.updated_at
-                """,
-                (chat_id, now, now),
-            )
-            conn.execute(
-                """
-                INSERT INTO conversation_turns
-                    (turn_id, chat_id, user_message_id, run_id, status,
-                     created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'queued', ?, ?)
-                ON CONFLICT(turn_id) DO UPDATE SET
-                    updated_at = excluded.updated_at
-                """,
-                (turn_id, chat_id, user_message_id, run_id, now, now),
+            create_turn_row(
+                conn,
+                chat_id=chat_id,
+                turn_id=turn_id,
+                user_message_id=user_message_id,
+                run_id=run_id,
+                now=now,
             )
 
     def set_turn_status(self, turn_id: str, status: str) -> None:

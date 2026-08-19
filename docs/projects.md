@@ -11,6 +11,7 @@ scratch space:
 │       └── project.md
 └── sessions/
     └── <chat-id>/
+        ├── artifacts/
         ├── scratch/
         └── uploads/
 ```

@@ -20,6 +20,7 @@ _EXPECTED_SCHEMA_MIGRATIONS = {
     4: ("conversation_rail_metadata", "conversation-v2"),
     5: ("cloud_deployment_runtime", "cloud-deploy-v1"),
     6: ("durable_projects", "projects-v1"),
+    7: ("durable_runs", "runs-v1"),
 }
 log = logging.getLogger(__name__)
 
@@ -238,6 +239,46 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_run_id
                 ON chat_messages(run_id)
                 WHERE run_id IS NOT NULL;
+
+            -- Durable execution control plane. Conversation turns remain the
+            -- canonical model-history boundary; these rows own scheduling,
+            -- reconnect snapshots, and the exact public RunEvent stream.
+            CREATE TABLE IF NOT EXISTS runs (
+                id              TEXT PRIMARY KEY,
+                user_id         TEXT,
+                kind            TEXT NOT NULL CHECK (kind IN ('chat', 'cron')),
+                status          TEXT NOT NULL CHECK (status IN (
+                                    'queued', 'running', 'completed',
+                                    'error', 'cancelled'
+                                )),
+                chat_id         TEXT,
+                source_id       TEXT,
+                turn_id         TEXT,
+                last_sequence   INTEGER NOT NULL DEFAULT 0,
+                preview         TEXT,
+                active_step     TEXT,
+                created_at      INTEGER NOT NULL,
+                updated_at      INTEGER NOT NULL,
+                FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_runs_status_kind_updated
+                ON runs(status, kind, updated_at DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_runs_chat_updated
+                ON runs(chat_id, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS run_events (
+                run_id          TEXT NOT NULL,
+                sequence        INTEGER NOT NULL,
+                event_json      TEXT NOT NULL,
+                created_at      INTEGER NOT NULL,
+                PRIMARY KEY (run_id, sequence),
+                FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_run_events_created
+                ON run_events(created_at, run_id, sequence);
 
             CREATE TABLE IF NOT EXISTS message_attachments (
                 id           TEXT PRIMARY KEY,
@@ -575,6 +616,17 @@ def initialize_app_db(db_path: str = DB_PATH) -> None:
             INSERT OR IGNORE INTO schema_migrations (
                 version, name, checksum, applied_at, app_release
             ) VALUES (6, 'durable_projects', 'projects-v1', ?, ?)
+            """,
+            (
+                int(time.time() * 1000),
+                os.getenv("AIOS_RELEASE_ID", "development"),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO schema_migrations (
+                version, name, checksum, applied_at, app_release
+            ) VALUES (7, 'durable_runs', 'runs-v1', ?, ?)
             """,
             (
                 int(time.time() * 1000),

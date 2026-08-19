@@ -7,6 +7,7 @@ from openai.types.shared import Reasoning
 
 from ..memory import build_memory_prompt
 from ..sessions import (
+    get_chat_artifacts_dir,
     get_chat_scratch_dir,
     get_chat_uploads_dir,
 )
@@ -24,6 +25,7 @@ from .tools import (
     tavily_search,
     write,
 )
+from .tools.artifact_tool import artifact
 from .tools.cron import cron
 from .tools.fetch import fetch
 from .tools.memory import memory
@@ -53,6 +55,7 @@ DEFAULT_MODEL_ID, DEFAULT_REASONING_EFFORT = _resolve_model_configuration(os.env
 BASE_TOOLS = [
     read,
     write,
+    artifact,
     edit,
     glob,
     grep,
@@ -78,9 +81,11 @@ def _build_prompt(
 ):
     current_chat_scratch_dir = None
     current_chat_uploads_dir = None
+    current_chat_artifacts_dir = None
     if chat_id:
         current_chat_scratch_dir = str(get_chat_scratch_dir(chat_id))
         current_chat_uploads_dir = str(get_chat_uploads_dir(chat_id))
+        current_chat_artifacts_dir = str(get_chat_artifacts_dir(chat_id))
 
     return build_agent_prompt(
         include_subagent_tool=include_subagent_tool,
@@ -89,6 +94,7 @@ def _build_prompt(
         current_chat_id=chat_id,
         current_chat_scratch_dir=current_chat_scratch_dir,
         current_chat_uploads_dir=current_chat_uploads_dir,
+        current_chat_artifacts_dir=current_chat_artifacts_dir,
         include_memory_tools=include_subagent_tool,
         memory_context=build_memory_prompt(),
         skills=load_skills(),

@@ -167,6 +167,10 @@ def get_sandbox_files_relative_dir(owner_id: str) -> Path:
     return get_sandbox_relative_dir(owner_id) / "scratch"
 
 
+def get_sandbox_artifacts_relative_dir(owner_id: str) -> Path:
+    return get_sandbox_relative_dir(owner_id) / "artifacts"
+
+
 def get_sandbox_transcript_relative_path(owner_id: str) -> Path:
     return get_sandbox_relative_dir(owner_id) / "chat.json"
 
@@ -187,6 +191,10 @@ def get_chat_scratch_relative_dir(chat_id: str) -> Path:
     return get_sandbox_files_relative_dir(chat_id)
 
 
+def get_chat_artifacts_relative_dir(chat_id: str) -> Path:
+    return get_sandbox_artifacts_relative_dir(chat_id)
+
+
 def _sandbox_dir(owner_id: str) -> Path:
     return Path(SESSION_DIR) / _sanitize_path_segment(owner_id, "chat")
 
@@ -201,6 +209,10 @@ def _sandbox_uploads_dir(owner_id: str) -> Path:
 
 def _sandbox_files_dir(owner_id: str) -> Path:
     return _sandbox_dir(owner_id) / "scratch"
+
+
+def _sandbox_artifacts_dir(owner_id: str) -> Path:
+    return _sandbox_dir(owner_id) / "artifacts"
 
 
 def get_sandbox_dir(owner_id: str) -> Path:
@@ -219,6 +231,10 @@ def get_sandbox_files_dir(owner_id: str) -> Path:
     return _sandbox_files_dir(owner_id)
 
 
+def get_sandbox_artifacts_dir(owner_id: str) -> Path:
+    return _sandbox_artifacts_dir(owner_id)
+
+
 def get_chat_files_dir(chat_id: str) -> Path:
     return get_sandbox_files_dir(chat_id)
 
@@ -229,6 +245,10 @@ def get_chat_scratch_dir(chat_id: str) -> Path:
 
 def get_chat_uploads_dir(chat_id: str) -> Path:
     return get_sandbox_uploads_dir(chat_id)
+
+
+def get_chat_artifacts_dir(chat_id: str) -> Path:
+    return get_sandbox_artifacts_dir(chat_id)
 
 
 def _ensure_sandbox_dirs(owner_id: str) -> Path:
@@ -248,9 +268,19 @@ def ensure_chat_storage_dirs(chat_id: str) -> Path:
 
     A chat can exist only in SQLite after an import or restore. Runtime callers
     use this public helper before exposing scratch and upload paths to tools.
+    Artifacts remain lazy and are created only when the artifact tool writes.
     """
 
     return _ensure_chat_dirs(chat_id)
+
+
+def ensure_chat_artifacts_dir(chat_id: str) -> Path:
+    """Create and return the artifact root owned by ``chat_id``."""
+
+    _ensure_chat_dirs(chat_id)
+    artifacts_dir = get_chat_artifacts_dir(chat_id)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    return artifacts_dir
 
 
 def _get_session_entry(chat_id: str) -> dict[str, Any] | None:

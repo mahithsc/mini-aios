@@ -1,6 +1,7 @@
 __all__ = [
     "read",
     "write",
+    "artifact",
     "edit",
     "glob",
     "grep",
@@ -24,6 +25,10 @@ __all__ = [
 
 
 def __getattr__(name: str):
+    if name == "artifact":
+        from .artifact_tool import artifact
+
+        return artifact
     if name in {"read", "write", "edit"}:
         from .filesystem import edit, read, write
 

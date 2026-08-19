@@ -35,7 +35,7 @@ class _RecoveryStore:
         return False
 
 
-def test_service_start_recovers_canonical_history_before_workers() -> None:
+def test_service_start_does_not_bulk_fail_nonterminal_history() -> None:
     recovery = _RecoveryStore()
     service = RunsService(
         store=_EmptyRunStore(),
@@ -50,7 +50,7 @@ def test_service_start_recovers_canonical_history_before_workers() -> None:
 
     asyncio.run(exercise())
 
-    assert recovery.calls == [("Server restarted before run completed.", None)]
+    assert recovery.calls == []
 
 
 class _StaleRunStore:
@@ -87,6 +87,17 @@ class _StaleRunStore:
         self.events.append(persisted)
         return persisted
 
+    def record_event(self, run_id, event, *, status, preview=None, active_step=None):
+        persisted = self.append_event(run_id, event)
+        snapshot = self.save_snapshot(
+            run_id,
+            status=status,
+            last_sequence=persisted.sequence,
+            preview=preview,
+            active_step=active_step,
+        )
+        return persisted, snapshot
+
     def save_snapshot(self, run_id, *, status, last_sequence, **kwargs):
         self.snapshot = self.snapshot.model_copy(
             update={
@@ -117,9 +128,71 @@ class _Broadcaster:
         self.events.append(event)
 
 
-def test_file_projection_recovers_canonical_completed_status() -> None:
+def test_run_projection_recovers_canonical_completed_status() -> None:
     store = _StaleRunStore()
     recovery = _RecoveryStore(status="complete")
+    broadcaster = _Broadcaster()
+    service = RunsService(
+        store=store,
+        broadcaster=broadcaster,
+        worker_count=1,
+        conversation_store=recovery,
+    )
+
+    async def exercise() -> None:
+        await service.start()
+        await service.shutdown()
+
+    asyncio.run(exercise())
+
+    assert recovery.per_run_calls == []
+    assert [event.event.type for event in broadcaster.events] == ["completed"]
+    assert store.snapshot.status == "completed"
+
+
+def test_queued_run_is_dispatched_again_after_service_restart() -> None:
+    store = _StaleRunStore()
+    store.run = store.run.model_copy(update={"status": "queued"})
+    store.snapshot = store.snapshot.model_copy(update={"status": "queued"})
+    recovery = _RecoveryStore(status="queued")
+    broadcaster = _Broadcaster()
+    service = RunsService(
+        store=store,
+        broadcaster=broadcaster,
+        worker_count=1,
+        conversation_store=recovery,
+    )
+
+    class _Runner:
+        kind = "chat"
+
+        async def execute(self, run, runs_service) -> None:
+            await runs_service.emit_event(
+                run.id,
+                build_run_event(
+                    run_id=run.id,
+                    event_type="completed",
+                    chat_id=run.chatId,
+                ),
+            )
+
+    service.register_runner(_Runner())
+
+    async def exercise() -> None:
+        await service.start()
+        await service._queue.join()
+        await service.shutdown()
+
+    asyncio.run(exercise())
+
+    assert recovery.per_run_calls == []
+    assert [event.event.type for event in broadcaster.events] == ["completed"]
+    assert store.snapshot.status == "completed"
+
+
+def test_running_turn_is_failed_instead_of_replaying_side_effects() -> None:
+    store = _StaleRunStore()
+    recovery = _RecoveryStore(status="running")
     broadcaster = _Broadcaster()
     service = RunsService(
         store=store,
@@ -137,11 +210,11 @@ def test_file_projection_recovers_canonical_completed_status() -> None:
     assert recovery.per_run_calls == [
         ("run-stale", "Server restarted before run completed.")
     ]
-    assert [event.event.type for event in broadcaster.events] == ["completed"]
-    assert store.snapshot.status == "completed"
+    assert [event.event.type for event in broadcaster.events] == ["error"]
+    assert store.snapshot.status == "error"
 
 
-def test_terminal_file_error_is_repaired_from_canonical_completion() -> None:
+def test_terminal_run_error_is_repaired_from_canonical_completion() -> None:
     store = _StaleRunStore()
     store.snapshot = store.snapshot.model_copy(update={"status": "error"})
     recovery = _RecoveryStore(status="complete")

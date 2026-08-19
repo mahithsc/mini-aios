@@ -39,6 +39,7 @@ def test_gateway_commits_user_before_queuing_exact_turn(monkeypatch) -> None:
     assert order[0] == "ui-committed"
     submit = next(entry[1] for entry in order if entry[0] == "submit")
     assert submit.chatId == "chat-1"
+    assert submit.sourceId == committed[0].id
     assert submit.turnId == committed[0].id
     assert order.index(next(entry for entry in order if entry[0] == "publish")) < order.index(
         next(entry for entry in order if entry[0] == "submit")

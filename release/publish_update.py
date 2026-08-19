@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 _DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 _PLATFORMS = {"linux-amd64", "linux-arm64"}
-_DATABASE_SCHEMA_VERSION = 6
+_DATABASE_SCHEMA_VERSION = 7
 
 
 def _write_new(path: Path, data: bytes, mode: int = 0o600) -> None:

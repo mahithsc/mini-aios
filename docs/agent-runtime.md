@@ -16,6 +16,10 @@ aios_core/agent/
 └── pi/                 # Pi tool, process runtime, protocol, and cloud bridge
 ```
 
+The generated system prompt directs agents to verify time-sensitive claims with
+web search and authoritative sources, use exact dates for relative-time queries,
+and disclose when current information could not be verified.
+
 `AgentRuntime.run(AgentRunRequest)` is the public execution boundary. It yields
 `AgentEvent` values and owns when conversation turns, native provider events,
 and tool lifecycle records are persisted. `ConversationStore` owns how those
@@ -25,8 +29,9 @@ themselves.
 
 `aios_core/execution` owns queued runs and durable run projections. Its chat
 runner consumes `AgentEvent` values and translates them into run events. It
-does not import or drive the OpenAI SDK. Run metadata, events, and snapshots
-live beneath `<data-root>/runs/`.
+does not import or drive the OpenAI SDK. Run metadata, reconnect events, and
+snapshots live in `<data-root>/state/aios.db`; only legacy import files and cron
+logs remain beneath `<data-root>/runs/`.
 
 `server` owns transport and process composition: HTTP routes, SSE delivery,
 authentication, startup/shutdown, and hardware presentation state. Server code
@@ -41,5 +46,6 @@ an action parameter; the SQLite-backed implementation lives in
 The runtime receives resolved paths through its run context rather than
 choosing a storage root itself. Ordinary relative tool paths default to
 `<data-root>/sessions/<chat-id>/scratch/`; inbound uploads live beside scratch
-at `sessions/<chat-id>/uploads/`, while durable projects have a separate root. See
-[the runtime storage contract](./storage-layout.md).
+at `sessions/<chat-id>/uploads/`, and the `artifact` tool lazily writes
+user-facing files to `sessions/<chat-id>/artifacts/`. Durable projects have a
+separate root. See [the runtime storage contract](./storage-layout.md).

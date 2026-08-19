@@ -224,6 +224,7 @@ async def submit_message(session_id: str, body: MessageCreate) -> MessageSubmitO
         RunCreateRequest(
             kind="chat",
             chatId=session_id,
+            sourceId=user_message.id,
             turnId=user_message.id,
         )
     )

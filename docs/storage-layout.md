@@ -31,16 +31,18 @@ the active data root.
 │       └── project.md
 ├── sessions/
 │   └── <chat-id>/
+│       ├── artifacts/
 │       ├── scratch/
 │       └── uploads/
 ├── runs/
+│   └── cron_logs/
 ├── skills/
 ├── memories/
 └── deployments/
 ```
 
 - `state/` contains service-owned state, including the SQLite database used
-  for chats, schedules, notifications, and device state.
+  for chats, agent runs and events, schedules, notifications, and device state.
 - `projects/` contains durable, longer-lived work. SQLite owns project identity,
   and Mini AIOS creates only `project.md`; the agent chooses every other file
   and directory. A project is independent of any one chat.
@@ -49,18 +51,21 @@ the active data root.
 - `sessions/<chat-id>/uploads/` contains inbound user attachments. Stored
   attachment paths are relative to the data root, for example
   `sessions/<chat-id>/uploads/report.pdf`.
-- `runs/` contains durable agent-run metadata, event logs, snapshots, and
-  scheduled-run logs beneath `runs/cron_logs/`.
+- `sessions/<chat-id>/artifacts/` contains user-facing files produced by the
+  agent for that chat. The directory is created lazily by the `artifact` tool.
+- `runs/cron_logs/` contains scheduled-run log files that are intentionally
+  kept outside SQLite. Agent-run metadata, reconnect events, and snapshots are
+  database rows, not workspace files.
 - `skills/` and `memories/` contain user-owned agent extensions and curated
   memory respectively.
 - `deployments/` contains legacy deployment registry and lifecycle state.
   Deployment is separate from project identity and project source remains in
   `projects/`.
 
-Uploads are owned by the session but remain outside its scratch directory, so
-scratch cleanup cannot change attachment identity. Mini AIOS does not maintain
-a separate user-visible artifact directory. There is no extra `workspace/`
-wrapper beneath the data root.
+Uploads and artifacts are owned by the session but remain outside its scratch
+directory, so scratch cleanup cannot change their identity. There is no
+top-level artifact directory or extra `workspace/` wrapper beneath the data
+root.
 
 ## Agent path scopes
 
@@ -72,11 +77,14 @@ scratch directory. Explicit scopes remove ambiguity:
 | `notes.md` | `sessions/<chat-id>/scratch/` |
 | `scratch:/notes.md` | `sessions/<chat-id>/scratch/` |
 | `data:/sessions/<chat-id>/uploads/report.pdf` | the current session's uploads directory |
+| `data:/sessions/<chat-id>/artifacts/report.html` | the current session's artifacts directory |
 | `data:/projects/<project-id>/...` | the canonical data root |
 
 Existing data-root-relative paths beginning with a canonical top-level
-directory remain accepted for compatibility. New prompts and tools should use
-`data:/` when they intentionally leave scratch space.
+directory remain accepted for compatibility. Legacy
+`artifacts/<chat-id>/...` paths resolve to the session-owned artifact directory.
+New prompts and tools should use `artifact` for user-facing chat artifacts and
+`data:/` when they otherwise intentionally leave scratch space.
 
 ## Legacy migration boundary
 
@@ -87,9 +95,9 @@ legacy migration inputs, not valid destinations for new writes.
 
 Compatibility code may read or adopt those locations during migration. Legacy
 top-level `uploads/<chat-id>/` content is moved to the corresponding session.
-The removed top-level and per-session `artifacts/` directories are archived
-under `state/migration-backups/session-layout-v2/`; they are not active runtime
-storage. The resumable migration journal is
+Legacy top-level `artifacts/<chat-id>/` content is moved into the corresponding
+session. Canonical session content wins collisions, with displaced legacy files
+archived under `state/migration-backups/session-layout-v2/`. The resumable migration journal is
 `state/migrations/session-layout-v2.json`. New records and files use the
 canonical directories above, and legacy paths should remain described as
 legacy wherever they appear in code, tests, or operations documentation.
@@ -99,3 +107,7 @@ crons, cron runs, and device pairing are imported with canonical destination
 data taking precedence; pairing is restored only when the canonical database
 is unpaired. Legacy `gateway_events` and unrecognized tables remain archive-only
 and are not imported.
+
+Legacy `runs/metadata`, `runs/events`, and `runs/snapshots` files are imported
+idempotently into SQLite on startup. Existing database rows always win, and
+the files remain read-only migration inputs rather than active runtime state.

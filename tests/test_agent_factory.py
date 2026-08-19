@@ -32,6 +32,10 @@ def test_agent_factory_wraps_tools_and_prevents_recursive_subagents() -> None:
     assert "memory" not in worker_tools
     assert "project" in main_tools
     assert "project" not in worker_tools
+    assert "artifact" in main_tools
+    assert "artifact" in worker_tools
+    assert '"artifact": (' in main.instructions
+    assert "Chat artifacts directory:" in main.instructions
     assert '"project": (' in main.instructions
     assert '"project": (' not in worker.instructions
     assert "app_create" not in main_tools
