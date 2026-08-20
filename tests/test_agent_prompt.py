@@ -61,20 +61,20 @@ def test_prompt_routes_deployment_through_artifact_handoff() -> None:
     assert "using only that artifact's exact `artifact_id`" in prompt
     assert "Downstream tools resolve the app and component list" in prompt
     assert "never call `write`, `edit`, shell/process tools" in prompt
-    assert "temporary deterministic stubs" in prompt
-    assert "never claim the app, hostname, or rollback is live" in prompt
+    assert "artifact_verified=true" in prompt
+    assert "provisioning_status=provisioned" in prompt
     assert "DEPLOYMENT STATUS CALL SEQUENCE — MANDATORY" in prompt
-    assert "Call `deployment_status` once for every component deployment ID" in prompt
+    assert "Call `deployment_status` for every component deployment ID" in prompt
     assert (
-        "call `deployment_events` once for every returned component deployment ID"
+        "call `deployment_events` for each deployment"
         in prompt
     )
-    assert "All of these calls are required in stub-test mode" in prompt
+    assert "continue bounded status and event checks" in prompt
     assert (
-        "call `activate_app_route` only after all those status and event calls"
+        "call `activate_app_route` only after the pipeline and every public component are active"
         in prompt
     )
-    assert "then call `app_route_status` once" in prompt
+    assert "then call `app_route_status` with the exact app and route IDs" in prompt
 
 
 def test_prompt_distinguishes_git_cleanliness_from_worktree_cleanup() -> None:
@@ -82,13 +82,7 @@ def test_prompt_distinguishes_git_cleanliness_from_worktree_cleanup() -> None:
 
     assert "A clean canonical Git repository is not the same" in prompt
     assert "cleanup_status=removed" in prompt
-    assert "cleanup_status=stubbed_not_performed" in prompt
-    assert "temporary worktree remains allocated" in prompt
     assert "A top-level `ready` or `active` value never overrides" in prompt
-    assert (
-        "never claim the app, hostname, or rollback is live, uploaded, verified"
-        in prompt
-    )
     assert "does not make a hostname live" in prompt
     assert "`stubbed=false`, `live=true`" in prompt
 

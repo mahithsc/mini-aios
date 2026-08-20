@@ -8,6 +8,7 @@ import pytest
 
 from aios_core.deploy.handoff_artifacts import (
     create_uploaded_artifact_from_handoff,
+    load_artifact_handoff_receipt,
 )
 from aios_core.deploy.worktree_handoff import (
     WorktreeHandoffError,
@@ -99,6 +100,37 @@ def test_codex_path_is_claimed_sealed_and_removed(tmp_path: Path) -> None:
     assert "HISTORY.md" not in cloud.members
     assert not any(member.startswith(".aios/") for member in cloud.members)
     assert (app / "HISTORY.md").is_file()
+
+    reloaded = load_artifact_handoff_receipt(
+        registry=WorktreeRegistry(registry.root, apps_root=apps_root),
+        artifact_id=receipt.artifact_id,
+    )
+    assert reloaded == receipt
+
+
+def test_artifact_receipt_loader_rejects_invalid_or_untrusted_files(
+    tmp_path: Path,
+) -> None:
+    apps_root = tmp_path / "workspace" / "apps"
+    registry = WorktreeRegistry(
+        tmp_path / "workspace" / ".aios" / "worktrees",
+        apps_root=apps_root,
+    )
+    receipts = registry.root.parent / "artifacts" / "receipts"
+    receipts.mkdir(parents=True)
+
+    with pytest.raises(WorktreeHandoffError, match="Invalid artifact_id"):
+        load_artifact_handoff_receipt(registry=registry, artifact_id="../secret")
+
+    (receipts / "art_corrupt.json").write_text("not-json")
+    with pytest.raises(WorktreeHandoffError, match="Invalid artifact receipt"):
+        load_artifact_handoff_receipt(registry=registry, artifact_id="art_corrupt")
+
+    target = receipts / "target.json"
+    target.write_text("{}")
+    (receipts / "art_link.json").symlink_to(target)
+    with pytest.raises(WorktreeHandoffError, match="Could not open artifact receipt"):
+        load_artifact_handoff_receipt(registry=registry, artifact_id="art_link")
 
 
 def test_app_lease_is_exclusive_and_durable_across_registry_instances(

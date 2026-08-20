@@ -65,12 +65,26 @@ class CloudDeployClient:
                 "Device is not paired with aios-cloud; pair the device before deploying"
             )
 
-    def create_app(self, name: str) -> dict[str, Any]:
+    def create_app(
+        self,
+        name: str,
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
         """Reserve an app identity before Codex creates its deploy manifest."""
         normalized = name.strip()
         if not normalized:
             raise CloudDeployError("App name cannot be empty")
-        return self._request_json("POST", "/v1/apps", json={"name": normalized})
+        return self._request_json(
+            "POST",
+            "/v1/apps",
+            headers=(
+                {"Idempotency-Key": idempotency_key}
+                if idempotency_key is not None
+                else None
+            ),
+            json={"name": normalized},
+        )
 
     def list_apps(self) -> dict[str, Any]:
         """List cloud app identities owned by the authenticated user."""
@@ -83,6 +97,34 @@ class CloudDeployClient:
     def check_app_status(self, app_id: str) -> dict[str, Any]:
         """Get the app's component pipelines and artifact upload state."""
         return self._request_json("GET", f"/v1/apps/{app_id}/status")
+
+    def prepare_app_route(self, *, app_id: str, artifact_id: str) -> dict[str, Any]:
+        """Provision or refresh the stable public route for an artifact."""
+        return self._request_json(
+            "POST",
+            f"/v1/apps/{app_id}/route/prepare",
+            json={"artifact_id": artifact_id},
+        )
+
+    def activate_app_route(
+        self,
+        *,
+        app_id: str,
+        route_id: str,
+        pipeline_id: str,
+    ) -> dict[str, Any]:
+        """Atomically point an app route at a completed deployment pipeline."""
+        return self._request_json(
+            "POST",
+            f"/v1/apps/{app_id}/routes/{route_id}/activate",
+            json={"pipeline_id": pipeline_id},
+        )
+
+    def get_app_route(self, *, app_id: str, route_id: str) -> dict[str, Any]:
+        return self._request_json(
+            "GET",
+            f"/v1/apps/{app_id}/routes/{route_id}",
+        )
 
     def delete_app(self, app_id: str) -> dict[str, Any]:
         return self._request_json("DELETE", f"/v1/apps/{app_id}")

@@ -76,6 +76,74 @@ def test_cloud_client_enqueues_tiered_pipeline() -> None:
     assert result["id"] == "pip_cloud123"
 
 
+def test_cloud_client_prepares_activates_and_reads_app_route() -> None:
+    requests: list[tuple[str, str, dict | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content) if request.content else None
+        requests.append((request.method, request.url.path, payload))
+        assert request.headers["authorization"] == "Bearer device-token"
+        return httpx.Response(
+            200,
+            json={
+                "id": "route_cloud123",
+                "app_id": "app_cloud123",
+                "artifact_id": "art_cloud123",
+                "hostname": "a-test.trywink.io",
+                "canonical_url": "https://a-test.trywink.io",
+                "api_base_url": None,
+                "routing_mode": "frontend_only",
+                "routes": {"/*": "frontend"},
+                "cors_allowed_origins": [],
+                "state": "ready",
+                "provisioning_status": "provisioned",
+                "activation_status": "inactive",
+                "active_pipeline_id": None,
+                "frontend_url": None,
+                "server_url": None,
+                "live": False,
+                "version": 1,
+                "created_at": 1,
+                "updated_at": 1,
+            },
+        )
+
+    client = CloudDeployClient(
+        base_url="https://cloud.example",
+        device_token="device-token",
+        client_factory=lambda: httpx.Client(
+            transport=httpx.MockTransport(handler)
+        ),
+    )
+    client.prepare_app_route(
+        app_id="app_cloud123", artifact_id="art_cloud123"
+    )
+    client.activate_app_route(
+        app_id="app_cloud123",
+        route_id="route_cloud123",
+        pipeline_id="pip_cloud123",
+    )
+    client.get_app_route(app_id="app_cloud123", route_id="route_cloud123")
+
+    assert requests == [
+        (
+            "POST",
+            "/v1/apps/app_cloud123/route/prepare",
+            {"artifact_id": "art_cloud123"},
+        ),
+        (
+            "POST",
+            "/v1/apps/app_cloud123/routes/route_cloud123/activate",
+            {"pipeline_id": "pip_cloud123"},
+        ),
+        (
+            "GET",
+            "/v1/apps/app_cloud123/routes/route_cloud123",
+            None,
+        ),
+    ]
+
+
 def _write_app(root: Path) -> None:
     (root / "server").mkdir()
     (root / "server" / "Dockerfile").write_text("FROM python:3.12-slim\n")
@@ -98,6 +166,7 @@ def test_cloud_client_creates_and_lists_apps() -> None:
         requests.append((request.method, request.url.path))
         assert request.headers["authorization"] == "Bearer device-token"
         if request.method == "POST":
+            assert request.headers["idempotency-key"] == "create-key"
             assert json.loads(request.content) == {"name": "Example App"}
             return httpx.Response(
                 201, json={"id": "app_cloud123", "name": "Example App"}
@@ -148,7 +217,9 @@ def test_cloud_client_creates_and_lists_apps() -> None:
         client_factory=lambda: httpx.Client(transport=transport),
     )
 
-    assert client.create_app(" Example App ")["id"] == "app_cloud123"
+    assert client.create_app(
+        " Example App ", idempotency_key="create-key"
+    )["id"] == "app_cloud123"
     assert client.list_apps()["apps"] == [{"id": "app_cloud123"}]
     assert client.get_app_info("app_cloud123")["components"]["server"]["url"] == (
         "https://server.example.test"

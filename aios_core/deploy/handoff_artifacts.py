@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,10 @@ class ArtifactHandoffReceipt(BaseModel):
     verification_status: str
     components: list[DeploymentComponent]
     cleanup_status: WorktreeStatus
+
+
+_ARTIFACT_ID = re.compile(r"^art_[A-Za-z0-9]+$")
+_MAX_RECEIPT_BYTES = 1024 * 1024
 
 
 def create_uploaded_artifact_from_handoff(
@@ -184,7 +189,7 @@ def create_uploaded_artifact_from_handoff(
 def _persist_receipt(
     registry: WorktreeRegistry, receipt: ArtifactHandoffReceipt
 ) -> None:
-    directory = registry.root.parent / "artifacts" / "receipts"
+    directory = _receipt_directory(registry)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = directory / f"{receipt.artifact_id}.json"
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
@@ -199,3 +204,69 @@ def _persist_receipt(
         os.chmod(path, 0o600)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def load_artifact_handoff_receipt(
+    *,
+    registry: WorktreeRegistry,
+    artifact_id: str,
+) -> ArtifactHandoffReceipt:
+    """Load one durable artifact receipt without following filesystem links."""
+
+    if not isinstance(artifact_id, str) or not _ARTIFACT_ID.fullmatch(artifact_id):
+        raise WorktreeHandoffError("Invalid artifact_id")
+    directory = _receipt_directory(registry)
+    path = directory / f"{artifact_id}.json"
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError as exc:
+        raise WorktreeHandoffError(
+            f"Unknown uploaded artifact: {artifact_id}"
+        ) from exc
+    except OSError as exc:
+        raise WorktreeHandoffError(
+            f"Could not open artifact receipt {artifact_id}: {exc}"
+        ) from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise WorktreeHandoffError("Artifact receipt must be a regular file")
+        if metadata.st_size <= 0 or metadata.st_size > _MAX_RECEIPT_BYTES:
+            raise WorktreeHandoffError("Artifact receipt has an invalid size")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = -1
+            payload = handle.read(_MAX_RECEIPT_BYTES + 1)
+    except (OSError, UnicodeError) as exc:
+        raise WorktreeHandoffError(
+            f"Could not read artifact receipt {artifact_id}: {exc}"
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    try:
+        receipt = ArtifactHandoffReceipt.model_validate_json(payload)
+    except ValueError as exc:
+        raise WorktreeHandoffError(
+            f"Invalid artifact receipt {artifact_id}: {exc}"
+        ) from exc
+    if receipt.artifact_id != artifact_id:
+        raise WorktreeHandoffError(
+            "Artifact receipt identity does not match the requested artifact"
+        )
+    if receipt.cleanup_status != WorktreeStatus.REMOVED:
+        raise WorktreeHandoffError(
+            "Artifact receipt does not prove disposable worktree cleanup"
+        )
+    return receipt
+
+
+def _receipt_directory(registry: WorktreeRegistry) -> Path:
+    directory = registry.root.parent / "artifacts" / "receipts"
+    resolved = directory.resolve()
+    expected_parent = (registry.root.parent / "artifacts").resolve()
+    if resolved.parent != expected_parent:
+        raise WorktreeHandoffError("Artifact receipt directory escaped its root")
+    return resolved

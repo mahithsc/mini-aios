@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from aios_core.deploy import agent_tools
+from aios_core.deploy.handoff_artifacts import ArtifactHandoffReceipt
 from aios_core.deploy.models import Project, Spec
 from aios_core.deploy.store import ProjectStore
 from aios_core.deploy.supervisor import Supervisor, docker_available
@@ -19,11 +20,6 @@ def temp_store(tmp_path, monkeypatch):
     store = ProjectStore(path=tmp_path / "projects.json")
     monkeypatch.setattr(agent_tools, "_store", lambda: store)
     return store, tmp_path
-
-
-@pytest.fixture(autouse=True)
-def clear_stub_deployment_receipts():
-    agent_tools._receipts().clear()
 
 
 def test_unknown_app_errors(temp_store):
@@ -60,8 +56,16 @@ def test_apps_list_uses_local_workspace_inventory(monkeypatch):
     ]
 
 
-def test_app_create_uses_local_orchestration_stub(monkeypatch):
+def test_app_create_reserves_cloud_identity_and_creates_workspace(monkeypatch):
     monkeypatch.setattr(agent_tools, "get_current_chat_id", lambda: "chat_123")
+
+    class FakeCloud:
+        def create_app(self, name, *, idempotency_key):
+            assert name == "Example"
+            assert idempotency_key.startswith("main-agent-app:")
+            return {"id": "app_cloud123", "name": name, "status": "active"}
+
+    monkeypatch.setattr(agent_tools, "_cloud", FakeCloud)
     monkeypatch.setattr(
         agent_tools,
         "create_app_workspace",
@@ -74,21 +78,20 @@ def test_app_create_uses_local_orchestration_stub(monkeypatch):
     )
     result = agent_tools.app_create(" Example ")
 
-    assert result["id"].startswith("app_stub")
-    assert result["app_id"] == result["id"]
+    assert result["id"] == "app_cloud123"
+    assert result["app_id"] == "app_cloud123"
     assert result["name"] == "Example"
     assert result["found"] is True
     assert result["workspace_path"].endswith(result["app_id"])
     assert result["status"] == "ready"
-    assert result["stubbed"] is True
-    assert result["simulation"] == "orchestration_only"
+    assert result["cloud_app"]["status"] == "active"
+    assert "stubbed" not in result
 
 
-def test_app_create_stub_rejects_empty_name():
+def test_app_create_rejects_empty_name():
     result = agent_tools.app_create("   ")
 
     assert result["status"] == "error"
-    assert result["stubbed"] is True
     assert result["error"] == "name must not be empty"
 
 
@@ -179,7 +182,7 @@ def _stub_handoff(
     app_id: str = "app_cloud123",
     source_commit: str = "a" * 40,
     status=None,
-) -> None:
+) -> SimpleNamespace:
     record = SimpleNamespace(
         app_id=app_id,
         path=str(workspace),
@@ -193,13 +196,132 @@ def _stub_handoff(
             return record
 
     monkeypatch.setattr(agent_tools, "_worktrees", Registry)
+    return record
 
 
 def _create_stub_artifact(tmp_path, monkeypatch, components):
     workspace = tmp_path / "worktree"
     _write_deployment_manifest(workspace, components=tuple(components))
-    _stub_handoff(monkeypatch, workspace)
+    record = _stub_handoff(monkeypatch, workspace)
+
+    _stub_uploaded_artifact(monkeypatch, record, components)
     return agent_tools.create_app_artifact("handoff_123")
+
+
+def _stub_uploaded_artifact(monkeypatch, record, components):
+    class FakeCloud:
+        def prepare_app_route(self, *, app_id, artifact_id):
+            return {
+                "id": f"route_{artifact_id}",
+                "app_id": app_id,
+                "artifact_id": artifact_id,
+                "hostname": "a-test.trywink.io",
+                "canonical_url": "https://a-test.trywink.io",
+                "api_base_url": (
+                    "https://a-test.trywink.io/api"
+                    if "server" in components and "frontend" in components
+                    else "https://a-test.trywink.io"
+                    if "server" in components
+                    else None
+                ),
+                "routing_mode": (
+                    "frontend_with_api_prefix"
+                    if "server" in components and "frontend" in components
+                    else "server_only"
+                    if "server" in components
+                    else "frontend_only"
+                ),
+                "routes": (
+                    {"/*": "frontend", "/api/*": "server"}
+                    if "server" in components and "frontend" in components
+                    else {"/*": "server"}
+                    if "server" in components
+                    else {"/*": "frontend"}
+                ),
+                "cors_allowed_origins": (
+                    ["https://a-test.trywink.io"]
+                    if "server" in components and "frontend" in components
+                    else []
+                ),
+                "state": "ready",
+                "provisioning_status": "provisioned",
+                "activation_status": "inactive",
+                "live": False,
+            }
+
+        def get_app_route(self, *, app_id, route_id):
+            prefix = "route_"
+            if not route_id.startswith(prefix):
+                raise agent_tools.CloudDeployError("route not found")
+            return {
+                "id": route_id,
+                "app_id": app_id,
+                "artifact_id": route_id[len(prefix) :],
+                "state": "ready",
+                "provisioning_status": "provisioned",
+                "live": False,
+            }
+
+        def enqueue_pipeline(
+            self, *, app_id, artifact_id, components, idempotency_key
+        ):
+            assert idempotency_key.startswith("main-agent:")
+            return {
+                "id": f"pip_{artifact_id[4:]}",
+                "app_id": app_id,
+                "artifact_id": artifact_id,
+                "requested_components": components,
+                "status": "running",
+                "deployments": [
+                    {
+                        "id": f"dep_{component}",
+                        "component": component,
+                        "status": "queued" if index == 0 else "blocked",
+                    }
+                    for index, component in enumerate(components)
+                ],
+            }
+
+        def activate_app_route(self, *, app_id, route_id, pipeline_id):
+            return {
+                "id": route_id,
+                "app_id": app_id,
+                "state": "active",
+                "activation_status": "active",
+                "active_pipeline_id": pipeline_id,
+                "live": True,
+            }
+
+    monkeypatch.setattr(agent_tools, "_cloud", FakeCloud)
+
+    receipt = ArtifactHandoffReceipt(
+        artifact_id=f"art_{record.source_commit[:12]}",
+        app_id=record.app_id,
+        source_commit=record.source_commit,
+        source_tree="c" * 40,
+        worktree_id="wt_1234567890abcdef",
+        handoff_id="handoff_123",
+        inventory_sha256="d" * 64,
+        archive_sha256="e" * 64,
+        manifest_sha256="f" * 64,
+        archive_size=100,
+        file_count=3,
+        total_bytes=80,
+        verification_status="source_identity_validated",
+        components=list(components),
+        cleanup_status=agent_tools.WorktreeStatus.REMOVED,
+    )
+
+    def upload(*, registry, cloud, handoff_id):
+        assert handoff_id == "handoff_123"
+        return receipt
+
+    def load(*, registry, artifact_id):
+        assert artifact_id == receipt.artifact_id
+        return receipt
+
+    monkeypatch.setattr(agent_tools, "create_uploaded_artifact_from_handoff", upload)
+    monkeypatch.setattr(agent_tools, "load_artifact_handoff_receipt", load)
 
 
 @pytest.mark.parametrize(
@@ -218,21 +340,21 @@ def test_create_app_artifact_derives_components_from_manifest(
 ):
     workspace = tmp_path / "worktree"
     _write_deployment_manifest(workspace, components=components)
-    _stub_handoff(monkeypatch, workspace)
+    record = _stub_handoff(monkeypatch, workspace)
+    _stub_uploaded_artifact(monkeypatch, record, components)
 
     result = agent_tools.create_app_artifact("handoff_123")
 
     assert result["status"] == "ready"
-    assert result["artifact_id"].startswith("art_stub")
+    assert result["artifact_id"].startswith("art_")
     assert result["components"] == expected
-    assert result["stubbed"] is True
-    assert result["cleanup_status"] == "stubbed_not_performed"
-    assert result["artifact_created"] is False
-    assert result["artifact_uploaded"] is False
-    assert result["artifact_verified"] is False
-    assert result["worktree_removed"] is False
-    assert result["worktree_path"] == str(workspace)
-    assert "temporary Codex worktree remains allocated" in result["required_disclosure"]
+    assert result["stubbed"] is False
+    assert result["cleanup_status"] == "removed"
+    assert result["artifact_created"] is True
+    assert result["artifact_uploaded"] is True
+    assert result["artifact_verified"] is True
+    assert result["worktree_removed"] is True
+    assert result["workspace_path"] == str(workspace)
 
 
 def test_create_app_artifact_rejects_invalid_manifest(tmp_path, monkeypatch):
@@ -247,8 +369,8 @@ def test_create_app_artifact_rejects_invalid_manifest(tmp_path, monkeypatch):
     assert result["error"] == "Missing aios.deploy.yaml"
     assert "Start a new Codex correction task" in result["agent_instruction"]
     assert result["retryable"] is False
-    assert result["verification_status"] == "stubbed_manifest_rejected"
-    assert result["cleanup_status"] == "stubbed_not_performed"
+    assert result["verification_status"] == "manifest_rejected"
+    assert result["cleanup_status"] == "not_completed"
 
 
 def test_create_app_artifact_rejects_app_id_mismatch(tmp_path, monkeypatch):
@@ -266,7 +388,7 @@ def test_create_app_artifact_rejects_app_id_mismatch(tmp_path, monkeypatch):
     assert result["error_code"] == "artifact_manifest_rejected"
     assert "expected app_cloud123, found app_different" in result["error"]
     assert "Do not edit the app manifest directly" in result["agent_instruction"]
-    assert result["verification_status"] == "stubbed_manifest_rejected"
+    assert result["verification_status"] == "manifest_rejected"
 
 
 def test_create_app_artifact_waits_for_codex_handoff(tmp_path, monkeypatch):
@@ -286,9 +408,13 @@ def test_create_app_artifact_waits_for_codex_handoff(tmp_path, monkeypatch):
     assert "Wait for the Codex completion continuation" in result["agent_instruction"]
     assert result["retryable"] is True
 
-    predictable_but_unissued_id = agent_tools._stub_id(
-        "art", "handoff_123", "app_cloud123", "a" * 40
+    def missing_receipt(*, registry, artifact_id):
+        raise agent_tools.WorktreeHandoffError("unknown artifact")
+
+    monkeypatch.setattr(
+        agent_tools, "load_artifact_handoff_receipt", missing_receipt
     )
+    predictable_but_unissued_id = "art_predictablebutunissued"
     deployment = agent_tools.deploy_app_artifact(predictable_but_unissued_id)
     assert deployment["status"] == "error"
     assert deployment["error_code"] == "artifact_not_ready"
@@ -300,7 +426,8 @@ def test_create_app_artifact_derives_identity_from_ready_handoff(
 ):
     workspace = tmp_path / "worktree"
     _write_deployment_manifest(workspace, components=("server",))
-    _stub_handoff(monkeypatch, workspace)
+    record = _stub_handoff(monkeypatch, workspace)
+    _stub_uploaded_artifact(monkeypatch, record, ("server",))
 
     result = agent_tools.create_app_artifact("handoff_123")
 
@@ -338,8 +465,8 @@ def test_prepare_app_route_returns_component_specific_contract(
 
     assert result["status"] == "ready"
     assert result["artifact_id"] == artifact["artifact_id"]
-    assert result["route_id"].startswith("route_stub")
-    assert result["hostname"].endswith(".apps.winkapiserver.org")
+    assert result["route_id"].startswith("route_art_")
+    assert result["hostname"].endswith(".trywink.io")
     assert result["canonical_url"] == f"https://{result['hostname']}"
     assert result["routing_mode"] == routing_mode
     assert result["routes"] == routes
@@ -349,8 +476,9 @@ def test_prepare_app_route_returns_component_specific_contract(
     assert result["api_base_url"] == (
         None if api_suffix is None else f"{result['canonical_url']}{api_suffix}"
     )
-    assert result["provisioning_status"] == "stubbed_not_performed"
+    assert result["provisioning_status"] == "provisioned"
     assert result["live"] is False
+    assert result["stubbed"] is False
 
 
 def test_prepare_app_route_rejects_database_only_artifact(tmp_path, monkeypatch):
@@ -359,12 +487,10 @@ def test_prepare_app_route_rejects_database_only_artifact(tmp_path, monkeypatch)
 
     assert result["status"] == "error"
     assert "database-only" in result["error"]
-    assert result["stubbed"] is True
-    assert result["deployment_performed"] is False
-    assert result["route_live"] is False
+    assert "route_id" not in result
 
 
-def test_deploy_app_artifact_is_an_orchestration_stub(tmp_path, monkeypatch):
+def test_deploy_app_artifact_enqueues_real_cloud_pipeline(tmp_path, monkeypatch):
     artifact = _create_stub_artifact(tmp_path, monkeypatch, ["frontend", "database"])
     route = agent_tools.prepare_app_route(artifact["artifact_id"])
     result = agent_tools.deploy_app_artifact(
@@ -375,9 +501,9 @@ def test_deploy_app_artifact_is_an_orchestration_stub(tmp_path, monkeypatch):
     assert result["artifact_id"] == artifact["artifact_id"]
     assert result["route_id"] == route["route_id"]
     assert result["components"] == ["database", "frontend"]
-    assert result["status"] == "active"
-    assert result["pipeline_id"].startswith("pipe_stub")
-    assert result["stubbed"] is True
+    assert result["status"] == "running"
+    assert result["pipeline_id"].startswith("pip_")
+    assert result["stubbed"] is False
     assert [item["component"] for item in result["deployments"]] == [
         "database",
         "frontend",
@@ -399,7 +525,7 @@ def test_deploy_app_artifact_allows_database_only_without_route(tmp_path, monkey
     artifact = _create_stub_artifact(tmp_path, monkeypatch, ["database"])
     result = agent_tools.deploy_app_artifact(artifact["artifact_id"])
 
-    assert result["status"] == "active"
+    assert result["status"] == "running"
     assert result["route_id"] is None
     assert result["components"] == ["database"]
 
@@ -421,7 +547,10 @@ def test_route_from_different_artifact_cannot_be_used(tmp_path, monkeypatch):
 
     second_workspace = tmp_path / "second-worktree"
     _write_deployment_manifest(second_workspace, components=("frontend",))
-    _stub_handoff(monkeypatch, second_workspace, source_commit="b" * 40)
+    second_record = _stub_handoff(
+        monkeypatch, second_workspace, source_commit="b" * 40
+    )
+    _stub_uploaded_artifact(monkeypatch, second_record, ("frontend",))
     second = agent_tools.create_app_artifact("handoff_123")
     result = agent_tools.deploy_app_artifact(second["artifact_id"], route["route_id"])
 
@@ -430,7 +559,7 @@ def test_route_from_different_artifact_cannot_be_used(tmp_path, monkeypatch):
     assert "different artifact" in result["error"]
 
 
-def test_route_activation_and_status_are_explicitly_non_live_stubs(
+def test_route_activation_and_status_use_cloud_state(
     tmp_path, monkeypatch
 ):
     artifact = _create_stub_artifact(tmp_path, monkeypatch, ["frontend"])
@@ -447,51 +576,57 @@ def test_route_activation_and_status_are_explicitly_non_live_stubs(
     status = agent_tools.app_route_status("app_cloud123", route["route_id"])
 
     assert activation["status"] == "active"
-    assert activation["activation_status"] == "stubbed_not_performed"
-    assert activation["live"] is False
-    assert status["status"] == "active"
-    assert status["provisioning_status"] == "stubbed_not_performed"
+    assert activation["activation_status"] == "active"
+    assert activation["live"] is True
+    assert activation["stubbed"] is False
+    assert status["status"] == "ready"
+    assert status["provisioning_status"] == "provisioned"
     assert status["live"] is False
-    assert status["artifact_verified"] is False
-    assert status["worktree_removed"] is False
-    assert status["required_disclosure"]
+    assert status["stubbed"] is False
 
 
-def test_main_agent_deployment_state_and_rollback_are_stubs(tmp_path, monkeypatch):
-    artifact = _create_stub_artifact(tmp_path, monkeypatch, ["frontend"])
-    route = agent_tools.prepare_app_route(artifact["artifact_id"])
-    pipeline = agent_tools.deploy_app_artifact(
-        artifact["artifact_id"], route["route_id"]
-    )
-    deployment_id = pipeline["deployments"][0]["deployment_id"]
+def test_main_agent_deployment_reads_and_rollback_use_cloud(monkeypatch):
+    calls = []
 
-    assert agent_tools.app_deployment_status("app_cloud123")["phase"] == "active"
-    assert (
-        agent_tools.deployment_pipeline_status(pipeline["pipeline_id"])["status"]
-        == "active"
+    class FakeCloud:
+        def check_app_status(self, app_id):
+            calls.append(("app", app_id))
+            return {"app_id": app_id, "overall_status": "in_process"}
+
+        def get_deployment_pipeline(self, pipeline_id):
+            calls.append(("pipeline", pipeline_id))
+            return {"id": pipeline_id, "status": "running"}
+
+        def get_deployment(self, deployment_id):
+            calls.append(("deployment", deployment_id))
+            return {"id": deployment_id, "status": "building", "url": None}
+
+        def get_deployment_events(self, deployment_id, *, after):
+            calls.append(("events", deployment_id, after))
+            return {"events": [], "cursor": after}
+
+        def rollback_deployment(self, deployment_id):
+            calls.append(("rollback", deployment_id))
+            return {"id": "dep_rollback", "status": "queued"}
+
+    monkeypatch.setattr(agent_tools, "_cloud", FakeCloud)
+
+    assert agent_tools.app_deployment_status("app_cloud123")["overall_status"] == (
+        "in_process"
     )
-    assert agent_tools.deployment_status(deployment_id)["status"] == "active"
-    assert agent_tools.deployment_status(deployment_id)["url"] is None
-    assert agent_tools.deployment_events(deployment_id)["events"][0]["cursor"] == 0
-    assert agent_tools.deployment_events(deployment_id, after=4)["events"] == []
-    assert agent_tools.rollback_app_artifact(deployment_id)["status"] == "active"
-    assert all(
-        result["stubbed"] is True
-        for result in (
-            agent_tools.app_deployment_status("app_cloud123"),
-            agent_tools.deployment_pipeline_status(pipeline["pipeline_id"]),
-            agent_tools.deployment_status(deployment_id),
-            agent_tools.deployment_events(deployment_id),
-            agent_tools.activate_app_route(
-                "app_cloud123", route["route_id"], pipeline["pipeline_id"]
-            ),
-            agent_tools.app_route_status(
-                "app_cloud123",
-                route["route_id"],
-            ),
-            agent_tools.rollback_app_artifact(deployment_id),
-        )
+    assert agent_tools.deployment_pipeline_status("pip_cloud123")["status"] == (
+        "running"
     )
+    assert agent_tools.deployment_status("dep_cloud123")["status"] == "building"
+    assert agent_tools.deployment_events("dep_cloud123", after=4)["cursor"] == 4
+    assert agent_tools.rollback_app_artifact("dep_cloud123")["status"] == "queued"
+    assert calls == [
+        ("app", "app_cloud123"),
+        ("pipeline", "pip_cloud123"),
+        ("deployment", "dep_cloud123"),
+        ("events", "dep_cloud123", 4),
+        ("rollback", "dep_cloud123"),
+    ]
 
 
 def _write_app(dir_path: Path):

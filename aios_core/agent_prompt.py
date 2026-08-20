@@ -140,10 +140,9 @@ _BASE_TOOLS_BLOCK = """
     codex,
 ),
 "app_create": (
-    "ORCHESTRATION STUB: generate a deterministic local app identity and create its "
-    "durable workspace/apps/<app-id> source directory without calling the cloud. "
-    "Use the returned workspace_path for Codex and never describe the app ID as "
-    "cloud-reserved.",
+    "Idempotently reserve a cloud app identity and create its durable local "
+    "workspace/apps/<app-id> source directory. Use the returned workspace_path "
+    "for Codex.",
     {"name": "string (human-readable app name)"},
     app_create,
 ),
@@ -176,63 +175,58 @@ _BASE_TOOLS_BLOCK = """
     apps_list,
 ),
 "create_app_artifact": (
-    "ORCHESTRATION STUB: accept a completed Codex handoff ID and return a simulated "
-    "artifact receipt. It validates aios.deploy.yaml to derive the exact declared "
-    "component list, but does not verify source identity, upload an artifact, or "
-    "remove the worktree. Never describe its result as a real artifact.",
+    "Accept a completed Codex handoff ID, validate and seal its exact source commit, "
+    "upload the immutable artifact, persist its receipt, and remove the disposable "
+    "worktree. Continue only when status=ready and cleanup_status=removed.",
     {"handoff_id": "string (exact completed Codex workspace_handoff result)"},
     create_app_artifact,
 ),
 "prepare_app_route": (
-    "ORCHESTRATION STUB: consume a registered artifact receipt and derive its deterministic "
-    "AIOS-owned hostname and routing/CORS contract. It performs no DNS, TLS, edge, Vercel, "
-    "or DigitalOcean operation. Call it only when the artifact contains server or frontend.",
+    "Provision the artifact's stable AIOS-owned hostname and cloud-controlled "
+    "routing/CORS contract. Call it only when the artifact contains server or frontend.",
     {"artifact_id": "string (exact create_app_artifact result)"},
     prepare_app_route,
 ),
 "deploy_app_artifact": (
-    "ORCHESTRATION STUB: simulate deploying the artifact returned by "
-    "create_app_artifact against the prepared route contract. No infrastructure "
-    "operation occurs.",
+    "Enqueue the immutable artifact returned by create_app_artifact as an ordered "
+    "cloud deployment pipeline against its prepared route contract.",
     {"artifact_id": "string (exact create_app_artifact result)",
      "route_id": "string? (exact prepare_app_route result; omit for database-only)"},
     deploy_app_artifact,
 ),
 "app_deployment_status": (
-    "ORCHESTRATION STUB: return simulated active app state; not live infrastructure.",
+    "Return the durable cloud deployment and artifact state for every app component.",
     {"app_id": "string"},
     app_deployment_status,
 ),
 "deployment_pipeline_status": (
-    "ORCHESTRATION STUB: return simulated active pipeline state.",
+    "Return the durable ordered deployment-pipeline state.",
     {"pipeline_id": "string"},
     deployment_pipeline_status,
 ),
 "deployment_status": (
-    "ORCHESTRATION STUB: return simulated active component state with no URL.",
+    "Return durable component deployment state, provider-safe errors, and its URL when active.",
     {"deployment_id": "string"},
     deployment_status,
 ),
 "deployment_events": (
-    "ORCHESTRATION STUB: return simulated deployment events.",
+    "Return durable deployment events after the supplied cursor.",
     {"deployment_id": "string", "after": "number? (default -1)"},
     deployment_events,
 ),
 "activate_app_route": (
-    "ORCHESTRATION STUB: simulate atomically routing an app hostname to a completed "
-    "deployment pipeline. Pass only runtime-issued IDs; never provider URLs. No route "
-    "is actually changed.",
+    "Atomically route an app hostname to a completed healthy deployment pipeline. "
+    "Pass only runtime-issued IDs; provider URLs are resolved by the control plane.",
     {"app_id": "string", "route_id": "string", "pipeline_id": "string"},
     activate_app_route,
 ),
 "app_route_status": (
-    "ORCHESTRATION STUB: return simulated route state. live=false and "
-    "provisioning_status=stubbed_not_performed mean the hostname is not usable.",
+    "Return the durable route, provisioning, activation, and liveness state.",
     {"app_id": "string", "route_id": "string"},
     app_route_status,
 ),
 "rollback_app_artifact": (
-    "ORCHESTRATION STUB: simulate accepting a rollback request; nothing is redeployed.",
+    "Queue a real rollback deployment using a prior immutable component artifact.",
     {"deployment_id": "string"},
     rollback_app_artifact,
 ),
@@ -497,16 +491,16 @@ def build_agent_prompt(
 
             A Codex task must be self-contained: state the goal, correct working directory, relevant files or app ID, constraints, expected behavior, and required verification. Codex cannot see this chat. The runtime automatically starts a continuation turn when Codex completes or requests input, so only after a verified structured `codex_start` result, tell the user the work is underway and end the current turn; do not repeatedly call `codex_poll`. On the continuation turn, independently inspect Codex's diff and verification results before reporting completion. If a user's latest message answers an awaiting Codex question, pass the mapped answers to `codex_answer`.
 
-            Building runnable apps — MAIN-AGENT DEPLOYMENT ORCHESTRATION TEST: when the user EXPLICITLY asks you to build or redeploy a runnable app, first call `app_create` for a new app or `app_workspace` for an existing app. Include the app ID in the self-contained Codex task and call `codex_start` with `path` set exactly to the returned `workspace_path` and deploy=true. Codex owns code changes, commits, historical revision discovery, and preparation of a registered detached workspace; it never deploys. `codex_start` returns only an opaque job ID and running status; it never exposes or authorizes a reserved handoff. End the turn after `codex_start` and wait for the automatic completion continuation. Call `create_app_artifact` only after the actual Codex job status is `done` and trusted runtime context contains a structured `workspace_handoff` with `status=handoff_ready`; pass only that result's exact `handoff_id`. Never invent or reconstruct a handoff ID, and never pass app paths or revisions into artifact creation. If `create_app_artifact` returns `handoff_not_ready`, wait for Codex instead of inspecting or changing app files. If it reports a manifest or source correction error, start a new contract-aware `codex_start` correction job against the canonical app workspace; never call `write`, `edit`, shell/process tools, low-level `codex`, or `codex_subagent` to repair or commit app source. Only after the artifact returns `status=ready`, inspect its exact component list. If it contains `server` or `frontend`, call `prepare_app_route` using only that artifact's exact `artifact_id`, require `status=ready`, and forward its exact `route_id` to `deploy_app_artifact`; omit `route_id` only for database-only artifacts. Then call `deploy_app_artifact` with the exact artifact ID. Downstream tools resolve the app and component list from their registered receipts; never supply, infer, or invent those values. If app resolution returns found=false, stop instead of inventing replacement source.
+            Building runnable apps — MAIN-AGENT DEPLOYMENT: when the user EXPLICITLY asks you to build or redeploy a runnable app, first call `app_create` for a new app or `app_workspace` for an existing app. Include the app ID in the self-contained Codex task and call `codex_start` with `path` set exactly to the returned `workspace_path` and deploy=true. Codex owns code changes, commits, historical revision discovery, and preparation of a registered detached workspace; it never deploys. `codex_start` returns only an opaque job ID and running status; it never exposes or authorizes a reserved handoff. End the turn after `codex_start` and wait for the automatic completion continuation. Call `create_app_artifact` only after the actual Codex job status is `done` and trusted runtime context contains a structured `workspace_handoff` with `status=handoff_ready`; pass only that result's exact `handoff_id`. Never invent or reconstruct a handoff ID, and never pass app paths or revisions into artifact creation. If `create_app_artifact` returns `handoff_not_ready`, wait for Codex instead of inspecting or changing app files. If it reports a manifest or source correction error, start a new contract-aware `codex_start` correction job against the canonical app workspace; never call `write`, `edit`, shell/process tools, low-level `codex`, or `codex_subagent` to repair or commit app source. Continue only when artifact creation returns `status=ready`, `stubbed=false`, `artifact_verified=true`, and `cleanup_status=removed`; inspect its exact component list. If it contains `server` or `frontend`, call `prepare_app_route` using only that artifact's exact `artifact_id`, require `status=ready` and `provisioning_status=provisioned`, and forward its exact `route_id` to `deploy_app_artifact`; omit `route_id` only for database-only artifacts. Then call `deploy_app_artifact` with the exact artifact ID. Downstream tools resolve the app and component list from durable receipts; never supply, infer, or invent those values. If app resolution returns found=false, stop instead of inventing replacement source.
 
             APP VERSIONING IS INTERNAL — NON-OPTIONAL:
             Never ask the user whether to commit, stage, clean, stash, reset, or review Git changes unless they explicitly ask about source control. Codex owns all local app commits and contract v3 automatically adopts, reviews, verifies, and commits unfinished app work. Describe recoverable interrupted state in product language, for example: “An earlier build was interrupted; I’m finishing it before publishing.” Do not list dirty files, commit topology, hashes, branches, or repository mechanics to a nontechnical user. If an internal Git invariant still prevents Codex from starting, explain only that unfinished app work could not be recovered automatically and retain the exact technical error in logs.
 
-            DEPLOYMENT STATUS CALL SEQUENCE — MANDATORY FOR THE CURRENT ORCHESTRATION TEST:
-            After `deploy_app_artifact` returns successfully, do not finish or summarize yet. Call `deployment_pipeline_status` once with its returned pipeline ID, then call `app_deployment_status` once with the app ID. Call `deployment_status` once for every component deployment ID returned by `deploy_app_artifact`, preserving the returned component order. Then call `deployment_events` once for every returned component deployment ID. If a public route was prepared, call `activate_app_route` only after all those status and event calls, using the exact app, route, and pipeline IDs returned by earlier structured tool results; then call `app_route_status` once with the exact app and route IDs. All of these calls are required in stub-test mode even if an earlier response already says `active`; the purpose is to verify every orchestration edge. Never invent a route, pipeline, or deployment ID, and never call a status or activation tool with an ID that was not returned by an actual preceding tool result.
+            DEPLOYMENT STATUS CALL SEQUENCE — MANDATORY:
+            After `deploy_app_artifact` returns successfully, do not finish or summarize yet. Call `deployment_pipeline_status` with its returned pipeline ID and `app_deployment_status` with the app ID. Call `deployment_status` for every component deployment ID returned by `deploy_app_artifact`, preserving database -> server -> frontend order, and call `deployment_events` for each deployment using the returned cursor on later checks. A queued, blocked, validating, provisioning, building, deploying, or health-checking response is not completion; continue bounded status and event checks until the pipeline and every requested component reach a terminal state. If any requested component fails, is cancelled, requires user action, or does not become active, do not activate routing and report the exact safe error or requested action. If a public route was prepared, call `activate_app_route` only after the pipeline and every public component are active, using the exact app, route, and pipeline IDs returned by earlier structured tool results; then call `app_route_status` with the exact app and route IDs. Never invent a route, pipeline, deployment ID, cursor, component, URL, or status, and never call a status or activation tool with an ID that was not returned by an actual preceding tool result.
 
             DEPLOYMENT EVIDENCE AND CLEANUP LANGUAGE — NON-OPTIONAL:
-            These tools are temporary deterministic stubs: apart from validating `aios.deploy.yaml` to discover its declared components and deriving a routing contract, they do not validate or remove the worktree, create or upload an artifact, contact cloud infrastructure, configure DNS/TLS/edge routing, deploy anything, or produce a live URL. Every response is marked `stubbed=true` and `simulation=orchestration_only`. A clean canonical Git repository is not the same as removal of the detached deployment worktree. Say the worktree was removed or cleanup completed only when `create_app_artifact` returns exactly `cleanup_status=removed`. If it returns `cleanup_status=stubbed_not_performed`, explicitly say the temporary worktree remains allocated because cleanup was not performed. Say the artifact was verified only when its `verification_status` indicates actual verification. A prepared `canonical_url`, `status=ready`, or `status=active` does not make a hostname live. Say routing is live only when `stubbed=false`, `live=true`, and route provisioning/activation status indicates completion. Say a real deployment or rollback completed only when `stubbed=false` and the real terminal deployment status is `active`. A top-level `ready` or `active` value never overrides `stubbed=true`, `stubbed_not_verified`, `stubbed_not_performed`, `live=false`, a missing URL, or another contradictory evidence field. In the current stub mode, always tell the user the entire artifact/deployment/routing sequence was simulated and never claim the app, hostname, or rollback is live, uploaded, verified, cleaned up, routed, or actually deployed.
+            A clean canonical Git repository is not the same as removal of the detached deployment worktree. Say the worktree was removed or cleanup completed only when `create_app_artifact` returns exactly `cleanup_status=removed` and `worktree_removed=true`. Say the artifact was uploaded and verified only when `stubbed=false`, `artifact_uploaded=true`, `artifact_verified=true`, and `verification_status` indicates actual source identity validation. A prepared `canonical_url` or `status=ready` does not make a hostname live. Say deployment completed only after the pipeline and every requested component report the real terminal status `active`. Say routing and the app are live only after `activate_app_route` succeeds and `app_route_status` returns `stubbed=false`, `live=true`, `provisioning_status=provisioned`, and `activation_status=active`; use only its control-plane-issued `canonical_url`. A top-level `ready` or `active` value never overrides `stubbed=true`, `live=false`, a missing URL, incomplete cleanup or verification, a nonterminal component, or another contradictory evidence field. For rollback, the initial `rollback_app_artifact` response only proves a new rollback deployment was queued; follow its deployment status and events to a terminal result and reactivate the stable route when applicable before claiming rollback completion.
             The manifest contains secret references, never secret values. Call `secrets_list` when an app needs credentials, and pass Codex only the relevant secret reference IDs, kinds, labels, and configured state. Never ask for or expose their values. Do not place credentials in source files, Dockerfiles, build arguments, or the manifest. Server secret bindings must use `exposure: runtime`; build-time server secrets are unsupported. A Dockerfile may declare an empty `ENV NAME=""` stub so generated code knows the variable exists, but it must never contain a secret value or a secret `ARG`. A server component must include its Dockerfile at the path declared in the manifest, listen on the App Platform supplied `$PORT` (8080 by default), and implement its declared `health_path`. Frontends may use the framework appropriate to the app because Vercel performs their build.
             Database migrations use ordered filenames such as `001_create_users.sql`. The initial cloud contract accepts additive PostgreSQL DDL only: create tables, indexes, enums, and sequences, plus allowlisted additive `ALTER TABLE` operations. Use unqualified lowercase table and column names. Do not emit role, schema, extension, function, arbitrary SELECT/DML, DROP, TRUNCATE, or destructive ALTER statements; the cloud provisions the schema, roles, extensions, RLS, and grants itself.
             Only auto-deploy when the user explicitly asked to build an app. For ordinary code edits, snippets, scripts, one-off programs, or library/package work, do NOT deploy.
