@@ -39,6 +39,8 @@ _IGNORED_RUNTIME_FILES = {
     "crons.db-shm",
     "crons.db-wal",
 }
+_IGNORED_ROOT_FILES = {"HISTORY.md"}
+_IGNORED_ROOT_DIRECTORIES = {".aios"}
 _SAFE_ENV_TEMPLATES = {".env.example", ".env.sample", ".env.template"}
 _FORBIDDEN_SUFFIXES = {".key", ".p12", ".pem", ".pfx"}
 _HIGH_CONFIDENCE_SECRET_PATTERNS = (
@@ -124,8 +126,7 @@ class ServerComponent(BaseModel):
         if any(binding.exposure == SecretExposure.BUILD for binding in self.secrets):
             raise ValueError("Server secrets must use runtime exposure")
         if any(
-            binding.env in {"PORT", "AIOS_DEPLOYMENT_ID"}
-            for binding in self.secrets
+            binding.env in {"PORT", "AIOS_DEPLOYMENT_ID"} for binding in self.secrets
         ):
             raise ValueError("Server secret uses a reserved environment name")
         return self
@@ -268,6 +269,10 @@ def artifact_file_paths(app_dir: str | Path) -> list[Path]:
     files: list[Path] = []
     for path in sorted(root.rglob("*"), key=lambda candidate: candidate.as_posix()):
         relative = path.relative_to(root)
+        if relative.parts and relative.parts[0] in _IGNORED_ROOT_DIRECTORIES:
+            continue
+        if len(relative.parts) == 1 and relative.name in _IGNORED_ROOT_FILES:
+            continue
         if any(part in _IGNORED_PARTS for part in relative.parts):
             continue
         if relative.name in _IGNORED_RUNTIME_FILES:
@@ -316,6 +321,14 @@ def _validate_component_paths(root: Path, manifest: DeploymentManifest) -> None:
         expected.append(("frontend.source", manifest.frontend.source, True))
 
     for label, relative, directory in expected:
+        relative_path = PurePosixPath(relative)
+        if relative_path.parts[0] in _IGNORED_ROOT_DIRECTORIES or (
+            len(relative_path.parts) == 1 and relative_path.name in _IGNORED_ROOT_FILES
+        ):
+            raise ManifestValidationError(
+                f"{label} references AIOS operational metadata excluded from artifacts: "
+                f"{relative}"
+            )
         candidate = root / relative
         valid = candidate.is_dir() if directory else candidate.is_file()
         if not valid:

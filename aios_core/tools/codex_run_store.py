@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS codex_runs (
     recovery_count      INTEGER NOT NULL DEFAULT 0,
     verification_status TEXT,
     deploy_state_json   TEXT NOT NULL DEFAULT '{}',
+    contract_version    INTEGER NOT NULL DEFAULT 1,
+    deployment_requested INTEGER NOT NULL DEFAULT 0,
+    app_state_json      TEXT NOT NULL DEFAULT '{}',
     created_at          INTEGER NOT NULL,
     updated_at          INTEGER NOT NULL,
     finished_at         INTEGER
@@ -124,6 +127,9 @@ class CodexRunStore:
                         "recovery_count": "INTEGER NOT NULL DEFAULT 0",
                         "verification_status": "TEXT",
                         "deploy_state_json": "TEXT NOT NULL DEFAULT '{}'",
+                        "contract_version": "INTEGER NOT NULL DEFAULT 1",
+                        "deployment_requested": "INTEGER NOT NULL DEFAULT 0",
+                        "app_state_json": "TEXT NOT NULL DEFAULT '{}'",
                     },
                 )
                 self._ensure_columns(
@@ -182,6 +188,9 @@ class CodexRunStore:
         workdir: str,
         model: str | None,
         capabilities: list[str],
+        contract_version: int = 1,
+        deployment_requested: bool = False,
+        app_state: dict[str, Any] | None = None,
     ) -> None:
         now = _now_ms()
         with self._transaction() as connection:
@@ -190,8 +199,9 @@ class CodexRunStore:
                 INSERT INTO codex_runs (
                     id, session_id, parent_run_id, parent_tool_call_id,
                     status, task, workdir, model, capabilities_json,
+                    contract_version, deployment_requested, app_state_json,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -202,6 +212,9 @@ class CodexRunStore:
                     workdir,
                     model,
                     json.dumps(capabilities),
+                    int(contract_version),
+                    int(deployment_requested),
+                    json.dumps(app_state or {}, default=str, sort_keys=True),
                     now,
                     now,
                 ),
@@ -225,6 +238,7 @@ class CodexRunStore:
         recovery_count: int | None = None,
         verification_status: str | None = None,
         deploy_state: dict[str, Any] | None = None,
+        app_state: dict[str, Any] | None = None,
     ) -> None:
         assignments = ["updated_at = ?"]
         values: list[Any] = [_now_ms()]
@@ -252,6 +266,9 @@ class CodexRunStore:
         if deploy_state is not None:
             assignments.append("deploy_state_json = ?")
             values.append(json.dumps(deploy_state, default=str, sort_keys=True))
+        if app_state is not None:
+            assignments.append("app_state_json = ?")
+            values.append(json.dumps(app_state, default=str, sort_keys=True))
         if terminal:
             assignments.append("finished_at = ?")
             values.append(_now_ms())
@@ -309,7 +326,9 @@ class CodexRunStore:
             event_type=event_type,
         )
 
-    def events_after(self, job_id: str, cursor: int = 0) -> tuple[list[dict[str, Any]], int]:
+    def events_after(
+        self, job_id: str, cursor: int = 0
+    ) -> tuple[list[dict[str, Any]], int]:
         with self._query() as connection:
             rows = connection.execute(
                 "SELECT sequence, event_json FROM codex_run_events "
@@ -474,6 +493,8 @@ class CodexRunStore:
         }
 
     def _shape(self, row: sqlite3.Row) -> dict[str, Any]:
+        decoded_app_state = _decode_json(row["app_state_json"], {})
+        app_state = decoded_app_state if isinstance(decoded_app_state, dict) else {}
         return {
             "job_id": row["id"],
             "session_id": row["session_id"],
@@ -494,6 +515,10 @@ class CodexRunStore:
             "recovery_count": row["recovery_count"],
             "verification_status": row["verification_status"],
             "deploy_state": _decode_json(row["deploy_state_json"], {}),
+            "contract_version": int(row["contract_version"] or 1),
+            "deployment_requested": bool(row["deployment_requested"]),
+            "app_state": app_state,
+            "workspace_handoff": app_state.get("workspace_handoff"),
             "display_status": self._display_status(row),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],

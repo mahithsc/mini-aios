@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 from ..runtime_context import resolve_chat_files_path
+from ..workspace import get_workspace_dir
 from . import file_state
 from .binary_extensions import has_binary_extension
 from .toolcore import (
@@ -28,6 +29,20 @@ from .toolcore import (
 _BOM = "﻿"
 
 
+def _guard_durable_app_mutation(resolved: Path) -> str | None:
+    """Keep durable app source exclusively behind the Codex change contract."""
+
+    apps_root = (get_workspace_dir() / "apps").resolve()
+    try:
+        resolved.resolve().relative_to(apps_root)
+    except ValueError:
+        return None
+    return (
+        f"error: direct modification of durable app source is not allowed: {resolved}. "
+        "Use codex_start with the canonical app workspace instead."
+    )
+
+
 def _guard_path(resolved: Path, *, for_read: bool) -> str | None:
     if is_blocked_device_path(resolved):
         return f"error: {resolved} is a device/system path that would block or produce infinite output"
@@ -36,7 +51,9 @@ def _guard_path(resolved: Path, *, for_read: bool) -> str | None:
         if for_read:
             try:
                 names = sorted(os.listdir(resolved))[:20]
-                entries = "\nfirst entries:\n" + "\n".join(f"  {name}" for name in names)
+                entries = "\nfirst entries:\n" + "\n".join(
+                    f"  {name}" for name in names
+                )
             except OSError:
                 pass
         return f"error: path is a directory: {resolved}{entries}"
@@ -208,6 +225,9 @@ def write(path: str, content: str):
         content: Full file content to write.
     """
     resolved = resolve_chat_files_path(path)
+    mutation_guard = _guard_durable_app_mutation(resolved)
+    if mutation_guard:
+        return mutation_guard
     guard = _guard_path(resolved, for_read=False)
     if guard:
         return guard
@@ -253,6 +273,9 @@ def edit(path: str, old: str, new: str, all: bool = False):
         all: Replace every occurrence instead of requiring uniqueness.
     """
     resolved = resolve_chat_files_path(path)
+    mutation_guard = _guard_durable_app_mutation(resolved)
+    if mutation_guard:
+        return mutation_guard
     guard = _guard_path(resolved, for_read=False)
     if guard:
         return guard
@@ -279,7 +302,9 @@ def edit(path: str, old: str, new: str, all: bool = False):
                 match_new = normalize_line_endings(new, "\r\n")
 
         if match_old not in text:
-            if _whitespace_collapsed(old) and _whitespace_collapsed(old) in _whitespace_collapsed(text):
+            if _whitespace_collapsed(old) and _whitespace_collapsed(
+                old
+            ) in _whitespace_collapsed(text):
                 return (
                     "error: old_string not found exactly, but a match exists with "
                     "different whitespace/indentation. Re-read the file and copy the "

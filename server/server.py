@@ -174,7 +174,7 @@ async def lifespan(_: FastAPI):
 
         set_lifecycle_sink(None)
         set_progress_sink(None)
-        await asyncio.to_thread(_manager.stop_all)
+        await asyncio.to_thread(_manager.interrupt_all_for_restart)
         await lights.shutdown()
         await shutdown_cloud_device_events()
         await shutdown_notification_service()

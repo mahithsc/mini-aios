@@ -44,16 +44,12 @@ def get_apps_dir(apps_dir: str | Path | None = None) -> Path:
     return Path(apps_dir) if apps_dir is not None else resolve_workspace_path("apps")
 
 
-def get_app_workspace_dir(
-    app_id: str, *, apps_dir: str | Path | None = None
-) -> Path:
+def get_app_workspace_dir(app_id: str, *, apps_dir: str | Path | None = None) -> Path:
     _validate_app_id(app_id)
     return get_apps_dir(apps_dir) / app_id
 
 
-def list_app_workspaces(
-    *, apps_dir: str | Path | None = None
-) -> dict[str, Any]:
+def list_app_workspaces(*, apps_dir: str | Path | None = None) -> dict[str, Any]:
     """List every durable local app directory, including unfinished apps.
 
     This is deliberately a local, read-only inventory. A workspace does not
@@ -115,14 +111,16 @@ def resolve_app_workspace(
 
     root = get_app_workspace_dir(app_id, apps_dir=apps_dir)
     if _workspace_has_source(root):
-        metadata = _write_metadata(
-            root,
-            app_id=app_id,
-            name=name,
-            origin_chat_id=origin_chat_id,
+        # Resolving existing source must be entirely read-only. Codex owns any
+        # durable metadata/README correction as part of its committed change.
+        existing = _read_mapping(root / APP_METADATA_NAME, json_format=True)
+        resolved_name = (
+            _nonempty_string(name)
+            or _nonempty_string(existing.get("name"))
+            or _read_readme_title(root / APP_README_NAME)
+            or app_id
         )
-        _ensure_apps_readme(root.parent)
-        _ensure_app_readme(root, metadata)
+        metadata = {"app_id": app_id, "name": resolved_name}
         return _workspace_payload(root, metadata, created=False, migrated_from=None)
 
     if not adopt_legacy:
@@ -296,8 +294,7 @@ def _workspace_has_source(root: Path) -> bool:
         return False
     try:
         return any(
-            path.is_file()
-            and path.name not in {APP_METADATA_NAME, APP_README_NAME}
+            path.is_file() and path.name not in {APP_METADATA_NAME, APP_README_NAME}
             for path in root.iterdir()
         )
     except OSError:
@@ -343,7 +340,6 @@ def _write_metadata(
         "app_id": app_id,
         "name": resolved_name.strip(),
         "created_at": existing.get("created_at") or now,
-        "updated_at": now,
     }
     resolved_origin = origin_chat_id or existing.get("origin_chat_id")
     if resolved_origin:
@@ -351,6 +347,17 @@ def _write_metadata(
     resolved_migration = migrated_from or existing.get("migrated_from")
     if resolved_migration:
         metadata["migrated_from"] = str(resolved_migration)
+
+    # Resolution is a read operation for an already-known app. Rewriting a
+    # volatile timestamp on every lookup dirties the app's Git repository and
+    # makes an otherwise safe redeployment impossible. Only update the file
+    # when durable identity/origin metadata actually changed.
+    comparable_existing = {
+        key: value for key, value in existing.items() if key != "updated_at"
+    }
+    if comparable_existing == metadata:
+        return existing
+    metadata["updated_at"] = now
 
     temporary = metadata_path.with_name(f"{metadata_path.name}.{uuid4().hex}.tmp")
     temporary.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")

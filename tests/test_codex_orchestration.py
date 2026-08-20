@@ -269,7 +269,16 @@ def test_terminal_child_flows_through_verified_main_continuation(
     child_store = CodexRunStore(":memory:")
     _create_record(child_store)
     child_store.update(
-        "job-1", status="done", result="Changed app.py", terminal=True
+        "job-1",
+        status="done",
+        result="Changed app.py",
+        app_state={
+            "workspace_handoff": {
+                "handoff_id": "wh_ready123",
+                "status": "handoff_ready",
+            }
+        },
+        terminal=True,
     )
     child_store.enqueue_signal("job-1", "done")
     manager = CodexJobManager(child_store)
@@ -303,6 +312,10 @@ def test_terminal_child_flows_through_verified_main_continuation(
     monkeypatch.setattr(chat_runner_module, "codex_job_manager", manager)
     messages = chat_runner_module._codex_context_messages(continuation)
     assert "Changed app.py" in str(messages[0].content)
+    assert "wh_ready123" in str(messages[0].content)
+    assert "create_app_artifact with only its exact handoff_id" in str(
+        messages[0].content
+    )
     assert "run proportionate verification" in str(messages[0].content)
 
     monkeypatch.setattr(codex_job_module, "_manager", manager)

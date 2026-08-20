@@ -146,3 +146,18 @@ def test_archive_contains_dockerfile_and_is_deterministic(tmp_path: Path) -> Non
     assert members == sorted(members)
     assert ".env.example" in members
     assert "server/Dockerfile" in members
+
+
+def test_artifact_excludes_aios_history_and_handoff_metadata(tmp_path: Path) -> None:
+    _write_valid_app(tmp_path)
+    (tmp_path / "HISTORY.md").write_text("human history\n")
+    handoff = tmp_path / ".aios" / "handoffs" / "job-1.json"
+    handoff.parent.mkdir(parents=True)
+    handoff.write_text('{"job_id":"job-1"}\n')
+
+    archive = create_artifact_archive(tmp_path, tmp_path.parent / "artifact.tar.gz")
+
+    with tarfile.open(archive.path, "r:gz") as tar:
+        members = tar.getnames()
+    assert "HISTORY.md" not in members
+    assert not any(member.startswith(".aios/") for member in members)

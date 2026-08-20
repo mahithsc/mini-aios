@@ -151,9 +151,7 @@ def test_resolve_app_workspace_adopts_richest_legacy_source(tmp_path: Path) -> N
     assert result["migrated_from"] == str(rich.resolve())
     adopted = Path(result["workspace_path"])
     assert (adopted / "frontend/source_4.js").is_file()
-    metadata = json.loads(
-        (adopted / ".aios-app.json").read_text(encoding="utf-8")
-    )
+    metadata = json.loads((adopted / ".aios-app.json").read_text(encoding="utf-8"))
     assert metadata["origin_chat_id"] == "chat-original"
 
 
@@ -169,3 +167,19 @@ def test_resolve_app_workspace_does_not_fabricate_missing_source(
     assert result["found"] is False
     assert "Do not fabricate" in result["error"]
     assert not (tmp_path / "apps" / APP_ID).exists()
+
+
+def test_resolve_existing_workspace_does_not_rewrite_metadata(tmp_path: Path) -> None:
+    apps_dir = tmp_path / "apps"
+    created = create_app_workspace(APP_ID, "Example App", apps_dir=apps_dir)
+    root = Path(created["workspace_path"])
+    (root / "source.txt").write_text("source\n")
+    metadata = root / ".aios-app.json"
+    before = metadata.read_bytes()
+    before_mtime = metadata.stat().st_mtime_ns
+
+    resolved = resolve_app_workspace(APP_ID, apps_dir=apps_dir)
+
+    assert resolved["found"] is True
+    assert metadata.read_bytes() == before
+    assert metadata.stat().st_mtime_ns == before_mtime

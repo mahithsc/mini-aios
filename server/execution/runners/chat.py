@@ -7,6 +7,10 @@ from agno.agent import RunEvent as AgentRunEvent
 from agno.models.message import Message
 
 from aios_core.agent import create_agent
+from aios_core.deploy.disclosures import (
+    missing_disclosure_suffix,
+    required_disclosures_from_tool_result,
+)
 from aios_core.runtime_context import (
     pop_chat_runtime_context,
     push_chat_runtime_context,
@@ -20,7 +24,9 @@ from server.utils.utils import format_chat_messages_to_model_messages
 
 
 def _normalize_tool_result(tool_name: str, result: object) -> object:
-    if tool_name not in {"show_canvas", "generative_widget"} or not isinstance(result, str):
+    if tool_name not in {"show_canvas", "generative_widget"} or not isinstance(
+        result, str
+    ):
         return result
 
     try:
@@ -58,8 +64,18 @@ def _codex_context_messages(run: Run) -> list[Message]:
             f"Working directory: {record.get('workdir')}. "
         )
         if status == "done":
+            workspace_handoff = record.get("workspace_handoff")
+            handoff_context = ""
+            if isinstance(workspace_handoff, dict):
+                handoff_context = (
+                    "Trusted completed workspace_handoff: "
+                    f"{json.dumps(workspace_handoff, default=str, sort_keys=True)}. "
+                    "For deployment, call create_app_artifact with only its exact "
+                    "handoff_id. "
+                )
             instruction = (
                 f"Codex reported: {record.get('result') or '(empty)'}. "
+                f"{handoff_context}"
                 "Inspect the resulting files, run proportionate verification, and "
                 "then give the user a concise verified final response. Do not merely "
                 "repeat Codex's claim."
@@ -79,7 +95,9 @@ def _codex_context_messages(run: Run) -> list[Message]:
                 "the safest next step to the user."
             )
         else:
-            instruction = "Use this state only as context for the user's latest request."
+            instruction = (
+                "Use this state only as context for the user's latest request."
+            )
         messages.append(Message(role="system", content=common + instruction))
     return messages
 
@@ -113,20 +131,27 @@ class ChatRunner:
         )
 
         produced_output = False
+        output_text: list[str] = []
+        required_disclosures: list[str] = []
         runtime_context_tokens = push_chat_runtime_context(chat_id, run.id)
 
         try:
             await lights.set_mode("thinking")
             agent = create_agent(chat_id=chat_id)
             async for event in agent.arun(messages, stream=True, stream_events=True):
-                if event.event == AgentRunEvent.run_content and event.content is not None:
+                if (
+                    event.event == AgentRunEvent.run_content
+                    and event.content is not None
+                ):
                     produced_output = True
+                    output_text.append(str(event.content))
                     await runs_service.emit_event(
                         run.id,
                         build_run_event(
                             run_id=run.id,
                             event_type="token",
-                            chat_id=chat_id,                            data={"value": event.content},
+                            chat_id=chat_id,
+                            data={"value": event.content},
                         ),
                     )
                 elif event.event == AgentRunEvent.run_error:
@@ -135,7 +160,8 @@ class ChatRunner:
                         build_run_event(
                             run_id=run.id,
                             event_type="error",
-                            chat_id=chat_id,                            data={"error": event.content or "Agent run failed."},
+                            chat_id=chat_id,
+                            data={"error": event.content or "Agent run failed."},
                         ),
                     )
                     return
@@ -147,8 +173,11 @@ class ChatRunner:
                         build_run_event(
                             run_id=run.id,
                             event_type="tool_call_start",
-                            chat_id=chat_id,                            data={
-                                "toolCallId": str(getattr(tool, "tool_call_id", None) or id(tool)),
+                            chat_id=chat_id,
+                            data={
+                                "toolCallId": str(
+                                    getattr(tool, "tool_call_id", None) or id(tool)
+                                ),
                                 "toolName": tool.tool_name,
                                 "input": tool.tool_args,
                             },
@@ -157,14 +186,24 @@ class ChatRunner:
                 elif event.event == AgentRunEvent.tool_call_completed:
                     produced_output = True
                     tool = event.tool
-                    normalized_result = _normalize_tool_result(tool.tool_name, tool.result)
+                    normalized_result = _normalize_tool_result(
+                        tool.tool_name, tool.result
+                    )
+                    for disclosure in required_disclosures_from_tool_result(
+                        normalized_result
+                    ):
+                        if disclosure not in required_disclosures:
+                            required_disclosures.append(disclosure)
                     await runs_service.emit_event(
                         run.id,
                         build_run_event(
                             run_id=run.id,
                             event_type="tool_call_end",
-                            chat_id=chat_id,                            data={
-                                "toolCallId": str(getattr(tool, "tool_call_id", None) or id(tool)),
+                            chat_id=chat_id,
+                            data={
+                                "toolCallId": str(
+                                    getattr(tool, "tool_call_id", None) or id(tool)
+                                ),
                                 "toolName": tool.tool_name,
                                 "output": normalized_result,
                             },
@@ -181,10 +220,15 @@ class ChatRunner:
                         build_run_event(
                             run_id=run.id,
                             event_type="subagent_tool_event",
-                            chat_id=chat_id,                            data={
-                                "parentToolCallId": getattr(event, "parent_tool_call_id", None),
+                            chat_id=chat_id,
+                            data={
+                                "parentToolCallId": getattr(
+                                    event, "parent_tool_call_id", None
+                                ),
                                 "childRunId": getattr(event, "child_run_id", None),
-                                "childEventType": getattr(event, "child_event_type", None),
+                                "childEventType": getattr(
+                                    event, "child_event_type", None
+                                ),
                                 "toolCallId": getattr(event, "tool_call_id", None),
                                 "toolName": tool_name,
                                 "input": getattr(event, "input", None),
@@ -202,7 +246,8 @@ class ChatRunner:
                 build_run_event(
                     run_id=run.id,
                     event_type="error",
-                    chat_id=chat_id,                    data={"error": str(exc)},
+                    chat_id=chat_id,
+                    data={"error": str(exc)},
                 ),
             )
             return
@@ -216,15 +261,31 @@ class ChatRunner:
                 build_run_event(
                     run_id=run.id,
                     event_type="error",
-                    chat_id=chat_id,                    data={"error": "Agent run ended without producing any output."},
+                    chat_id=chat_id,
+                    data={"error": "Agent run ended without producing any output."},
                 ),
             )
             return
+
+        disclosure_suffix = missing_disclosure_suffix(
+            "".join(output_text), required_disclosures
+        )
+        if disclosure_suffix:
+            await runs_service.emit_event(
+                run.id,
+                build_run_event(
+                    run_id=run.id,
+                    event_type="token",
+                    chat_id=chat_id,
+                    data={"value": disclosure_suffix},
+                ),
+            )
 
         await runs_service.emit_event(
             run.id,
             build_run_event(
                 run_id=run.id,
                 event_type="completed",
-                chat_id=chat_id,            ),
+                chat_id=chat_id,
+            ),
         )

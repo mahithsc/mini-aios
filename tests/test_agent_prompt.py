@@ -25,6 +25,16 @@ def test_prompt_routes_every_code_or_app_task_to_codex() -> None:
     assert "independently inspect Codex's diff" in prompt
 
 
+def test_prompt_requires_native_tool_calls_and_runtime_issued_job_ids() -> None:
+    prompt = _prompt()
+
+    assert "NATIVE TOOL-CALL INTEGRITY — NON-OPTIONAL" in prompt
+    assert "copying that syntax does not execute anything" in prompt
+    assert "only after its actual structured tool result" in prompt
+    assert "Never invent, guess, transform, or manually reconstruct a job ID" in prompt
+    assert "no verified Codex job was started" in prompt
+
+
 def test_prompt_routes_app_work_to_durable_workspace() -> None:
     prompt = _prompt()
 
@@ -34,9 +44,59 @@ def test_prompt_routes_app_work_to_durable_workspace() -> None:
     assert "path` set exactly to the returned `workspace_path`" in prompt
 
 
-def test_prompt_waits_for_deployment_prerequisites() -> None:
+def test_prompt_routes_deployment_through_artifact_handoff() -> None:
     prompt = _prompt()
 
-    assert "wait for it to become `active`" in prompt
-    assert "does not make the prerequisite ready" in prompt
-    assert "do not enqueue its dependents" in prompt
+    assert "MAIN-AGENT DEPLOYMENT" in prompt
+    assert "Codex owns code changes" in prompt
+    assert "it never deploys" in prompt
+    assert "`create_app_artifact`" in prompt
+    assert "`prepare_app_route`" in prompt
+    assert "`deploy_app_artifact`" in prompt
+    assert "forward its exact `route_id`" in prompt
+    assert "never exposes or authorizes a reserved handoff" in prompt
+    assert "`workspace_handoff` with `status=handoff_ready`" in prompt
+    assert "pass only that result's exact `handoff_id`" in prompt
+    assert "never pass app paths or revisions into artifact creation" in prompt
+    assert "using only that artifact's exact `artifact_id`" in prompt
+    assert "Downstream tools resolve the app and component list" in prompt
+    assert "never call `write`, `edit`, shell/process tools" in prompt
+    assert "temporary deterministic stubs" in prompt
+    assert "never claim the app, hostname, or rollback is live" in prompt
+    assert "DEPLOYMENT STATUS CALL SEQUENCE — MANDATORY" in prompt
+    assert "Call `deployment_status` once for every component deployment ID" in prompt
+    assert (
+        "call `deployment_events` once for every returned component deployment ID"
+        in prompt
+    )
+    assert "All of these calls are required in stub-test mode" in prompt
+    assert (
+        "call `activate_app_route` only after all those status and event calls"
+        in prompt
+    )
+    assert "then call `app_route_status` once" in prompt
+
+
+def test_prompt_distinguishes_git_cleanliness_from_worktree_cleanup() -> None:
+    prompt = _prompt()
+
+    assert "A clean canonical Git repository is not the same" in prompt
+    assert "cleanup_status=removed" in prompt
+    assert "cleanup_status=stubbed_not_performed" in prompt
+    assert "temporary worktree remains allocated" in prompt
+    assert "A top-level `ready` or `active` value never overrides" in prompt
+    assert (
+        "never claim the app, hostname, or rollback is live, uploaded, verified"
+        in prompt
+    )
+    assert "does not make a hostname live" in prompt
+    assert "`stubbed=false`, `live=true`" in prompt
+
+
+def test_prompt_keeps_app_versioning_internal_for_nontechnical_users() -> None:
+    prompt = _prompt()
+
+    assert "APP VERSIONING IS INTERNAL — NON-OPTIONAL" in prompt
+    assert "Never ask the user whether to commit" in prompt
+    assert "automatically adopts, reviews, verifies, and commits unfinished app work" in prompt
+    assert "An earlier build was interrupted" in prompt

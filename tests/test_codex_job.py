@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import threading
 import time
 from pathlib import Path
@@ -12,6 +13,8 @@ import pytest
 
 from aios_core.tools.codex_job import CodexJobManager
 from aios_core.tools.codex_run_store import CodexRunStore
+from aios_core.app_git import run_git
+from aios_core.deploy.worktree_handoff import WorktreeRegistry
 
 
 class _QueueStream:
@@ -51,6 +54,9 @@ class _FakeAppServer:
         fail_initialize: bool = False,
         mcp_tools_by_turn: list[list[str]] | None = None,
         mcp_results_by_tool: dict[str, dict] | None = None,
+        hold_turn: bool = False,
+        crash_on_initialize: bool = False,
+        on_turn=None,
     ) -> None:
         self.stdout = _QueueStream()
         self.stderr = _QueueStream()
@@ -59,7 +65,10 @@ class _FakeAppServer:
         self.fail_initialize = fail_initialize
         self.mcp_tools_by_turn = mcp_tools_by_turn or []
         self.mcp_results_by_tool = mcp_results_by_tool or {}
+        self.hold_turn = hold_turn
+        self.crash_on_initialize = crash_on_initialize
         self.turn_count = 0
+        self.on_turn = on_turn
         self.returncode: int | None = None
         self.killed = False
         self.received: list[dict] = []
@@ -71,7 +80,9 @@ class _FakeAppServer:
         method = message.get("method")
         request_id = message.get("id")
         if method == "initialize":
-            if self.fail_initialize:
+            if self.crash_on_initialize:
+                self.crash()
+            elif self.fail_initialize:
                 self.stdout.push(
                     {"id": request_id, "error": {"code": -1, "message": "boom"}}
                 )
@@ -93,6 +104,8 @@ class _FakeAppServer:
             )
         elif method == "turn/start":
             self.turn_count += 1
+            if self.on_turn is not None:
+                self.on_turn(message["params"]["input"][0]["text"])
             self.stdout.push({"id": request_id, "result": {"turn": {"id": "turn-1"}}})
             self.stdout.push(
                 {
@@ -171,6 +184,8 @@ class _FakeAppServer:
                         },
                     }
                 )
+            if self.hold_turn:
+                return
             if self.asks_question:
                 self.stdout.push(
                     {
@@ -248,10 +263,24 @@ class _FakeAppServer:
     def kill(self):
         self.terminate()
 
+    def crash(self, returncode: int = 17) -> None:
+        self.returncode = returncode
+        self.stdout.close()
+        self.stderr.close()
+        self._done.set()
+
 
 def _patch(monkeypatch, process: _FakeAppServer):
     monkeypatch.setattr(
         "aios_core.tools.codex_job.subprocess.Popen", lambda *args, **kwargs: process
+    )
+
+
+def _patch_sequence(monkeypatch, *processes: _FakeAppServer):
+    iterator = iter(processes)
+    monkeypatch.setattr(
+        "aios_core.tools.codex_job.subprocess.Popen",
+        lambda *args, **kwargs: next(iterator),
     )
 
 
@@ -264,7 +293,7 @@ def valid_path(tmp_path, monkeypatch):
 
 
 def _wait_for(
-    mgr: CodexJobManager, job_id: str, status: str, timeout: float = 3
+    mgr: CodexJobManager, job_id: str, status: str, timeout: float = 5
 ) -> dict:
     deadline = time.time() + timeout
     result = mgr.poll(job_id)
@@ -287,6 +316,122 @@ def _write_deploy_manifest(root: Path, *components: str) -> None:
             (root / "frontend").mkdir()
             (root / "frontend" / "index.html").write_text("ok\n")
     (root / "aios.deploy.yaml").write_text("\n".join(lines) + "\n")
+
+
+def _deploy_fixture(tmp_path: Path, monkeypatch, *components: str):
+    workspace = tmp_path / "workspace"
+    apps_root = workspace / "apps"
+    app = apps_root / "app_test123"
+    app.mkdir(parents=True)
+    _write_deploy_manifest(app, *components)
+    run_git(app, ["init", "-b", "main"])
+    run_git(app, ["config", "user.name", "AIOS Test"])
+    run_git(app, ["config", "user.email", "aios@example.test"])
+    run_git(app, ["add", "."])
+    run_git(app, ["commit", "-m", "baseline"])
+    monkeypatch.setattr(
+        "aios_core.tools.codex_job.resolve_chat_files_path", lambda path: app
+    )
+    registry = WorktreeRegistry(workspace / ".aios" / "worktrees", apps_root=apps_root)
+    return app, registry
+
+
+def _complete_change_handoff(app: Path):
+    def complete(prompt: str) -> None:
+        job_id = re.search(r"^- job_id: (.+)$", prompt, re.MULTILINE).group(1)
+        worktree_id = re.search(r"^- worktree_id: (.+)$", prompt, re.MULTILINE).group(1)
+        workspace_path = re.search(
+            r"^- reserved detached worktree path: (.+)$", prompt, re.MULTILINE
+        ).group(1)
+        run_git(app, ["config", "user.name", "AIOS Test"])
+        run_git(app, ["config", "user.email", "aios@example.test"])
+        head = run_git(app, ["rev-parse", "--verify", "HEAD"], check=False)
+        if head.returncode != 0:
+            run_git(app, ["add", "."])
+            run_git(app, ["commit", "-m", "chore(aios): baseline app"])
+        base = run_git(app, ["rev-parse", "HEAD"]).stdout.strip()
+        (app / "source.txt").write_text("green button\n")
+        (app / "HISTORY.md").write_text(
+            "2026-08-18T22:00:00Z Changed the button to green.\n"
+            f"job_id: {job_id}\nrollback_base: {base}\n"
+            "Verification: fixture verification passed.\n"
+        )
+        run_git(app, ["add", "."])
+        run_git(app, ["commit", "-m", "feat: green button"])
+        change = run_git(app, ["rev-parse", "HEAD"]).stdout.strip()
+        tree = run_git(app, ["rev-parse", "HEAD^{tree}"]).stdout.strip()
+        run_git(app, ["worktree", "add", "--detach", workspace_path, change])
+        descriptor = Path(workspace_path) / ".aios" / "CODEX_HANDOFF.json"
+        descriptor.parent.mkdir(parents=True, exist_ok=True)
+        descriptor.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "job_id": job_id,
+                    "app_id": "app_test123",
+                    "mode": "change",
+                    "worktree_id": worktree_id,
+                    "canonical_repository": str(app),
+                    "workspace_path": workspace_path,
+                    "base_commit": base,
+                    "source_commit": change,
+                    "source_tree": tree,
+                    "selection_reason": "Changed the primary button to green",
+                }
+            )
+            + "\n"
+        )
+
+    return complete
+
+
+def _complete_selected_handoff(app: Path, selected: str):
+    def complete(prompt: str) -> None:
+        job_id = re.search(r"^- job_id: (.+)$", prompt, re.MULTILINE).group(1)
+        worktree_id = re.search(r"^- worktree_id: (.+)$", prompt, re.MULTILINE).group(1)
+        workspace_path = re.search(
+            r"^- reserved detached worktree path: (.+)$", prompt, re.MULTILINE
+        ).group(1)
+        base = run_git(app, ["rev-parse", "HEAD"]).stdout.strip()
+        tree = run_git(app, ["rev-parse", f"{selected}^{{tree}}"]).stdout.strip()
+        run_git(app, ["worktree", "add", "--detach", workspace_path, selected])
+        descriptor = Path(workspace_path) / ".aios" / "CODEX_HANDOFF.json"
+        descriptor.parent.mkdir(parents=True, exist_ok=True)
+        descriptor.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "job_id": job_id,
+                    "app_id": "app_test123",
+                    "mode": "selected_commit",
+                    "worktree_id": worktree_id,
+                    "canonical_repository": str(app),
+                    "workspace_path": workspace_path,
+                    "base_commit": base,
+                    "source_commit": selected,
+                    "source_tree": tree,
+                    "selection_reason": "This commit changed the button to green",
+                }
+            )
+            + "\n"
+        )
+
+    return complete
+
+
+def _complete_record_change(app: Path):
+    def complete(prompt: str) -> None:
+        job_id = re.search(r"^- job_id: (.+)$", prompt, re.MULTILINE).group(1)
+        base = run_git(app, ["rev-parse", "HEAD"]).stdout.strip()
+        (app / "source.txt").write_text("recorded change\n")
+        (app / "HISTORY.md").write_text(
+            "2026-08-18T22:00:00Z Changed source and verified it.\n"
+            f"job_id: {job_id}\nrollback_base: {base}\n"
+        )
+        run_git(app, ["add", "."])
+        run_git(app, ["commit", "-m", "feat: recorded app change"])
+
+    return complete
 
 
 def test_app_server_happy_path_streams_and_completes(valid_path, monkeypatch):
@@ -315,93 +460,269 @@ def test_app_server_happy_path_streams_and_completes(valid_path, monkeypatch):
     assert any(message.get("method") == "turn/start" for message in process.received)
 
 
-def test_deploy_contract_calls_matching_tools_and_completes(valid_path, monkeypatch):
-    _write_deploy_manifest(valid_path, "database", "server")
-    process = _FakeAppServer(
-        mcp_tools_by_turn=[["deploy_database", "deploy_server"]]
-    )
+def test_deploy_contract_returns_validated_workspace_handoff(tmp_path, monkeypatch):
+    app, registry = _deploy_fixture(tmp_path, monkeypatch, "frontend")
+    process = _FakeAppServer(on_turn=_complete_change_handoff(app))
     _patch(monkeypatch, process)
-    mgr = CodexJobManager()
+    mgr = CodexJobManager(worktree_registry=registry)
 
     started = mgr.start("build the backend", path=".", enable_deploy=True)
+    assert "deployment_handoff" not in started
     result = _wait_for(mgr, started["job_id"], "done")
 
     assert result["status"] == "done"
+    assert result["workspace_handoff"]["status"] == "handoff_ready"
+    assert result["workspace_handoff"]["workspace_path"].startswith(
+        str(registry.checkouts_dir)
+    )
     turn = next(
         message for message in process.received if message.get("method") == "turn/start"
     )
     prompt = turn["params"]["input"][0]["text"]
-    assert "AIOS CLOUD DEPLOYMENT CONTRACT (MANDATORY)" in prompt
-    assert "deploy_database" in prompt
-    assert "deploy_server" in prompt
-    assert "wait until the database is active" in prompt
-    assert not any(event["kind"] == "deployment_guard" for event in result["events"])
+    assert "AIOS APP CHANGE AND WORKSPACE HANDOFF CONTRACT v3" in prompt
+    assert "Do not create a later metadata-only commit" in prompt
+    assert "you do not deploy it" in prompt
+    record = mgr.store.get(started["job_id"])
+    assert "deployment_handoff_v3" in record["capabilities"]
+    assert record["contract_version"] == 3
+    assert record["app_state"]["host_checkpoint"]["source_commit"] == result[
+        "workspace_handoff"
+    ]["source_commit"]
+    assert result["workspace_handoff"]["provenance_commit"] is None
+    assert "cloud_deploy" not in record["capabilities"]
+    assert "-c" not in mgr.get(started["job_id"]).cmd
+    assert registry.get_app_lease("app_test123") is None
 
 
-def test_deploy_guard_continues_same_thread_for_missing_call(
-    valid_path, monkeypatch
-):
-    _write_deploy_manifest(valid_path, "server")
-    process = _FakeAppServer(mcp_tools_by_turn=[[], ["deploy_server"]])
+def test_deploy_contract_bootstraps_app_root_repository(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    apps_root = workspace / "apps"
+    app = apps_root / "app_test123"
+    app.mkdir(parents=True)
+    _write_deploy_manifest(app, "frontend")
+    monkeypatch.setattr(
+        "aios_core.tools.codex_job.resolve_chat_files_path", lambda path: app
+    )
+    registry = WorktreeRegistry(workspace / ".aios" / "worktrees", apps_root=apps_root)
+    process = _FakeAppServer(on_turn=_complete_change_handoff(app))
     _patch(monkeypatch, process)
-    mgr = CodexJobManager()
+    manager = CodexJobManager(worktree_registry=registry)
 
-    started = mgr.start("build and deploy", path=".", enable_deploy=True)
-    result = _wait_for(mgr, started["job_id"], "done")
+    started = manager.start("Build the frontend", path=".", enable_deploy=True)
+    result = _wait_for(manager, started["job_id"], "done")
 
     assert result["status"] == "done"
+    assert result["workspace_handoff"]["source_commit"]
+    assert (app / ".git").is_dir()
+
+
+def test_historical_deploy_handoff_leaves_canonical_head_unchanged(
+    tmp_path, monkeypatch
+):
+    app, registry = _deploy_fixture(tmp_path, monkeypatch, "frontend")
+    (app / "frontend" / "index.html").write_text("<button>Green</button>\n")
+    run_git(app, ["add", "."])
+    run_git(app, ["commit", "-m", "feat: make button green"])
+    green = run_git(app, ["rev-parse", "HEAD"]).stdout.strip()
+    (app / "frontend" / "index.html").write_text("<button>Yellow</button>\n")
+    run_git(app, ["add", "."])
+    run_git(app, ["commit", "-m", "feat: make button yellow"])
+    current = run_git(app, ["rev-parse", "HEAD"]).stdout.strip()
+    process = _FakeAppServer(on_turn=_complete_selected_handoff(app, green))
+    _patch(monkeypatch, process)
+    manager = CodexJobManager(worktree_registry=registry)
+
+    started = manager.start(
+        "Redeploy the version where the button was green",
+        path=".",
+        enable_deploy=True,
+    )
+    result = _wait_for(manager, started["job_id"], "done")
+
+    assert result["workspace_handoff"]["mode"] == "selected_commit"
+    assert result["workspace_handoff"]["source_commit"] == green
+    assert run_git(app, ["rev-parse", "HEAD"]).stdout.strip() == current
+    assert not run_git(
+        app, ["status", "--porcelain=v1", "--untracked-files=all"]
+    ).stdout.strip()
+
+
+def test_non_deploy_app_change_injects_history_and_commit_contract(
+    tmp_path, monkeypatch
+):
+    app, registry = _deploy_fixture(tmp_path, monkeypatch, "frontend")
+    process = _FakeAppServer(on_turn=_complete_record_change(app))
+    _patch(monkeypatch, process)
+    manager = CodexJobManager(worktree_registry=registry)
+
+    started = manager.start("Change the app copy", path=".")
+    result = _wait_for(manager, started["job_id"], "done")
+
+    assert result["status"] == "done"
+    assert result["workspace_handoff"] is None
+    record = manager.store.get(started["job_id"])
+    assert "app_change_v3" in record["capabilities"]
+    assert record["app_state"]["completion_mode"] == "change"
+    assert record["app_state"]["provenance_commit"] is None
+    assert record["app_state"]["host_checkpoint"]["schema_version"] == 2
+    prompt = next(
+        message for message in process.received if message.get("method") == "turn/start"
+    )["params"]["input"][0]["text"]
+    assert "AIOS APP CHANGE RECORD CONTRACT v3" in prompt
+    assert "UTC ISO-8601 timestamped entry" in prompt
+    assert "Do not create a later metadata-only commit" in prompt
+    assert "host records the machine-readable checkpoint" in prompt
+    assert "EXACT AIOS CHECKPOINT SCHEMA" not in prompt
+    assert registry.get_app_lease("app_test123") is None
+
+
+def test_v3_adopts_and_commits_unfinished_app_changes(tmp_path, monkeypatch):
+    app, registry = _deploy_fixture(tmp_path, monkeypatch, "frontend")
+    base = run_git(app, ["rev-parse", "HEAD"]).stdout.strip()
+    (app / "source.txt").write_text("unfinished durable work\n")
+
+    def complete(prompt: str) -> None:
+        job_id = re.search(r"^- job_id: (.+)$", prompt, re.MULTILINE).group(1)
+        assert "already contained unfinished changes" in prompt
+        assert "source.txt" in prompt
+        (app / "HISTORY.md").write_text(
+            "2026-08-18T22:00:00Z Recovered interrupted app work.\n"
+            f"job_id: {job_id}\nrollback_base: {base}\n"
+            "Verification: fixture verification passed.\n"
+        )
+        run_git(app, ["add", "."])
+        run_git(app, ["commit", "-m", "feat: finish interrupted app work"])
+
+    process = _FakeAppServer(on_turn=complete)
+    _patch(monkeypatch, process)
+    manager = CodexJobManager(worktree_registry=registry)
+
+    started = manager.start("Finish the app", path=".")
+    assert "error" not in started
+    result = _wait_for(manager, started["job_id"], "done")
+
+    assert result["status"] == "done"
+    record = manager.store.get(started["job_id"])
+    assert record["app_state"]["initial_dirty"] is True
+    assert record["app_state"]["base_commit"] == base
+    assert record["app_state"]["host_checkpoint"]["source_commit"] == run_git(
+        app, ["rev-parse", "HEAD"]
+    ).stdout.strip()
+    assert not run_git(
+        app, ["status", "--porcelain=v1", "--untracked-files=all"]
+    ).stdout.strip()
+
+
+def test_v3_followup_completes_linear_source_range_without_metadata_m(
+    tmp_path, monkeypatch
+):
+    app, registry = _deploy_fixture(tmp_path, monkeypatch, "frontend")
+    state: dict[str, str] = {}
+
+    def complete(prompt: str) -> None:
+        if not state:
+            job_id = re.search(r"^- job_id: (.+)$", prompt, re.MULTILINE).group(1)
+            base = run_git(app, ["rev-parse", "HEAD"]).stdout.strip()
+            (app / "source.txt").write_text("changed\n")
+            (app / "HISTORY.md").write_text("Changed source.\n")
+            run_git(app, ["add", "."])
+            run_git(app, ["commit", "-m", "feat: change source"])
+            change = run_git(app, ["rev-parse", "HEAD"]).stdout.strip()
+            state.update(
+                base=base,
+                change=change,
+                job_id=job_id,
+            )
+            return
+
+        job_id = state["job_id"]
+        assert "satisfy contract v3" in prompt
+        assert "Do not create metadata commit M" in prompt
+        assert "reset the canonical branch to C" not in prompt
+        with (app / "HISTORY.md").open("a") as history:
+            history.write(
+                f"job_id: {job_id}\nrollback_base: {state['base']}\n"
+                "Verification: tests passed.\n"
+            )
+        run_git(app, ["add", "."])
+        run_git(app, ["commit", "-m", "docs: record app change"])
+
+    process = _FakeAppServer(on_turn=complete)
+    _patch(monkeypatch, process)
+    manager = CodexJobManager(worktree_registry=registry)
+
+    started = manager.start("Change the app copy", path=".")
+    result = _wait_for(manager, started["job_id"], "done")
+
+    assert result["status"] == "done", result["error"]
+    assert process.turn_count == 2
+    head = run_git(app, ["rev-parse", "HEAD"]).stdout.strip()
+    parent = run_git(app, ["rev-parse", "HEAD^"]).stdout.strip()
+    assert parent == state["change"]
+    assert head != state["change"]
+    assert not (app / ".aios" / "checkpoints" / f"{state['job_id']}.json").exists()
+    record = manager.store.get(started["job_id"])
+    assert record["app_state"]["host_checkpoint"]["source_commit"] == head
+
+
+def test_non_deploy_read_only_app_task_keeps_head_unchanged(tmp_path, monkeypatch):
+    app, registry = _deploy_fixture(tmp_path, monkeypatch, "frontend")
+    original = run_git(app, ["rev-parse", "HEAD"]).stdout.strip()
+    process = _FakeAppServer()
+    _patch(monkeypatch, process)
+    manager = CodexJobManager(worktree_registry=registry)
+
+    started = manager.start("Explain the frontend", path=".")
+    result = _wait_for(manager, started["job_id"], "done")
+
+    assert result["status"] == "done"
+    assert run_git(app, ["rev-parse", "HEAD"]).stdout.strip() == original
+    assert manager.store.get(started["job_id"])["app_state"]["completion_mode"] == (
+        "read_only"
+    )
+
+
+def test_handoff_guard_continues_same_thread_for_missing_descriptor(
+    tmp_path, monkeypatch
+):
+    _, registry = _deploy_fixture(tmp_path, monkeypatch, "server")
+    process = _FakeAppServer()
+    _patch(monkeypatch, process)
+    mgr = CodexJobManager(worktree_registry=registry)
+
+    started = mgr.start("build and deploy", path=".", enable_deploy=True)
+    result = _wait_for(mgr, started["job_id"], "error")
+
+    assert result["status"] == "error"
     turns = [
         message for message in process.received if message.get("method") == "turn/start"
     ]
-    assert len(turns) == 2
+    assert len(turns) == 3
     assert "host rejected completion" in turns[1]["params"]["input"][0]["text"]
-    guard = next(event for event in result["events"] if event["kind"] == "deployment_guard")
-    assert "deploy_server" in guard["output"]
+    guard = next(
+        event for event in result["events"] if event["kind"] == "app_handoff_guard"
+    )
+    assert "CODEX_HANDOFF.json" in guard["output"]
 
 
-def test_deploy_guard_fails_closed_when_calls_remain_missing(
-    valid_path, monkeypatch
+def test_handoff_guard_fails_closed_when_descriptor_remains_missing(
+    tmp_path, monkeypatch
 ):
     from aios_core.tools import codex_job as module
 
-    _write_deploy_manifest(valid_path, "database")
+    _, registry = _deploy_fixture(tmp_path, monkeypatch, "database")
     process = _FakeAppServer()
     _patch(monkeypatch, process)
-    monkeypatch.setattr(module, "MAX_DEPLOY_FOLLOWUPS", 0)
-    mgr = CodexJobManager()
+    monkeypatch.setattr(module, "MAX_APP_HANDOFF_FOLLOWUPS", 0)
+    mgr = CodexJobManager(worktree_registry=registry)
 
     started = mgr.start("build and deploy", path=".", enable_deploy=True)
     result = _wait_for(mgr, started["job_id"], "error")
 
-    assert "deploy_database" in result["error"]
-    assert "mandatory AIOS deployment contract" in result["error"]
-
-
-def test_deploy_guard_requires_deployment_id_and_preserves_exact_error(
-    valid_path, monkeypatch
-):
-    from aios_core.tools import codex_job as module
-
-    _write_deploy_manifest(valid_path, "frontend")
-    process = _FakeAppServer(
-        mcp_tools_by_turn=[["deploy_frontend"]],
-        mcp_results_by_tool={
-            "deploy_frontend": {
-                "status": "error",
-                "component": "frontend",
-                "error": "Artifact is missing frontend source",
-            }
-        },
-    )
-    _patch(monkeypatch, process)
-    monkeypatch.setattr(module, "MAX_DEPLOY_FOLLOWUPS", 0)
-    mgr = CodexJobManager()
-
-    started = mgr.start("build and deploy", path=".", enable_deploy=True)
-    result = _wait_for(mgr, started["job_id"], "error")
-
-    assert "did not return a deployment ID: deploy_frontend" in result["error"]
-    assert "Artifact is missing frontend source" in result["error"]
+    assert "CODEX_HANDOFF.json" in result["error"]
+    assert "mandatory AIOS app handoff contract" in result["error"]
+    worktree_id = next(registry.records_dir.glob("wt_*.json")).stem
+    assert registry.get(worktree_id).status == "removed"
 
 
 def test_question_pauses_answer_resumes_same_turn(valid_path, monkeypatch):
@@ -449,6 +770,7 @@ def test_stop_interrupts_and_cancels(valid_path, monkeypatch):
     result = mgr.stop(started["job_id"])
     assert result["status"] == "cancelled"
     assert process.killed is True
+    assert mgr.store.get(started["job_id"])["recovery_count"] == 0
 
 
 def test_progress_sink_emits_input_and_completion(valid_path, monkeypatch):
@@ -492,9 +814,7 @@ def test_validation_and_unknown_job(valid_path):
     assert "error" in mgr.answer("missing", {"x": "y"})
 
 
-def test_running_job_resumes_persisted_thread_after_restart(
-    valid_path, monkeypatch
-):
+def test_running_job_resumes_persisted_thread_after_restart(valid_path, monkeypatch):
     process = _FakeAppServer()
     _patch(monkeypatch, process)
     store = CodexRunStore(":memory:")
@@ -517,9 +837,167 @@ def test_running_job_resumes_persisted_thread_after_restart(
     assert result["result"] == "Implemented it."
     assert result["recovery_count"] == 1
     resume = next(
-        message for message in process.received if message.get("method") == "thread/resume"
+        message
+        for message in process.received
+        if message.get("method") == "thread/resume"
     )
     assert resume["params"]["threadId"] == "thread-persisted"
+
+
+def test_unexpected_child_exit_recovers_same_job_and_thread(
+    valid_path, monkeypatch
+):
+    from aios_core.tools import codex_job as module
+
+    monkeypatch.setattr(module, "RECOVERY_BACKOFF_BASE_SECONDS", 0)
+    first = _FakeAppServer(hold_turn=True)
+    replacement = _FakeAppServer()
+    _patch_sequence(monkeypatch, first, replacement)
+    store = CodexRunStore(":memory:")
+    manager = CodexJobManager(store)
+    started = manager.start("Finish the implementation", path=".", session_id="chat-1")
+    deadline = time.time() + 3
+    while time.time() < deadline and not (store.get(started["job_id"]) or {}).get(
+        "thread_id"
+    ):
+        time.sleep(0.01)
+
+    first.crash()
+    result = _wait_for(manager, started["job_id"], "done")
+
+    assert result["status"] == "done"
+    assert result["recovery_count"] == 1
+    resume = next(
+        message
+        for message in replacement.received
+        if message.get("method") == "thread/resume"
+    )
+    assert resume["params"]["threadId"] == "thread-1"
+    assert store.pending_signals() == [(started["job_id"], "done")]
+    recovery_events = [
+        event
+        for event in result["events"]
+        if event.get("kind") == "process_recovery"
+    ]
+    assert recovery_events[0]["phase"] == "scheduled"
+
+
+def test_child_exit_before_thread_creation_restarts_from_original_task(
+    valid_path, monkeypatch
+):
+    from aios_core.tools import codex_job as module
+
+    monkeypatch.setattr(module, "RECOVERY_BACKOFF_BASE_SECONDS", 0)
+    first = _FakeAppServer(crash_on_initialize=True)
+    replacement = _FakeAppServer()
+    _patch_sequence(monkeypatch, first, replacement)
+    store = CodexRunStore(":memory:")
+    manager = CodexJobManager(store)
+
+    started = manager.start("Build the API", path=".")
+    result = _wait_for(manager, started["job_id"], "done")
+
+    assert result["status"] == "done"
+    assert result["recovery_count"] == 1
+    assert len(
+        [
+            message
+            for message in replacement.received
+            if message.get("method") == "thread/start"
+        ]
+    ) == 1
+    assert not any(
+        message.get("method") == "thread/resume"
+        for message in replacement.received
+    )
+
+
+def test_child_exit_uses_ready_handoff_without_starting_replacement(
+    tmp_path, monkeypatch
+):
+    from aios_core.tools import codex_job as module
+
+    monkeypatch.setattr(module, "RECOVERY_BACKOFF_BASE_SECONDS", 0)
+    app, registry = _deploy_fixture(tmp_path, monkeypatch, "frontend")
+    process = _FakeAppServer(hold_turn=True)
+    launches = 0
+
+    def popen(*args, **kwargs):
+        nonlocal launches
+        launches += 1
+        if launches > 1:
+            raise AssertionError("ready handoff should not start another Codex child")
+        return process
+
+    monkeypatch.setattr("aios_core.tools.codex_job.subprocess.Popen", popen)
+    store = CodexRunStore(":memory:")
+    manager = CodexJobManager(store, worktree_registry=registry)
+    started = manager.start("Deploy the app", path=".", enable_deploy=True)
+    deadline = time.time() + 3
+    while time.time() < deadline and not (store.get(started["job_id"]) or {}).get(
+        "thread_id"
+    ):
+        time.sleep(0.01)
+    reservation_path = next(registry.records_dir.glob("wt_*.json"))
+    reserved = registry.get(reservation_path.stem)
+    source = run_git(app, ["rev-parse", "HEAD"]).stdout.strip()
+    tree = run_git(app, ["rev-parse", "HEAD^{tree}"]).stdout.strip()
+    run_git(app, ["worktree", "add", "--detach", reserved.path, source])
+    published = registry.publish_handoff(
+        reserved.worktree_id,
+        source_commit=source,
+        source_tree=tree,
+        selection_reason="Source was validated before the child exited",
+    )
+
+    process.crash()
+    result = _wait_for(manager, started["job_id"], "done")
+
+    assert result["workspace_handoff"]["handoff_id"] == published.handoff_id
+    assert launches == 1
+    assert registry.get_app_lease("app_test123") is None
+
+
+def test_replacement_launch_failures_exhaust_recovery_and_notify_once(
+    tmp_path, monkeypatch
+):
+    from aios_core.tools import codex_job as module
+
+    monkeypatch.setattr(module, "RECOVERY_BACKOFF_BASE_SECONDS", 0)
+    monkeypatch.setattr(module, "MAX_RECOVERY_ATTEMPTS", 2)
+    app, registry = _deploy_fixture(tmp_path, monkeypatch, "frontend")
+    first = _FakeAppServer(hold_turn=True)
+    launches = 0
+
+    def popen(*args, **kwargs):
+        nonlocal launches
+        launches += 1
+        if launches == 1:
+            return first
+        raise FileNotFoundError("replacement binary unavailable")
+
+    monkeypatch.setattr("aios_core.tools.codex_job.subprocess.Popen", popen)
+    store = CodexRunStore(":memory:")
+    manager = CodexJobManager(store, worktree_registry=registry)
+    started = manager.start(
+        "Deploy the app", path=str(app), enable_deploy=True, session_id="chat-1"
+    )
+    deadline = time.time() + 3
+    while time.time() < deadline and not (store.get(started["job_id"]) or {}).get(
+        "thread_id"
+    ):
+        time.sleep(0.01)
+
+    first.crash()
+    result = _wait_for(manager, started["job_id"], "error")
+
+    assert "recovery was exhausted after 2 attempts" in result["error"]
+    assert result["recovery_count"] == 2
+    assert launches == 3
+    assert store.pending_signals() == [(started["job_id"], "error")]
+    assert registry.get_app_lease("app_test123") is None
+    worktree = registry.get(next(registry.records_dir.glob("wt_*.json")).stem)
+    assert worktree.status == "removed"
 
 
 def test_recovery_preserves_completed_deployments_without_reenqueuing(
@@ -555,13 +1033,16 @@ def test_recovery_preserves_completed_deployments_without_reenqueuing(
 
     assert result["status"] == "done"
     assert not any(event["kind"] == "deployment_guard" for event in result["events"])
-    assert len(
-        [
-            message
-            for message in process.received
-            if message.get("method") == "turn/start"
-        ]
-    ) == 1
+    assert (
+        len(
+            [
+                message
+                for message in process.received
+                if message.get("method") == "turn/start"
+            ]
+        )
+        == 1
+    )
 
 
 def test_offline_awaiting_input_resumes_after_answer(valid_path, monkeypatch):
@@ -607,6 +1088,158 @@ def test_rejects_concurrent_jobs_in_same_workdir(valid_path, monkeypatch):
     _wait_for(mgr, first["job_id"], "awaiting_input")
     second = mgr.start("second", path=".")
     assert "already editing" in second["error"]
+
+
+def test_durable_app_lease_rejects_a_second_manager(tmp_path, monkeypatch):
+    app, registry = _deploy_fixture(tmp_path, monkeypatch, "frontend")
+    process = _FakeAppServer(asks_question=True)
+    _patch(monkeypatch, process)
+    first_manager = CodexJobManager(worktree_registry=registry)
+    second_manager = CodexJobManager(worktree_registry=registry)
+
+    first = first_manager.start("Change the app", path=".")
+    _wait_for(first_manager, first["job_id"], "awaiting_input")
+    second = second_manager.start("Make another change", path=".")
+
+    assert "Another Codex job is already changing this app" in second["error"]
+    assert registry.get_app_lease("app_test123").owner_job_id == first["job_id"]
+    assert first_manager.stop(first["job_id"])["status"] == "cancelled"
+    assert registry.get_app_lease("app_test123") is None
+
+
+def test_failed_codex_start_releases_app_lease_and_reservation(
+    tmp_path, monkeypatch
+):
+    app, registry = _deploy_fixture(tmp_path, monkeypatch, "frontend")
+    monkeypatch.setattr(
+        "aios_core.tools.codex_job.subprocess.Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError()),
+    )
+    manager = CodexJobManager(worktree_registry=registry)
+
+    result = manager.start("Deploy the app", path=str(app), enable_deploy=True)
+
+    assert "not installed" in result["error"]
+    assert registry.get_app_lease("app_test123") is None
+    records = list(registry.records_dir.glob("wt_*.json"))
+    assert len(records) == 1
+    assert registry.get(records[0].stem).status == "removed"
+
+
+def test_restart_reacquires_missing_lease_for_awaiting_app_job(
+    tmp_path, monkeypatch
+):
+    app, registry = _deploy_fixture(tmp_path, monkeypatch, "frontend")
+    store = CodexRunStore(":memory:")
+    store.create(
+        job_id="recover-app-input",
+        session_id="chat-1",
+        parent_run_id="run-1",
+        parent_tool_call_id="tool-1",
+        task="Change the app",
+        workdir=str(app),
+        model=None,
+        capabilities=["filesystem", "shell", "app_change_v3"],
+        contract_version=3,
+        app_state={
+            "app_id": "app_test123",
+            "app_root": str(app),
+            "deployment_requested": False,
+        },
+    )
+    store.update(
+        "recover-app-input",
+        status="awaiting_input",
+        thread_id="thread-1",
+        pending_input={"questions": [{"id": "choice"}]},
+    )
+    manager = CodexJobManager(store, worktree_registry=registry)
+
+    assert manager.reconcile_stale() == []
+    assert registry.get_app_lease("app_test123").owner_job_id == (
+        "recover-app-input"
+    )
+    assert manager.stop("recover-app-input")["status"] == "cancelled"
+    assert registry.get_app_lease("app_test123") is None
+
+
+def test_restart_finalizes_an_already_published_handoff_without_codex(
+    tmp_path, monkeypatch
+):
+    app, registry = _deploy_fixture(tmp_path, monkeypatch, "frontend")
+    store = CodexRunStore(":memory:")
+    job_id = "recover-ready"
+    registry.acquire_app_lease(
+        app_id="app_test123", repository=app, owner_job_id=job_id
+    )
+    reserved = registry.reserve(
+        app_id="app_test123",
+        repository=app,
+        owner_job_id=job_id,
+        purpose="prepare_deployment_source",
+    )
+    source = run_git(app, ["rev-parse", "HEAD"]).stdout.strip()
+    tree = run_git(app, ["rev-parse", "HEAD^{tree}"]).stdout.strip()
+    run_git(app, ["worktree", "add", "--detach", reserved.path, source])
+    published = registry.publish_handoff(
+        reserved.worktree_id,
+        source_commit=source,
+        source_tree=tree,
+        selection_reason="Validated before the host restart",
+    )
+    store.create(
+        job_id=job_id,
+        session_id="chat-1",
+        parent_run_id="run-1",
+        parent_tool_call_id="tool-1",
+        task="Deploy the existing app",
+        workdir=str(app),
+        model=None,
+        capabilities=["filesystem", "shell", "deployment_handoff_v3"],
+        contract_version=3,
+        deployment_requested=True,
+        app_state={
+            "contract_version": 3,
+            "deployment_requested": True,
+            "app_id": "app_test123",
+            "app_root": str(app),
+            "worktree_id": reserved.worktree_id,
+            "workspace_path": reserved.path,
+        },
+    )
+
+    manager = CodexJobManager(store, worktree_registry=registry)
+    assert manager.reconcile_stale() == [job_id]
+
+    record = store.get(job_id)
+    assert record is not None
+    assert record["status"] == "done"
+    assert record["workspace_handoff"]["handoff_id"] == published.handoff_id
+    assert record["workspace_handoff"]["status"] == "handoff_ready"
+    assert store.pending_signals() == [(job_id, "done")]
+    assert registry.get_app_lease("app_test123") is None
+
+
+def test_graceful_restart_preserves_active_app_job_and_lease(
+    tmp_path, monkeypatch
+):
+    _, registry = _deploy_fixture(tmp_path, monkeypatch, "frontend")
+    process = _FakeAppServer(asks_question=True)
+    _patch(monkeypatch, process)
+    store = CodexRunStore(":memory:")
+    manager = CodexJobManager(store, worktree_registry=registry)
+    started = manager.start("Change the app", path=".")
+    _wait_for(manager, started["job_id"], "awaiting_input")
+
+    assert manager.interrupt_all_for_restart() == [started["job_id"]]
+
+    record = store.get(started["job_id"])
+    assert record is not None
+    assert record["status"] == "awaiting_input"
+    assert record["finished_at"] is None
+    assert store.pending_signals() == [(started["job_id"], "awaiting_input")]
+    assert registry.get_app_lease("app_test123").owner_job_id == started["job_id"]
+    assert process.killed is True
 
 
 def test_missing_path(tmp_path, monkeypatch):
